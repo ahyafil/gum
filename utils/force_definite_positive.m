@@ -4,7 +4,7 @@ function       [M,c] = force_definite_positive(M, c)
 % M = force_definite_positive(M, c) ensures that all eigenvalues are larger
 % or equal to c (default: c=1e3*eps)
 
-if nargin<2
+if nargin<2 || isempty(c)
     
     % it seems that we need to scale c with eigenvalues to make sure we really end up with definite positive matrix
     mean_eig = trace(M)/size(M,1); % mean eigenvalue (sum of eig is equal to trace)
