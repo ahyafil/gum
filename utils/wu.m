@@ -316,6 +316,9 @@ imaginary_warning = warning('off','MATLAB:plot:IgnoreImaginaryXYPart'); % turn i
 %size and dimensionality
 siz = size(M);
 nDim = length(siz);
+if nDim==2 && siz(2)==1
+    nDim = 1;
+end
 nPar = size(M,1); % number of parameters in M
 nVar = size(M,2); % number of variables in M
 
