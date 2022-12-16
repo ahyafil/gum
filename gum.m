@@ -81,11 +81,10 @@ classdef gum
 
 
     % TODO:
-    % - export weights, HPs, metric (TEST)
     % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
     % - no prior, ARD (TEST) - Matern prior
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
-    % - spectral trick + polynomial and other regressor sets (TEST)
+    % - spectral trick (TEST)
     % - extrapolate to other values (GP - FINISH AND TEST)
     % - negative binomial, probit (finish)
     % - dispersion parameter for fitting
@@ -111,6 +110,7 @@ classdef gum
     % - link functions as in glmfit
     % - print summary, weights, hyperparameters
     % - isglm if only linear/categorical regressors
+    % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
 
     %
     % Complete list of methods:
@@ -462,6 +462,8 @@ classdef gum
 
                 objS(v) = extract_observations(obj,subset);
                 objS(v).param.split = (S==V(v)); % know the index of selected datapoints is useful for stratified cross-validation
+
+                objS(v).score.Dataset = V(v); % give label to dataset
             end
 
         end
@@ -568,23 +570,27 @@ classdef gum
             %% run optimization over hyperparameters
 
             %if HPfit %% if fitting hyperparameters
-            HPini = cell(1,obj.nMod); % cell array of hyperparameters initial values
-            HP_LB = cell(1,obj.nMod); % HP lower bounds
-            HP_UB = cell(1,obj.nMod); % HP upper bounds
-            HP_fittable =cell(1,obj.nMod); % which HP are fitted
+            HPall = [M.HP]; % concatenate HP structures across regressors
+            HPini = [HPall.HP]; %hyperparameters initial values
+            HP_LB = [HPall.LB]; % HP lower bounds
+            HP_UB = [HPall.UB]; % HP upper bounds
+            HP_fittable = logical([HPall.fit]);  % which HP are fitted
+            %   HPini = cell(1,obj.nMod); % cell array of
+            % HP_LB = cell(1,obj.nMod); % HP lower bounds
+            % HP_UB = cell(1,obj.nMod); % HP upper bounds
+            % HP_fittable =cell(1,obj.nMod); % which HP are fitted
             nHP  = cell(1,obj.nMod); % number of hyperparameters in each module
             HPidx = cell(1,obj.nMod);     % index of hyperparameters for each component
             cnt = 0;
             for m=1:obj.nMod
-                ss = [M(m).Weights.nWeight];
+                %ss = [M(m).Weights.nWeight];
                 HPidx{m} = cell(size(M(m).HP,1),M(m).nDim);
 
-
                 %% check initial values and bounds for HPs
-                HPini{m} = [M(m).HP.HP]; % initial values for all HPs
-                HP_LB{m} = [M(m).HP.LB];
-                HP_UB{m} = [M(m).HP.UB];
-                HP_fittable{m} = logical([M(m).HP.fit]);
+                % HPini{m} = [M(m).HP.HP]; % initial values for all HPs
+                % HP_LB{m} = [M(m).HP.LB];
+                % HP_UB{m} = [M(m).HP.UB];
+                % HP_fittable{m} = logical([M(m).HP.fit]);
 
                 %retrieve number of fittable hyperparameters for each function
                 this_HPfit = reshape({M(m).HP.fit}, size(M(m).HP));
@@ -595,46 +601,6 @@ classdef gum
                         cnt = cnt + nHP{m}(r,d); % update counter
                     end
                 end
-
-                % value of scale along each dimensions (this is just for computing
-                % covariance - at the moment for spectral trick only)
-                for d=1:M(m).nDim
-                    if isempty(M(m).Weights(d).scale)
-                        M(m).Weights(d).scale = 1:ss(d); % by default, just integers
-                    end
-                end
-
-                % spectral trick
-
-                % whether some components use spectral decomposition
-                this_spectral = [M(m).Prior.spectral];
-                spc =  ~isempty(this_spectral);
-                %                 if spc && ~iscell(M(m).spectral) && isempty(M(m).spectral)
-                %                     spc= 0;
-                %                 elseif spc && iscell(M(m).spectral) && all(cellfun(@isempty,M(m).spectral))
-                %                     spc = 0;
-                %                 end
-
-                %spectral(mm) = spc;
-                if spc
-                    %                     if isnumeric(M(m).spectral)
-                    %                         spect_comp = find(M(m).spectral); % component to be converted to spectral domain
-                    %                         M(m).spectral = num2cell(M(m).spectral);
-                    %                         M(m).spectral(~spect_comp) = {[]};
-                    %                     end
-
-                    if rank(m)>1
-                        for d=1:M(m).nDim
-                            if ~isempty(this_spectral(d).fun) && ~all(cellfun(@isempty, M(m).Prior(2:end,d).CovFun))
-                                error('Applying spectral analysis to component %d not possible if covariance function is provided for rank higher than one',d);
-                            end
-                        end
-                    end
-
-                    %  else
-                    %      M(m).spectral = {};
-                end
-
             end
 
 
@@ -648,12 +614,12 @@ classdef gum
 
             % initial values, lower bound and upper bound on
             % hyperparameters
-            HPini = [HPini{:}];
-            HP_LB = [HP_LB{:}]; % concatenate over modules
-            HP_UB = [HP_UB{:}];
+            % HPini = [HPini{:}];
+            % HP_LB = [HP_LB{:}]; % concatenate over modules
+            % HP_UB = [HP_UB{:}];
 
             % select hyperparmaters to be fitted
-            HP_fittable = [HP_fittable{:}];
+            %HP_fittable = [HP_fittable{:}];
             HPini = HPini(HP_fittable);
             HP_LB = HP_LB(HP_fittable);
             HP_UB = HP_UB(HP_fittable);
@@ -717,7 +683,6 @@ classdef gum
                         M = assign_hyperparameter(M, HP, HPidx);
 
                         % evaluate covariances at for given hyperparameters
-                        % [M2, spectral, spectc] = covfun_eval(M);
                         %M2 = compute_prior_covariance(M);
                         obj.regressor = compute_prior_covariance(M);
 
@@ -767,18 +732,40 @@ classdef gum
                                             HPs.HP(HP_fittable) = HP(this_HPidx); % fittable values
 
                                             % posterior mean and covariance for associated weights
-                                            this_mean =  obj.regressor(m).Weights(d).PosteriorMean(r,:);
                                             reg_idx = (1:ss(r,d)) + sum(ss(:,1:d-1),'all') + sum(ss(1:r-1,d)) + midx; % index of regressors in design matrix
 
-                                            % !!!  CHECK THIS !!!!!
-                                            %     this_cov =   PP{m}{1,d}' * S.covb_free(reg_idx,reg_idx) * PP{m}{1,d}; % !! check this
-                                            this_cov =  obj.score.covb_free(reg_idx,reg_idx) ; % !! check this
-                                            this_cov = force_definite_positive(this_cov);
+                                            this_cov =  obj.score.FreeCovariance(reg_idx,reg_idx) ; % free posterior covariance for corresponding regressor
 
+                                            % if project on a
+                                            % hyperparameter-dependent
+                                            % basis, move back to original
+                                            % space
+                                            W = obj.regressor(m).Weights(d); % corresponding set of weight
+
+                                            this_mean =  W.PosteriorMean(r,:);
+                                            this_scale = W.scale;
+                                            this_P = PP{m}{r,d};
                                             this_Prior = obj.regressor(m).Prior(r,d);
-                                            this_scale = obj.regressor(m).Weights(d).scale;
+                                            this_PriorMean = this_Prior.PriorMean;
+                                            B = W.basis;
+
+                                            if ~isempty(B)
+
+                                                if B.fixed % working in projected space
+                                                    this_scale = B.scale;
+                                                else % working in original space
+                                                    this_mean = this_mean*B.B;
+                                                    this_PriorMean = this_PriorMean*B.B;
+                                                    this_cov = B.B' * this_cov *B.B;
+                                                    this_P = eye(length(this_cov));
+                                                    assert(W.constraint=='f', 'EM not coded for non-free basis');
+                                                end
+                                            end
+                                            this_cov = force_definite_positive(this_cov);
+                                            %this_cov_chol = chol(this_cov);
+
                                             [~, gg] = this_Prior.CovFun(this_scale, HPs.HP);
-                                            if isstruct(gg)  && isequal(PP{m}{r,d}, eye(ss(r,d)))  % function provided to optimize hyperparameters
+                                            if isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && (isempty(B)||B.fixed) % function provided to optimize hyperparameters
                                                 %  work on this to also take into account constraints (marginalize in the free base domain)
 
                                                 HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
@@ -789,17 +776,19 @@ classdef gum
 
                                                 % find HPs that minimize negative
                                                 % cross-entropy
-                                                mstep_fun = @(P) mvn_negxent(this_Prior.CovFun, this_Prior.PriorMean, this_scale, this_mean, this_cov,PP{m}{r,d}, P, HPs);
+                                                mstep_fun = @(hp) mvn_negxent(this_Prior.CovFun, this_PriorMean, this_scale, this_mean, this_cov,this_P, hp, HPs, B);
 
-                                                if isinf(mstep_fun(HP(this_HPidx)))
-                                                    2;
-                                                end
+                                                % if isinf(mstep_fun(HP(this_HPidx)))
+                                                %     2;
+                                                % end
 
-                                                assert(~isinf(mstep_fun(HP(this_HPidx))), ...
-                                                    'M step cannot be completed, covariance prior is not full rank');
+                                                ini_val = mstep_fun(HP(this_HPidx));
+
+                                                assert(~isinf(ini_val) && ~isnan(ini_val), ...
+                                                    'M step cannot be completed, probably because covariance prior is not full rank');
 
                                                 % compute new set of
-                                                % hyperparameters than
+                                                % hyperparameters that
                                                 % minimize
                                                 HPnew = fmincon(mstep_fun,...
                                                     HP(this_HPidx),[],[],[],[],M(m).HP(r,d).LB(HP_fittable),M(m).HP(r,d).UB(HP_fittable),[],optimopt);
@@ -817,9 +806,8 @@ classdef gum
                             midx = midx + sum(ss(1,:)) * rank(m); % jump index by number of components in module
                         end
 
-                        % for spectral decomposition, convert weights back from spectral to
+                        % for decomposition in basis functions, convert weights back to
                         % original domain
-                        % M2 = project_from_spectral(M2);
                         obj.regressor = project_from_basis( obj.regressor);
 
                         % has converged if improvement in LLH is smaller than epsilon
@@ -1118,11 +1106,11 @@ classdef gum
                     % compute gradient of score over hyperparameters
                     if do_grad_hyperparam
 
-                        Hinv = PosteriorCov(obj_train); % posterior covariance computed from train data
+                        PCov = PosteriorCov(obj_train); % posterior covariance computed from train data
                         this_gradhp = zeros(1,size(CovJacob,3));
                         for q=1:size(CovJacob,3) % for each hyperparameter
                             gradgrad = PP*CovJacob(:,:,q)'*allU'; % LLH derived w.r.t to U (free basis) and hyperparameter
-                            gradU = - PP' * Hinv * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
+                            gradU = - PP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
                             this_gradhp(q) = grad_validationscore * gradU/s; % derivate of score w.r.t hyperparameter
                         end
                         grad_hp(:,p) = this_gradhp;
@@ -1207,14 +1195,14 @@ classdef gum
             if verbose
                 fprintf('Computing posterior covariance...');
             end
-            [Sfit.covb_free, B]= PosteriorCov(obj);
+            [Sfit.FreeCovariance, B]= PosteriorCov(obj);
             if verbose
                 fprintf('done\n');
             end
 
             %Covariance
             P = projection_matrix(M,'all'); % projection matrix for each dimension
-            Sfit.covb = P'*Sfit.covb_free* P; % see covariance under constraint Seber & Wild Appendix E
+            Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
 
             % standard error of estimates
             all_se = sqrt(diag(Sfit.covb))';
@@ -2546,8 +2534,8 @@ classdef gum
         end
 
         %% COMPUTE POSTERIOR COVARIANCE
-        function [V, B]= PosteriorCov(obj)
-            % V = PosteriorCov(M) computes the posterior covariance fro
+        function [V, B] = PosteriorCov(obj)
+            % V = PosteriorCov(M) computes the posterior covariance in free basis for
             % model M
 
             % compute Hessian of likelihood
@@ -2557,9 +2545,6 @@ classdef gum
 
             %precision = cellfun(@(x) x.precision, M, 'uniformoutput',0); % precision matrix from all modules
             %precision = [precision{:}];
-            %  K = {M.sigma};
-            %  K = cellfun(@(x) x(:)', K, 'unif',0);
-            %  K = [K{:}]; % group prior covariance from all modules
             K = prior_covariance_cell(M, true);  % group prior covariance from all modules
             for i=1:length(K)
                 K{i} = force_definite_positive(K{i});
@@ -2572,7 +2557,7 @@ classdef gum
                 hp = [M.HP];
                 inf_no_hp = cellfun(@(x) any(isinf(x(:))), K) & cellfun(@isempty, {hp.HP});
                 for i=inf_no_hp
-
+                    %% !! finish this
                 end
             end
             K = blkdiag(K{:});
@@ -2848,14 +2833,27 @@ classdef gum
 
                 Sc.(mt) = X;
 
-
             end
 
         end
 
         %% EXPORT SCORES TO TABLE
         function T = export_scores_to_table(obj)
-            T = struct2table(obj.concatenate_score);
+            % T = export_scores_to_table(M);
+            % exports score to table.
+            if numel(obj)>1
+            S = obj.concatenate_score;
+            else
+S = obj.score;
+            end
+            fn = fieldnames(S);
+            for f = 1:length(fn) % make sure they're all row vectors
+                X = S.(fn{f});
+                if isvector(X)
+                    S.(fn{f}) = X(:);
+                end
+            end
+            T = struct2table(S);
         end
 
 
@@ -2876,24 +2874,35 @@ classdef gum
             % first concatenate
             obj = concatenate_over_models(obj, true);
 
-            % now compute average and standard deviation over
+            % now compute average and standard deviation of weights over
             % population
             for m=1:obj.nMod
 
                 if obj.regressor(m).rank(1)>1 % !! check this is how this is done in concatenate_over_models
                     dd = 3; % weight x rank x model
                 else
-                    dd = 2; % weight x model
+                    dd = 1; % model x weight
                 end
 
                 for d=1:obj.regressor(m).nDim
-                    X = obj.regressor(m).Weights(d).PosteriorMean;
+                    W = obj.regressor(m).Weights(d);
+                    X = W.PosteriorMean;
 
-                    obj.regressor(m).Weights(d).PosteriorMean = mean(X,dd); % population average
-                    obj.regressor(m).Weights(d).PosteriorStd = std(X,[],dd)/sqrt(n); % standard error of the mean
+                    W.PosteriorMean = mean(X,dd); % population average
+                    W.PosteriorStd = std(X,[],dd)/sqrt(n); % standard error of the mean
+                    W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
+                    W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
+
+                    obj.regressor(m).Weights(d) = W;
+
+                    % mean and std of hyperparameters
+                    H = obj.regressor(m).HP(d);
+                    HPHP = H.HP;
+                    obj.regressor(m).HP(d).HP = mean(HPHP,1);
+                    obj.regressor(m).HP(d).std = std(HPHP,[],1);
                 end
-
             end
+
 
         end
 
@@ -2901,7 +2910,6 @@ classdef gum
         function T = export_weights_to_table(obj)
             T = export_weights_to_table(obj.regressor);
         end
-
 
         %% EXPORT WEIGHTS TO CSV FILE
         function export_weights_to_csv(obj, filename)
@@ -3838,9 +3846,8 @@ obj.regressor = M;
 % estimate weights from GUM
 obj = obj.infer(param);
 
-% for spectral decomposition, convert weights back from spectral to
+% for decomposition on basis functions, convert weights back to
 % original domain
-%M = weightprojection(M,S.covb,nMod,spectral,spectc,rank);
 obj.regressor = project_from_basis(obj.regressor);
 
 % negative marginal evidence
@@ -3905,11 +3912,9 @@ if nfval>0
 end
 
 % evaluate covariances at for given hyperparameters
-if nargout>1
-    % [M, spectral, spectc,param.CovPriorJacobian] = covfun_eval(M,P);
+if nargout>1 % with Jacobian of Prior
     [obj.regressor,param.CovPriorJacobian] = compute_prior_covariance(M);
 else % same without gradient
-    %  [M, spectral, spectc] = covfun_eval(M,P);
     obj.regressor = compute_prior_covariance(M);
 end
 
@@ -3928,20 +3933,14 @@ if nargout>1
     grad = -grad * n; % gradient
 end
 
-% for spectral decomposition, convert weights back from spectral to
+% for decomposition on basis functions, convert weights back to
 % original domain
-%M = weightprojection(M,S.covb, nMod,spectral,spectc,rank);
 obj.regressor = project_from_spectral(obj.regressor);
 
 % if best parameter so far, update the value for initial parameters
 if errorscore < fval
     fval = errorscore;
     UU = concatenate_weights(M);
-
-    %     UU = cell(1,nMod); % group all weights into a cell array
-    %     for m=1:nMod
-    %         UU{m} = obj.regressor(m).U;
-    %     end
 end
 
 nfval = nfval+1;
@@ -3962,56 +3961,97 @@ end
 
 %% negative cross-entropy of prior and posterior
 % multivariate gaussians (for M-step of EM in hyperparameter optimization)
-function [Q, grad] = mvn_negxent(covfun, mu, scale, m, V, P, HP, HPs)
+function [Q, grad] = mvn_negxent(covfun, mu, scale, m, Sigma, P, HP, HPs, B)
 k = size(P,1); % dimensionality of free space
-nP = length(HPs.HP); % number of hyperparameters
 
 HPs.HP(HPs.fit) = HP;
 
 msgid1 = warning('off','MATLAB:nearlySingularMatrix');
 msgid2 = warning('off','MATLAB:SingularMatrix');
 
-mdif = (m-mu)*P'; % difference between prior and posterior means
-[S, gS] = covfun(scale, HPs.HP); % covariance matrix and gradient w.r.t hyperparameters
-if isstruct(gS), gS = gS.grad; end
-S = P*S*P'; % project on free base
-SV = S \V;
+mdif = (m-mu)*P'; % difference between prior and posterior means (in free basis)
+
+if ~isempty(B) && B.fixed
+    scl = B.scale;
+else
+    scl = scale;
+end
+
+[K, gradK] = covfun(scl, HPs.HP); % prior covariance matrix and gradient w.r.t hyperparameters
+if isstruct(gradK), gradK = gradK.grad; end
+
+if ~isempty(B) && ~B.fixed % work on original space
+
+    [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
+
+    nHP = length(HPs.HP);
+
+    % gradient for K for basis hyperparameter
+    gradK_tmp = zeros(B.nWeight, B.nWeight,nHP);
+
+    for p=1:nHP % for all fitted hyperparameter
+        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
+    end
+    gradK = gradK_tmp;
+
+    % project prior covariance on full space
+    K = B.B'*K*B.B;
+
+    % we make prior and posterior matrices full rank artificially to allow for the EM to rotate the
+    % basis functions - now there's no guarantee that the LLH will increase
+    % in each EM iteration, and no guarantee that it converges to a
+    % meaningful result
+    K = force_definite_positive(K, max(eig(K))*1e-3);
+    Sigma = force_definite_positive(Sigma, max(eig(Sigma))*1e-3);
+
+end
+K = P*K*P'; % project on free base
+
+KinvSigma = K \Sigma;
+%KinvSigma = SigmaChol'* K \SigmaChol; % if L^T*L = Sigma, then trace(K^-1 Sigma) = trace(L*K^-1*L^T)
+%KinvSigma = (KinvSigma+KinvSigma')/2; % make sure it's symmetric
 
 % compute log-determinant (faster and more stable than log(det(X)),
 % from Pillow lab code), since matrix is positive definite
-%[C,noisPD] = chol(S);
-[C,noisPD] = chol(SV); % instead of log det(S), we compute log det(S^-1 V) which may deal better with non-full rank covariance prior
-if noisPD % if not semi-definite (must be a zero eigenvalue, so logdet is -inf)
-    %    warning('covariance is not semi-definite positive, hyperparameter fitting through EM may not work properly, you may change the covariance kernels or try fitting by cross-validation instead');
-    %LD = logdet(S);
-    LD = logdet(SV);
-    %Q = inf;
-    %grad = nan(1,nP);
-    %return;
-else
-    LD = 2*sum(log(diag(C)));
-end
+%[C,noisPD] = chol(K);
 
-% cross-entropy
-%Q = -(trace(SV) +LD + (mdif/S)*mdif' + k*log(2*pi)   )/2;
-Q = -(trace(SV) -LD + (mdif/S)*mdif' + k*log(2*pi)   )/2;
+%[C,noisPD] = chol(KinvSigma); % instead of log det(K), we compute -log det(L^T * K^-1 L) which is symmetric too and may deal better with non-full rank covariance prior
+%[C,noisPD] = chol(KinvSigma);
+% instead of log det(K), we compute -log det(K^-1 Sigma) which may deal better with non-full rank covariance prior
+
+%if noisPD % if not semi-definite (must be a zero eigenvalue, so logdet is -inf)
+%    warning('covariance is not semi-definite positive, hyperparameter fitting through EM may not work properly, you may change the covariance kernels or try fitting by cross-validation instead');
+%LD = logdet(S);
+LD = logdet(KinvSigma);
+% LD = -logdet(K);
+%Q = inf;
+%grad = nan(1,nP);
+%return;
+%else
+%    LD = 2*sum(log(diag(C)));
+%end
+
+% negative cross-entropy (equation 19)
+Q = (trace(KinvSigma) - LD + (mdif/K)*mdif' + k*log(2*pi)   )/2;
+%Q = (- LD )/2;
 
 
-% gradient
-grad= zeros(1,nP);
-for p=1:nP
-    this_gS = P*gS(:,:,p)*P';
-    SgS = S\this_gS;
-    grad(p) = (  trace( SgS*(SV-eye(k)))   + mdif*SgS*(S\mdif')  )/2;
+% gradient (note: gradient check may fail if K is close to singular but
+% that's because of the numerical instability in computing Q, the formula
+% for the gradient is correct)
+grad= zeros(1,sum(HPs.fit));
+cnt = 1; % HP counter
+for p=find(HPs.fit) % for all fitted hyperparameter
+    this_gK = P*gradK(:,:,p)*P';
+    KgK = K\this_gK;
+    grad(cnt) = -(  trace( KgK*(KinvSigma-eye(k)))   + mdif*KgK*(K\mdif')  )/2;
+    %  grad(cnt) = -(  trace( KgK)    )/2;
+
+    cnt = cnt + 1;
 end
 
 warning(msgid1.state,'MATLAB:nearlySingularMatrix');
 warning(msgid2.state,'MATLAB:SingularMatrix');
-
-
-Q = -Q;
-grad = -grad;
-grad = grad(HPs.fit);
 end
 
 
@@ -4642,14 +4682,11 @@ if isempty(obs_weight)
 else
     m = sum(obs_weight.*x) / sum(obs_weight);
 end
-
-
-
 end
 
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
-metrics = {'LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence', 'accuracy','validationscore','r2','FittingTime'};
+metrics = {'Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence', 'accuracy','validationscore','r2','FittingTime'};
 end
 
 %% PLOT SINGLE WEIGHTS

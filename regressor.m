@@ -387,7 +387,7 @@ classdef regressor
                     obj.Data = X;
                     obj.Data(isnan(obj.Data)) = 0; % convert nans to 0: missing regressor with no influence on model
                     % if any(strcmp(summing,{'split','separate'}))
-                    %     nWeights = nWeights * prod(siz(3:end));
+                    %     nWeight = nWeight * prod(siz(3:end));
                     %     obj.Data = reshape(X, siz(1), nWeights); % vector set replicated along dimension 3 and beyond
                     %     obj.nDim = 1;
                     % else
@@ -402,9 +402,9 @@ classdef regressor
                     HP = tocell(HP,nD);
                     if ~isempty(variance), HP{1} = log(variance)/2; end
 
-                    nWeights = siz(1+nD);
+                    nWeight = siz(1+nD);
                     if isempty(obj.Weights(nD).scale)
-                        obj.Weights(nD).scale = 1:nWeights;
+                        obj.Weights(nD).scale = 1:nWeight;
                     end
 
                     % hyperpameters for first dimension
@@ -415,7 +415,7 @@ classdef regressor
                         case 'none'
                             obj.Prior(nD).CovFun = @infinite_cov; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
                         case 'ARD'
-                            obj.HP(nD) = HPstruct_ard(nWeights, 1, HP{1}, HPfit);
+                            obj.HP(nD) = HPstruct_ard(nWeight, 1, HP{1}, HPfit);
                             obj.Prior(nD).CovFun = @ard_covfun;
                     end
                     obj.Prior(nD).type = prior;
@@ -696,10 +696,19 @@ classdef regressor
         function nf = get.nFreeParameters(obj) % !! change to nFreeWeights?
             cc = [obj.Weights.constraint];
             ss = [obj.Weights.nWeight]; % number of total weights
+            ss = ss - (cc~='f') - (ss-1).*(cc=='n' | ~cc); % reduce free weights for constraints
+
+            % when using basis, use number of basis functions instead
+            Bcell = {obj.Weights.basis};
+            B = [Bcell{:}];
+            if ~isempty(B)
+            ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
+            end
 
             % number of free parameters per set weight (remove one if there is a constraint)
-            nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
-            % nf = nf(:)'; % into line vector
+            nf = repmat(ss,obj.rank,1);
+         %               nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
+
         end
 
         %% GET NUMBER OF FREE DIMENSIONS
@@ -1066,7 +1075,7 @@ classdef regressor
             obj.Weights(d).basis = basis;
 
             % default basis structure
-            B = struct('nWeights',nan,'fun',[], 'fixed',true, 'params',[]);
+            B = struct('nWeight',nan,'fun',[], 'fixed',true, 'params',[]);
 
             %% define prior covariance function (and basis function if required)
             if isempty(basis)
@@ -1112,7 +1121,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
 
                 obj.Prior(d).CovFun = @L2basis_covfun;
 
-                B.nWeights = order;
+                B.nWeight = order;
                 B.fun = @basis_poly; 
                 B.params = struct('order',order);
                 obj.Prior(d).type = 'L2_polynomial';
@@ -1128,7 +1137,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
 
                 obj.Prior(d).CovFun = @L2basis_covfun;
 
-                B.nWeights = nExp;
+                B.nWeight = nExp;
                 B.fun = @basis_exp;
                 B.fixed = false;
                 B.params = struct('order',nExp);
@@ -1144,7 +1153,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
 
                 obj.Prior(d).CovFun = @L2basis_covfun;
     
-                B.nWeights = nCos;
+                B.nWeight = nCos;
                 B.fun = @basis_raisedcos;
                 B.fixed = false;
                 B.params = struct('nFunctions',nCos);
@@ -1229,7 +1238,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                     HH.HP = [a c Phi_1 0];
                     HH.LB = [a-2 -max(scale)  Phi_1-pi   -max_log_var];
                     HH.UB = [a+2 -min(scale)  Phi_1+pi    max_log_var];
-                    HH.fit = true(1,nCos+3);
+                    HH.fit = true(1,4);
                     HH.label = {'power','timeshift', '\Phi_1','\log \alpha'};
             end
 
@@ -2934,19 +2943,27 @@ condthresh = 1e12; % threshold for removing low-variance regressors
             reg_idx = repelem(1:length(W), nWeight)'; % regressor index
             label = repelem({W.label},nWeight)'; % weight labels
 
-            T = table(reg_idx, label, 'VariableLabels',{'regressor','label'});
+            T = table(reg_idx, label, 'VariableNames',{'regressor','label'});
 
 
             filds = {'scale','PosteriorStd','T','p'};
             for f=1:length(filds)
                 ff =  concatenate_weights(obj,0,filds{f}); % concatenate values over all regressors
-                if length(ff) == heights(T)
-                    T.(filds{f}) = ff;
+                if length(ff) == height(T)
+                    T.(filds{f}) = ff';
                 end
             end
 
+            % prior mea
             P = [obj.Prior];
-            T.PriorMean = [P.PriorMean]';
+            PM = {P.PriorMean};
+            for i=1:length(W) % if using basis function, project prior mean on full space
+                   if ~isempty(W(i).basis)
+                       B = W(i).basis.B;
+PM{i} = PM{i}*B;
+                   end
+            end
+            T.PriorMean = [PM{:}]';
         end
 
         %% EXPORT WEIGHTS TO CSV FILE
@@ -2965,24 +2982,27 @@ condthresh = 1e12; % threshold for removing low-variance regressors
             H = [obj.HP];
             % nD = [obj.nDim];
             W = [obj.Weights];
-            transform = [W.label];
+            transform = {W.label};
             nHP = cellfun(@length, {H.HP}); % number of HPs for each transformatio
             transform = repelem(transform, nHP)';
 
             nW = cellfun(@length, {obj.Weights}); % number of weight set per regressor
             nW_cum = [0 cumsum(nW)];
-            nHP_cum = cumsum(nHP);
-            nHP_reg = nHP_cum(nW_cum+1) - nW_cum(nW_cum); % total number of HPs per regressor
+            nHP_cum = [0 cumsum(nHP)];
+            nHP_reg = nHP_cum(nW_cum(2:end)+1) - nHP_cum(nW_cum(1:end-1)+1); % total number of HPs per regressor
             reg_idx = repelem(1:length(obj), nHP_reg)';
 
-
             value = [H.HP]';
-            label = {H.label}';
+            label = [H.label]';
             fittable = [H.fit]';
             UpperBound = [H.UB]';
             LowerBound = [H.LB]';
-
-            T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound);
+            if isfield(H, 'std')
+                standardDeviation = [H.std]';
+                            T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound, standardDeviation);
+            else
+                                            T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound);
+            end
 
         end
 
@@ -3068,7 +3088,7 @@ else
 end
 
 grad.grad = 2*K; %eye(nreg);
-grad.EM = @(m,V) log(mean(m(:).^2 + diag(V)))/2; % M-step of EM to optimize L2-parameter given posterior on weights
+grad.EM = @(m,Sigma) log(mean(m(:).^2 + diag(Sigma)))/2; % M-step of EM to optimize L2-parameter given posterior on weights
 end
 
 %% L2 covariance function when using basis (L2 on last hyperparameter)
@@ -3079,6 +3099,12 @@ else
     varargout = cell(1,nargout);
     loglambda = HP(end);
     [varargout{:}] = L2_covfun(scale,loglambda);
+    if nargout>1
+                % place gradient over variance HP as last matrix in 3-D array
+        nR = size(varargout{1},1);
+        grad = varargout{2}.grad;
+          varargout{2} = cat(3,zeros(nR,nR,length(HP)-1),grad);
+    end
 end
 end
 
@@ -3431,7 +3457,7 @@ scale = 1:order;
 end
 
 %% compute basis functions as polynomial
-function [B, scale, params] = basis_exp(X,HP, params)
+function [B, scale, params, gradB] = basis_exp(X,HP, params)
 nExp = length(HP)-1;
 B = zeros(nExp,length(X));
 for p=1:nExp
@@ -3439,22 +3465,44 @@ for p=1:nExp
     B(p,:) = exp(-X/tau);
 end
 scale = 1:nExp;
+
+if nargout>3
+    % gradient of matrix w.r.t hyperparameters
+gradB = zeros(nExp, length(X),length(HP));
+for p=1:nExp
+        tau = exp(HP(p));
+gradB(p,:,p) = B(p,:) .* X/tau;
+end
+
+end
 end
 
 %% compute basis functions as raised cosine
-function [B, scale, params] = basis_raisedcos(X,HP, params)
+function [B, scale, params, gradB] = basis_raisedcos(X,HP, params)
 nCos = params.nFunctions;
 a = HP(1);
 c = HP(2);
 Phi_1 = HP(3);
 B = zeros(nCos,length(X));
+Phi = Phi_1 + pi/2*(0:nCos-1); % Pi/2 spacing between each function
 for p=1:nCos
-    Phi_p = Phi_1 + pi/2*(p-1); % Pi/2 spacing between each function
-    alog = a*log(X+c)-Phi_p;
-    nz = (alog>-pi) & (alog<pi); % time domain with non-null value
+    alog = a*log(X+c)-Phi(p);
+    nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
     B(p,nz) = cos(alog(nz))/2 + 1/2;
 end
 scale = 1:nCos;
+
+if nargout>3
+gradB = zeros(nCos, length(X),length(HP));
+for p=1:nCos
+    alog = a*log(X+c)-Phi(p);
+    nz = (alog>-pi) & (alog<pi); % time domain with non-null value
+    sin_alog = sin(alog(nz)) / 2;
+gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
+gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
+gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
+end
+end
 end
 
 
