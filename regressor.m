@@ -296,7 +296,7 @@ classdef regressor
             % linear - except for continuous var if scale is provided, which means the tensor
             % is already provided
             if isempty(OneHotEncoding)
-            OneHotEncoding = ~strcmpi(type, 'linear') && (isempty(scale{end}) || ~strcmpi(type, 'continuous'));
+                OneHotEncoding = ~strcmpi(type, 'linear') && (isempty(scale{end}) || ~strcmpi(type, 'continuous'));
             end
 
             % dimensionality of regressor
@@ -320,7 +320,7 @@ classdef regressor
                 prior = {prior};
             end
             basis = [cell(1,nD-length(basis)) basis];
-                        prior = [cell(1,nD-length(prior)) prior];
+            prior = [cell(1,nD-length(prior)) prior];
             single_tau = [false(1,nD-length(single_tau)) single_tau];
 
             %  obj.scale(length(scale)+1:nD) = {[]}; % extend scale cell array
@@ -400,8 +400,6 @@ classdef regressor
 
                     % end
 
-
-
                     % process hyperparameters
                     HP = tocell(HP,nD);
                     if ~isempty(variance), HP{1} = log(variance)/2; end
@@ -457,7 +455,6 @@ classdef regressor
 
                     % use one-hot encoding
                     obj.Data = one_hot_encoding(X,obj.Weights(nD).scale, OneHotEncoding(nD),nD);
-                    %obj.nDim = nD ;
                     nVal = length(obj.Weights(nD).scale); % number of values/levels
                     obj.Weights(nD).nWeight = nVal;
 
@@ -706,12 +703,12 @@ classdef regressor
             Bcell = {obj.Weights.basis};
             B = [Bcell{:}];
             if ~isempty(B)
-            ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
+                ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
             end
 
             % number of free parameters per set weight (remove one if there is a constraint)
             nf = repmat(ss,obj.rank,1);
-         %               nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
+            %               nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
 
         end
 
@@ -864,8 +861,8 @@ classdef regressor
 
         %% SET FREE WEIGHTS (or anything of same size - used only for gradient i think)
         function FW = set_free_weights(obj,U, FW, dims)
-% FW = set_free_weights(M,U, FW, dims)
-% used to compute gradient
+            % FW = set_free_weights(M,U, FW, dims)
+            % used to compute gradient
 
             if isempty(FW)
                 FW = cell(1, length(obj));
@@ -1038,21 +1035,21 @@ classdef regressor
                 switch summing{d}
                     case {'weighted','linear'}
 
-% hyperpameters for first dimension
-if isempty(prior{d})
-    prior{d} = 'L2';
-end
-                    switch prior{d}
-                        case 'L2'
-                            obj.HP(d) = HPstruct_L2(d);
-                                                    obj.HP(d).HP = HPwithdefault(HP{d}, 0); % log-variance hyperparameter
-                            obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                        case 'none'
-                            obj.Prior(d).CovFun = @infinite_cov; 
-                        case 'ARD'
-                            obj.HP(d) = HPstruct_ard(nWeight, d, HP{d}, HPfit);
-                            obj.Prior(d).CovFun = @ard_covfun;
-                    end
+                        % hyperpameters for first dimension
+                        if isempty(prior{d})
+                            prior{d} = 'L2';
+                        end
+                        switch prior{d}
+                            case 'L2'
+                                obj.HP(d) = HPstruct_L2(d);
+                                obj.HP(d).HP = HPwithdefault(HP{d}, 0); % log-variance hyperparameter
+                                obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+                            case 'none'
+                                obj.Prior(d).CovFun = @infinite_cov;
+                            case 'ARD'
+                                obj.HP(d) = HPstruct_ard(nWeight, d, HP{d}, HPfit);
+                                obj.Prior(d).CovFun = @ard_covfun;
+                        end
 
                         obj.Prior(d).type = prior{d};
 
@@ -1125,13 +1122,13 @@ end
                 if strcmpi(type,'periodic')
                     error('not coded yet');
                 else
-condthresh = 1e12; % threshold for removing low-variance regressors
+                    condthresh = 1e12; % threshold for removing low-variance regressors
 
                     obj.Prior(d).CovFun = @(x,wvec,Tcirc) covSquaredExp_Fourier(wvec, exp(x(1)), exp(x(2)),Tcirc); % neuron firing spectral covariance prior
 
-                   B.fun = @fourier_basis;
-                   B.fixed = true; % although the actual number of regressors do change
-                   B.params = struct('condthreshold',condthresh);
+                    B.fun = @fourier_basis;
+                    B.fixed = true; % although the actual number of regressors do change
+                    B.params = struct('condthreshold',condthresh);
                     obj.Prior(d).type = 'SquaredExponential';
                 end
 
@@ -1143,7 +1140,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                 obj.Prior(d).CovFun = @L2basis_covfun;
 
                 B.nWeight = order;
-                B.fun = @basis_poly; 
+                B.fun = @basis_poly;
                 B.params = struct('order',order);
                 obj.Prior(d).type = 'L2_polynomial';
 
@@ -1173,7 +1170,7 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                 end
 
                 obj.Prior(d).CovFun = @L2basis_covfun;
-    
+
                 B.nWeight = nCos;
                 B.fun = @basis_raisedcos;
                 B.fixed = false;
@@ -1197,9 +1194,9 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                         tau = period/4; % initial time scale: period/4
                     else
                         tau = mean(diff(scale,[],2),2)'; % initial time scale: mean different between two points
-                    if single_tau
-                         tau = mean(tau);
-                    end
+                        if single_tau
+                            tau = mean(tau);
+                        end
                     end
                     nScale = length(tau);
 
@@ -1378,8 +1375,8 @@ condthresh = 1e12; % threshold for removing low-variance regressors
             if init_weight
                 for m=1:nM
                     % if empty weight, pre-allocate
-                        for d=1:obj(m).nDim
-                           if isempty(obj(m).Weights(d).PosteriorMean)
+                    for d=1:obj(m).nDim
+                        if isempty(obj(m).Weights(d).PosteriorMean)
                             obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank,obj(m).Weights(d).nWeight);
                         end
                     end
@@ -1667,12 +1664,12 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                                 % !! I'm commenting because I don't
                                 % understand what it's supposed to be
                                 % doing... go back to it later on
-%                                 for r2=1:obj(m).rank
-%                                     if cc(r)~='b'
-%                                         obj(m).Weights(d).constraint(r2) = 's';
-%                                     end
-%                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
-%                                 end
+                                %                                 for r2=1:obj(m).rank
+                                %                                     if cc(r)~='b'
+                                %                                         obj(m).Weights(d).constraint(r2) = 's';
+                                %                                     end
+                                %                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
+                                %                                 end
                                 break; % do not do it for other orders
                             end
                         end
@@ -1729,8 +1726,10 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                         obj(m).Weights(d).scale = tmp_scale;
 
                         W = obj(m).Weights(d);
-                        B.PosteriorMean =  W.PosteriorMean; % save weight in fourier domain
+                        B.PosteriorMean =  W.PosteriorMean; % save weight in basis space
                         B.PosteriorStd =  W.PosteriorStd;
+                        B.PosteriorCov = W.PosteriorCov;
+
 
                         % compute posterior back in original domain
                         obj(m).Weights(d).PosteriorMean = W.PosteriorMean * B.B;
@@ -2194,56 +2193,67 @@ condthresh = 1e12; % threshold for removing low-variance regressors
         end
 
         %% COMPUTE POSTERIOR FOR TEST DATA
-        function [mu, S,K] = posterior_test_scale(obj, d, scale)
-            % [mu, S, K] = posterior_test_scale(M, d, scale)
+        function [mu, S,K] = posterior_test_data(obj, scale, d)
+            % [mu, S, K] = posterior_test_data(M, scale)
             % returns the mean mu, standard deviation S and full covariance K of the posterior distribution
-            % for values scale of transformation at dimension d or regressor M.
+            % for values scale of transformation of regressor M.
+            %
+            %  posterior_test_data(M, scale, d) to specify over which dimension of transformation (default:1).
+
+            if nargin<3
+                d=1;
+            end
+
             assert(length(obj)==1);
-            assert(isscale(d) && d<=obj.nDim, 'd must be a scalar integer no larger than the dimensionality of M');
+            assert(isscalar(d) && d<=obj.nDim, 'd must be a scalar integer no larger than the dimensionality of M');
+            nW = size(scale,2); % number of prediction data points
 
             obj = obj.project_from_basis;
 
-            W = obj.weights(d);
-            P = obj.prior(d);
+            W = obj.Weights(d);
+            assert(  any(strcmp(W.type, {'continuous','periodic'})), 'test data only for continuous or periodic regressors');
+            P = obj.Prior(d);
             this_HP = obj.HP(d).HP;
             assert(size(scale,1)==size(W.scale,1), 'scale must has the same number of rows as the fitting scale data');
 
             B = W.basis;
 
             if isempty(B) % no basis functions: use equation 15
-            % evaluate prior covariance between train and test set
-            KK = P.CovFun({P.scale,scale},this_HP);
+                % evaluate prior covariance between train and test set
+                KK = P.CovFun({W.scale,scale},this_HP);
 
-            error('finish');
+                mu = (W.PosteriorMean / P.PriorCovariance)*KK;
 
-            if nargout>1
-                Kin = P.CovFun(scale,this_HP);
-                K = Kin - KK*KK';
-                            S = sqrt(diag(K))';
-
-            end
+                if nargout>1
+                    Kin = P.CovFun(scale,this_HP);
+                    K = zeros(nW, nW,obj.rank);
+                    S = zeros(obj.rank, nW);
+                    for r=1:obj.rank
+                        K(:,:,r) = Kin - KK'*W.invHinvK(:,:,r)*KK;
+                        S(r,:) = sqrt(diag(K))';
+                    end
+                end
 
             else
-%% if using basis functions
-this_HP = obj.HP(d).HP; %fixed values
+                %% if using basis functions
+                this_HP = obj.HP(d).HP; %fixed values
 
-                        % compute projection matrix
-                        BB = B.fun(scale, this_HP, B.params);
+                % compute projection matrix
+                BB = B.fun(scale, this_HP, B.params);
 
- % project mean and covariance in original domain
-                        mu = B.PosteriorMean * BB;
+                % project mean and covariance in original domain
+                mu = B.PosteriorMean * BB;
 
-                        if nargout>1
-                % compute posterior covariance and standard error
-                        nW = size(scale,2); % number of prediction data points
-                        K = zeros(nW, nW,obj(m).rank);
-                        S = zeros(obj.rank, nW);
-                        for r=1:obj(m).rank
-                            PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
-                            K(:,:,r) = PCov;
-                            S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
-                        end
-                        end
+                if nargout>1
+                    % compute posterior covariance and standard error
+                    K = zeros(nW, nW,obj.rank);
+                    S = zeros(obj.rank, nW);
+                    for r=1:obj.rank
+                        PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
+                        K(:,:,r) = PCov;
+                        S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
+                    end
+                end
 
             end
         end
@@ -3009,10 +3019,10 @@ this_HP = obj.HP(d).HP; %fixed values
             P = [obj.Prior];
             PM = {P.PriorMean};
             for i=1:length(W) % if using basis function, project prior mean on full space
-                   if ~isempty(W(i).basis)
-                       B = W(i).basis.B;
-PM{i} = PM{i}*B;
-                   end
+                if ~isempty(W(i).basis)
+                    B = W(i).basis.B;
+                    PM{i} = PM{i}*B;
+                end
             end
             T.PriorMean = [PM{:}]';
         end
@@ -3050,9 +3060,9 @@ PM{i} = PM{i}*B;
             LowerBound = [H.LB]';
             if isfield(H, 'std')
                 standardDeviation = [H.std]';
-                            T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound, standardDeviation);
+                T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound, standardDeviation);
             else
-                                            T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound);
+                T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound);
             end
 
         end
@@ -3151,10 +3161,10 @@ else
     loglambda = HP(end);
     [varargout{:}] = L2_covfun(scale,loglambda);
     if nargout>1
-                % place gradient over variance HP as last matrix in 3-D array
+        % place gradient over variance HP as last matrix in 3-D array
         nR = size(varargout{1},1);
         grad = varargout{2}.grad;
-          varargout{2} = cat(3,zeros(nR,nR,length(HP)-1),grad);
+        varargout{2} = cat(3,zeros(nR,nR,length(HP)-1),grad);
     end
 end
 end
@@ -3519,11 +3529,11 @@ scale = 1:nExp;
 
 if nargout>3
     % gradient of matrix w.r.t hyperparameters
-gradB = zeros(nExp, length(X),length(HP));
-for p=1:nExp
+    gradB = zeros(nExp, length(X),length(HP));
+    for p=1:nExp
         tau = exp(HP(p));
-gradB(p,:,p) = B(p,:) .* X/tau;
-end
+        gradB(p,:,p) = B(p,:) .* X/tau;
+    end
 
 end
 end
@@ -3544,15 +3554,15 @@ end
 scale = 1:nCos;
 
 if nargout>3
-gradB = zeros(nCos, length(X),length(HP));
-for p=1:nCos
-    alog = a*log(X+c)-Phi(p);
-    nz = (alog>-pi) & (alog<pi); % time domain with non-null value
-    sin_alog = sin(alog(nz)) / 2;
-gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
-gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
-gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
-end
+    gradB = zeros(nCos, length(X),length(HP));
+    for p=1:nCos
+        alog = a*log(X+c)-Phi(p);
+        nz = (alog>-pi) & (alog<pi); % time domain with non-null value
+        sin_alog = sin(alog(nz)) / 2;
+        gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
+        gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
+        gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
+    end
 end
 end
 
@@ -3586,7 +3596,7 @@ function W = empty_weight_structure(nD, DataSize, scale, color)
 W = struct('type','','label', '', 'nWeight',0, 'nFreeWeight',0,...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
-    'scale',[],'constraint','f','plot',[],'basis',[]);
+    'scale',[],'constraint','f','plot',[],'basis',[],'invHinvK',[]);
 % other possible fields: U_CV, U_allstarting
 
 % make it size nD

@@ -89,7 +89,7 @@ classdef gum
     % - negative binomial, probit (finish)
     % - dispersion parameter for fitting
     % - crossvalidation compatibility with matlab native (done?)
-    % - constraint structure (when concat weights)
+    % - constraint structure (e.g. when concat weights or split)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - work on labels
@@ -107,6 +107,7 @@ classdef gum
     % - add history regressors (with exp basis)
     % - EM and CV for parameterized basis functions (M-step: go back to
     % original space)
+    % - knock-out model
     % - link functions as in glmfit
     % - print summary, weights, hyperparameters
     % - isglm if only linear/categorical regressors
@@ -1198,7 +1199,7 @@ classdef gum
             if verbose
                 fprintf('Computing posterior covariance...');
             end
-            [Sfit.FreeCovariance, B]= PosteriorCov(obj);
+            [Sfit.FreeCovariance, B, invHinvK]= PosteriorCov(obj);
             if verbose
                 fprintf('done\n');
             end
@@ -1206,6 +1207,7 @@ classdef gum
             %Covariance
             P = projection_matrix(M,'all'); % projection matrix for each dimension
             Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
+            invHinvK = P'*invHinvK*P;
 
             % standard error of estimates
             all_se = sqrt(diag(Sfit.covb))';
@@ -1234,7 +1236,9 @@ classdef gum
                         W.T(r,:) = all_T(idx);
                         W.p(r,:) = all_p(idx);
                         W.PosteriorCov(:,:,r) = Sfit.covb(idx,idx);
-
+                        if any(strcmp(W.type, {'continuous','periodic'}))
+                        W.invHinvK(:,:,r) = invHinvK(idx,idx);
+                        end
                     end
                     M(m).Weights(d) = W;
                 end
@@ -2574,21 +2578,21 @@ classdef gum
         end
 
         %% COMPUTE POSTERIOR COVARIANCE
-        function [V, B] = PosteriorCov(obj)
+        function [V, B, invHinvK] = PosteriorCov(obj)
             % V = PosteriorCov(M) computes the posterior covariance in free basis for
             % model M
 
             % compute Hessian of likelihood
             [H,P] = Hessian(obj);
 
-            % compute covariance prior
+            %% compute covariance prior
             M = obj.regressor;
             K = prior_covariance_cell(M, true);  % group prior covariance from all modules
             for i=1:length(K)
                 K{i} = force_definite_positive(K{i});
             end
             inf_terms = any(cellfun(@(x) full(any(isinf(x(:)))), K));
-            K_noinf = K;
+            K_noinf = K; % prior covariance without infinite terms
             if inf_terms
                 % if infinite covariance and no hyperparameter, remove
                 % from computation of log marginal evidence
@@ -2599,9 +2603,8 @@ classdef gum
                 end
             end
 
-
             K = blkdiag(K{:}); % prior is block-diagonal
-            Kfree = P*K*P'; % prior covariance in free basis
+            Kfree = P*K*P'; % project on free basis
             K_noinf = blkdiag(K_noinf{:});
             K_noinf_free = P*K_noinf*P'; % prior covariance in free basis
 
@@ -2651,6 +2654,10 @@ classdef gum
 
             V = (V+V')/2; % may be not symmetric due to numerical reasons
 
+            if nargout>2
+                %% compute inv(Hinv+K) - used for predicted covariance for test datapoints
+                invHinvK = inv(inv(H) + Kfree);
+            end
         end
 
 
@@ -2849,12 +2856,12 @@ classdef gum
                 mt = metrics{i};
 
                 % pre-allocate values for each model
-                X = nan(size(obj));
+                X = nan(length(all_score{1}.(mt)),length(obj));
 
                 % add values from each model where value is present
                 for m=1:n
                     if ~isempty(all_score{m}) && isfield(all_score{m}, mt) && ~isempty(all_score{m}.(mt))
-                        X(m) =  all_score{m}.(mt);
+                        X(:,m) =  all_score{m}.(mt);
                     end
                 end
                 Sc.(mt) = X;
