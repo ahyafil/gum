@@ -413,9 +413,9 @@ classdef regressor
                     switch prior{nD}
                         case 'L2'
                             obj.HP(nD) = HPstruct_L2(nD, HP{nD}, HPfit);
-                            obj.Prior(nD).CovFun = @L2_covfun; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
+                            obj.Prior(nD).CovFun = @L2_covfun;  % L2-regularization (diagonal covariance prior)
                         case 'none'
-                            obj.Prior(nD).CovFun = @infinite_cov; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
+                            obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
                         case 'ARD'
                             obj.HP(nD) = HPstruct_ard(nWeight, nD, HP{nD}, HPfit);
                             obj.Prior(nD).CovFun = @ard_covfun;
@@ -460,7 +460,7 @@ classdef regressor
 
                     if strcmp(prior{nD}, 'L2')
                         % define prior covariance function (L2-regularization)
-                        obj.Prior(nD).CovFun = @L2_covfun; %(x) L2_covfun(nVal, x); % L2-regularization (diagonal covariance prior)
+                        obj.Prior(nD).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
 
                         % define  hyperparameters
                         if ~iscell(HP)
@@ -1124,7 +1124,8 @@ classdef regressor
                 else
                     condthresh = 1e12; % threshold for removing low-variance regressors
 
-                    obj.Prior(d).CovFun = @(x,wvec,Tcirc) covSquaredExp_Fourier(wvec, exp(x(1)), exp(x(2)),Tcirc); % neuron firing spectral covariance prior
+                    %obj.Prior(d).CovFun = @(HP,scale,Tcirc) covSquaredExp_Fourier(scale, exp(HP(1)), exp(HP(2)),params.Tcirc);
+                    obj.Prior(d).CovFun = @covSquaredExp_Fourier;
 
                     B.fun = @fourier_basis;
                     B.fixed = true; % although the actual number of regressors do change
@@ -1483,146 +1484,6 @@ classdef regressor
 
 
         %% PROJECT TO SPECTRAL SPACE
-        function obj = project_to_spectral(obj) % (M,P,idx, rank)
-
-            %%% REMOVE!!!!%%%
-            S = [obj.Prior.spectral];
-            if isempty(S) || (islogical(S) && ~any(S))
-                return;
-            end
-
-            %  DD = obj.nDim; % number of dimensions for this module
-            rk = obj.rank; % rank
-            ss = [obj.Weights.nWeight]; % size of each dimension
-            cc = [obj.Weights.constraint];
-
-            %obj.spectral = tocell(obj.spectral);
-            with_spectral = ~cellfun(@isempty,  {S.fun});
-            SpectralDims = find(with_spectral); % dimension with spectral transofrmation
-
-            % remove dimensions where covariance matrix is already provided
-            NonEmptyPriorCov = ~cellfun(@isempty, obj.Prior.PriorCovariance(1,SpectralDims));
-            if any(NonEmptyPriorCov)
-                SpectralDims(NonEmptyPriorCov) = [];
-            end
-            % spectral = ~isempty(spk); % if any dimension with this module uses the spectral trick
-            % if spectral
-
-            % wvec = cell(1,length(spk)); % vector of Fourier frequencies for each component
-            % B_fft = cell(1,DD); % basis for each component
-            % B_fft2 = cell(1,DD); % same, excluding index dimensions
-
-
-            % for f= 1:length(spk) % for each component to be converted
-            %     d = spk(f);
-            for d = SpectralDims
-
-                % hyperparameter values for this component
-                this_HP = obj.HP(d).HP; %fixed values
-                this_scale = obj.Weights(d).scale;
-
-                if isa(obj.Prior(d).spectral, 'function_handle') % directly provides function for basis change
-
-                    [S(d).B_fft,S(d).wvec,Tcirc] = S(d).fun(this_scale, this_HP); % apply user-provided function (params is hyperparameter)
-                    assert( size(S(d).B_fft,2)==ss(d), 'Incorrect number of columns (%d) for spectral transformation matrix in component %d (expected %d)', size(S(d).B_fft,2), d, ss(d));
-                    ss(d) = size(S(d).B_fft,1);
-                else % compute basis for basis change
-
-                    minl = this_HP(1); % temporal scale
-
-                    range = max(this_scale) - min(this_scale);  % range of values for given component
-                    Tcirc = range + 3*minl; %   range + 3*minscale (for virtual padding to get periodic covariance)
-
-                    % if isfield(obj,'condthreshold') % threshold on condition number of covariance matrix
-                    %     condthresh = obj.condthreshold(f);
-                    % else
-                    condthresh = 1e12;
-                    % end
-
-                    % set up Fourier frequencies
-                    maxw = floor((Tcirc/(pi*minl))*sqrt(.5*log(condthresh)));  % max freq to use
-                    ss(d) = maxw*2+1; % number of fourier frequencies
-
-                    [S(d).B_fft,S(d).wvec] = realnufftbasis(this_scale,Tcirc,ss(d)); % make Fourier basis
-                    S(d).B_fft = S(d).B_fft';
-                    warning('the covfun below looks weird, shouldnt i use RBF_Fourier instead?');
-                end
-                obj.Prior(1,d).CovFun = @(s,x) obj.Prior(1,d).covfun(x, S(d).wvec,Tcirc); % use frequency scale for covariance prior function
-
-                % convert design matrix to spectral decomposition along
-                % required dimension
-                % if d<=DD % component from main design matrix
-                %                     if obj.sparse(d)
-                %                         siz = size(obj.Data{d+1});
-                %                         siz(d+1) = ss(d);
-                %                         VV = zeros(siz);
-                %                         dimdim = 1:obj.nDim+1;
-                %                         dimdim(d+1) = 1; dimdim(1) = d+1; % put along d+1 dimensions in design matrix
-                %                         for i=1:obj.size(d)
-                %                             VV = VV + (obj.Data{d+1}==i) .* permute(B_fft{d}(:,i),dimdim); % add spectral component for this value
-                %                         end
-                %                         obj.Data{1} =  obj.Data{1} .* VV;
-                %                         obj.sparse(d) = 0;
-                %                         obj.Data{d+1} = [];
-                %                     else
-                S(d).B_fft2 = S(d).B_fft;
-                %                   end
-
-                %% if weights are constraint to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                for r=1:rk
-                    if any(cc(r,d)=='msb')
-                        if ~all(cc(:,d) == cc(r,d))
-                            error('spectral dimension %d cannot have ''%s'' constraint for one order and other constraint for other orders',d, cc(r,d));
-                        end
-                        B = sum(S(d).B_fft,2); % ( 1*(Bfft*U) = const -> (1*Bfft)*U = const
-                        if cc(d)=='m' % rescale
-                            B = B/obj.Weights(d).nWeight;
-                        end
-                        invB = diag(1./B);
-                        S(d).B_fft = invB * S(d).B_fft; % change projection matrix so that constraint is sum of weight equal to one
-
-                        for r2=1:rk
-                            if cc(r,d)~='b'
-                                obj.Weights(d).constraint(r2) = 's';
-                            end
-                            obj.Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc, hp, diag(B) , obj.Prior(r2,d).covfun);
-                        end
-                        break; % do not do it for other orders
-                    end
-
-                end
-                obj.Weights(d).nWeight = ss(d); % size of each dimension
-                obj.Prior(d).spectral = S(d);
-
-                %% if initial value of weights are provided, compute in new basis
-                U = obj.Weights(d).PosteriorMean;
-                if ~isempty(U)
-                    for r=1:rk
-                        % if some hyperparameters associated with other
-                        % rank
-                        % need to work this case!
-                        % if ~isempty(idx{m}{r,d}) % if some hyperparameters associated with other rank
-                        %     obj.covfun{r,d} =  obj.covfun{1,d};
-                        % end
-                        % if ~isempty( obj.U{r,d})
-                        obj.Weights(d).PosteriorMean(r,:) = U(r,:) / S(d).B_fft; % obj.U{r,d}*Bfft{d}';
-                        % !! change to direct matrix mult without loop
-                        % through rank?
-                        % end
-                    end
-                end
-
-                % change basis to spectral for all components within main design matrix
-                obj.Data = tensorprod(obj.Data, [{{}},S(d).B_fft2]);
-
-
-            end
-
-
-        end
-
-
-        %% PROJECT TO SPECTRAL SPACE
         function obj = project_to_basis(obj)
 
             for m=1:length(obj) % for each module
@@ -1881,13 +1742,13 @@ classdef regressor
                                 this_HP = obj(m).HP(r,d).HP; %hyperparameter values
                                 this_nHP = length(this_HP); % number of hyperparameters
                                 this_scale = obj(m).Weights(d).scale;
-                                %  this_params = obj(m).Prior(d).params;
+                                this_basis = obj(m).Weights(d).basis;
 
                                 % compute associated covariance matrix
                                 CovFun = P(r,d).CovFun;
                                 % [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
                                 if with_grad % need gradient
-                                    [Sigma, gg]= CovFun(this_scale,this_HP);
+                                    [Sigma, gg]= CovFun(this_scale,this_HP, this_basis);
 
                                     % replicate covariance matrix if needed
                                     [Sigma, gg]= replicate_covariance(P(r,d).replicate, Sigma,gg);
@@ -1914,7 +1775,7 @@ classdef regressor
                                     HP_fittable = logical(obj(m).HP(r,d).fit);
                                     gsf{r,d} = gsf{r,d}(:,:,HP_fittable);
                                 else
-                                    Sigma= CovFun(this_scale,this_HP);
+                                    Sigma= CovFun(this_scale,this_HP, this_basis);
 
                                     % replicate covariance matrix if needed
                                     Sigma= replicate_covariance(P(r,d).replicate, Sigma);
@@ -2220,12 +2081,12 @@ classdef regressor
 
             if isempty(B) % no basis functions: use equation 15
                 % evaluate prior covariance between train and test set
-                KK = P.CovFun({W.scale,scale},this_HP);
+                KK = P.CovFun({W.scale,scale},this_HP, []);
 
                 mu = (W.PosteriorMean / P.PriorCovariance)*KK;
 
                 if nargout>1
-                    Kin = P.CovFun(scale,this_HP);
+                    Kin = P.CovFun(scale,this_HP, []);
                     K = zeros(nW, nW,obj.rank);
                     S = zeros(obj.rank, nW);
                     for r=1:obj.rank
@@ -3134,7 +2995,7 @@ end
 
 %% L2-regression covariance function
 %function [K, grad] = L2_covfun(nreg, loglambda,HPdefault, which_par)
-function [K, grad] = L2_covfun(scale, loglambda, params)
+function [K, grad] = L2_covfun(scale, loglambda, B)
 if nargin<2
     K = 1; % number of hyperparameters
     return;
@@ -3153,13 +3014,13 @@ grad.EM = @(m,Sigma) log(mean(m(:).^2 + diag(Sigma)))/2; % M-step of EM to optim
 end
 
 %% L2 covariance function when using basis (L2 on last hyperparameter)
-function varargout = L2basis_covfun(scale, HP)
+function varargout = L2basis_covfun(scale, HP, B)
 if nargin<2
     varargout = {1}; % number of hyperparameters
 else
     varargout = cell(1,nargout);
     loglambda = HP(end);
-    [varargout{:}] = L2_covfun(scale,loglambda);
+    [varargout{:}] = L2_covfun(scale,loglambda, B);
     if nargout>1
         % place gradient over variance HP as last matrix in 3-D array
         nR = size(varargout{1},1);
@@ -3170,7 +3031,7 @@ end
 end
 
 %% infinite covariance
-function [K, grad] = infinite_cov(scale, P)
+function [K, grad] = infinite_cov(scale, HP, B)
 if nargin<2
     K = 0; % number of hyperparameters
     return;
@@ -3183,7 +3044,7 @@ grad = zeros(nReg,nReg,0);
 end
 
 %% Automatic Relevance Discrimination (ARD) covariance function
-function [K, grad] = ard_covfun(scale, loglambda)
+function [K, grad] = ard_covfun(scale, loglambda, B)
 nReg = length(scale);
 
 if nargin<2
@@ -3207,7 +3068,7 @@ grad.EM = @(m,V) log(m(:).^2 + diag(V))/2;
 end
 
 %% Squared Exponential covariance
-function [K, grad] = covSquaredExp(X, HP)
+function [K, grad] = covSquaredExp(X, HP, B)
 % radial basis function covariance matrix:
 %  K = covSquaredExp(X, [log(tau), log(rho)])
 % K(i,j) = rho^2*exp(- [(x(i,1)-x(j,1))^2 + ...
@@ -3295,7 +3156,11 @@ if nargout>1
 end
 end
 
-function [K, grad] = covSquaredExp_Fourier(X, HP, Tcirc)
+%% SQUARED EXPONENTIAL KERNEL COVARIANCE IN FOURIER DOMAIN
+function [K, grad] = covSquaredExp_Fourier(scale, HP, B)
+%
+% [K, grad] = covSquaredExp_Fourier(HP, scale, params)
+%
 % Squared Exponential RBF covariance matrix, in the Fourier domain:
 %  K = RBF(X, tau, rho, sigma)
 % K(i,j) = rho*exp(- [(x(i,1)-x(j,1))^2 + ...
@@ -3312,9 +3177,11 @@ function [K, grad] = covSquaredExp_Fourier(X, HP, Tcirc)
 tau = exp(HP(1:end-1));
 rho = exp(HP(end));
 
+Tcirc = B.params.Tcirc;
+
 % covariance matrix is diagonal in fourier domain
 % !! check the formula !!
-eexp = exp(-(2*pi^2/Tcirc^2)*tau^2*X.^2);
+eexp = exp(-(2*pi^2/Tcirc^2)*tau^2*scale.^2);
 kfdiag = sqrt(2*pi)*rho*tau*eexp;
 K = diag(kfdiag);
 
@@ -3323,13 +3190,13 @@ K = diag(kfdiag);
 %     error('tau should be scalar or a vector whose length matches the number of column in X');
 % end
 % tau = tau(:);
-n = size(X,1); % number of data points
+n = size(scale,1); % number of data points
 
 % compute gradient
 if nargout>1
     grad = zeros(n,n,2); % pre-allocate
     % if n_tau == 1
-    grad_scale = sqrt(2*pi)*rho*  (1 - 4*pi^2/Tcirc^2*tau^2*X.^2) .* eexp; % derivative w.r.t GP scale (tau)
+    grad_scale = sqrt(2*pi)*rho*  (1 - 4*pi^2/Tcirc^2*tau^2*scale.^2) .* eexp; % derivative w.r.t GP scale (tau)
     grad(:,:,1) = diag(grad_scale);
     % else
     %     for t=1:n_tau % gradient w.r.t scale for each dimension
@@ -3467,11 +3334,6 @@ end
 
 %% REPLICATE COVARIANCE MATRIX (AND GRADIENT) WHEN SPLITTING REGRESSOR
 function [cov, grad] = replicate_covariance(nRep,cov,gg)
-% [cov, grad] = replicate_covariance(covfun, nRep)
-
-
-%function [cov, grad] = replicate_covariance(covfun, P, nRep)
-% [cov, grad] = replicate_covariance(covfun, nRep)
 
 if nRep==1
     if nargout>1
@@ -3480,12 +3342,9 @@ if nRep==1
     return;
 end
 
-%C = cell(1,nargout);
-%[C{:}] = covfun(P);
 
 % full covariance matrix is block
 % diagonal
-%cov = C{1};
 cov = repmat({cov}, 1, nRep);
 cov = blkdiag(cov{:});
 
@@ -3723,8 +3582,8 @@ end
 end
 
 %% new covariance prior function from change of coordinates
-function [K, grad] = covfun_transfo(scale, HP, M,covfun)
-[K,grad] = covfun(scale,HP);
+function [K, grad] = covfun_transfo(scale, HP, M,covfun, B)
+[K,grad] = covfun(scale,HP, B);
 K = M*K*M';
 for i=1:size(grad,3)
     grad(:,:,i) = M*grad(:,:,i)*M';

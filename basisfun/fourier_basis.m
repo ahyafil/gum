@@ -24,4 +24,5 @@ X = X - min(X); % start at 0
 % for just one process
 [B,scale] = realnufftbasis(X,Tcirc,nFreq); % make Fourier basis
 
+scale = scale'; % row vector
 params.Tcirc = Tcirc;

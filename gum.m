@@ -84,8 +84,7 @@ classdef gum
     % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
     % - no prior, ARD (TEST) - Matern prior
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
-    % - spectral trick (TEST)
-    % - extrapolate to other values (GP - FINISH AND TEST)
+    % - spectral trick (TEST HP fitting)
     % - negative binomial, probit (finish)
     % - dispersion parameter for fitting
     % - crossvalidation compatibility with matlab native (done?)
@@ -774,7 +773,7 @@ classdef gum
                                             this_cov = force_definite_positive(this_cov);
                                             %this_cov_chol = chol(this_cov);
 
-                                            [~, gg] = this_Prior.CovFun(this_scale, HPs.HP);
+                                            [~, gg] = this_Prior.CovFun(this_scale, HPs.HP, B);
                                             if isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && (isempty(B)||B.fixed) % function provided to optimize hyperparameters
                                                 %  work on this to also take into account constraints (marginalize in the free base domain)
 
@@ -4049,7 +4048,7 @@ else
     scl = scale;
 end
 
-[K, gradK] = covfun(scl, HPs.HP); % prior covariance matrix and gradient w.r.t hyperparameters
+[K, gradK] = covfun(scl, HPs.HP, B); % prior covariance matrix and gradient w.r.t hyperparameters
 if isstruct(gradK), gradK = gradK.grad; end
 
 if ~isempty(B) && ~B.fixed % work on original space

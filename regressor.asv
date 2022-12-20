@@ -413,9 +413,9 @@ classdef regressor
                     switch prior{nD}
                         case 'L2'
                             obj.HP(nD) = HPstruct_L2(nD, HP{nD}, HPfit);
-                            obj.Prior(nD).CovFun = @L2_covfun; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
+                            obj.Prior(nD).CovFun = @L2_covfun;  % L2-regularization (diagonal covariance prior)
                         case 'none'
-                            obj.Prior(nD).CovFun = @infinite_cov; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
+                            obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
                         case 'ARD'
                             obj.HP(nD) = HPstruct_ard(nWeight, nD, HP{nD}, HPfit);
                             obj.Prior(nD).CovFun = @ard_covfun;
@@ -460,7 +460,7 @@ classdef regressor
 
                     if strcmp(prior{nD}, 'L2')
                         % define prior covariance function (L2-regularization)
-                        obj.Prior(nD).CovFun = @L2_covfun; %(x) L2_covfun(nVal, x); % L2-regularization (diagonal covariance prior)
+                        obj.Prior(nD).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
 
                         % define  hyperparameters
                         if ~iscell(HP)
@@ -1124,7 +1124,9 @@ classdef regressor
                 else
                     condthresh = 1e12; % threshold for removing low-variance regressors
 
-                    obj.Prior(d).CovFun = @(x,wvec,Tcirc) covSquaredExp_Fourier(wvec, exp(x(1)), exp(x(2)),Tcirc); % neuron firing spectral covariance prior
+                    %obj.Prior(d).CovFun = @(HP,scale,Tcirc) covSquaredExp_Fourier(scale, exp(HP(1)), exp(HP(2)),params.Tcirc);
+                    obj.Prior(d).CovFun = @covSquaredExp_Fourier;
+
 
                     B.fun = @fourier_basis;
                     B.fixed = true; % although the actual number of regressors do change
@@ -1585,7 +1587,7 @@ classdef regressor
                             if cc(r,d)~='b'
                                 obj.Weights(d).constraint(r2) = 's';
                             end
-                            obj.Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc, hp, diag(B) , obj.Prior(r2,d).covfun);
+                            obj.Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc, hp, diag(B) , obj.Prior(r2,d).covfun, obj.Prior(r2,d).params);
                         end
                         break; % do not do it for other orders
                     end
@@ -1881,13 +1883,13 @@ classdef regressor
                                 this_HP = obj(m).HP(r,d).HP; %hyperparameter values
                                 this_nHP = length(this_HP); % number of hyperparameters
                                 this_scale = obj(m).Weights(d).scale;
-                                %  this_params = obj(m).Prior(d).params;
+                                this_params = obj(m).Prior(d).params;
 
                                 % compute associated covariance matrix
                                 CovFun = P(r,d).CovFun;
                                 % [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
                                 if with_grad % need gradient
-                                    [Sigma, gg]= CovFun(this_scale,this_HP);
+                                    [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
 
                                     % replicate covariance matrix if needed
                                     [Sigma, gg]= replicate_covariance(P(r,d).replicate, Sigma,gg);
@@ -1914,7 +1916,7 @@ classdef regressor
                                     HP_fittable = logical(obj(m).HP(r,d).fit);
                                     gsf{r,d} = gsf{r,d}(:,:,HP_fittable);
                                 else
-                                    Sigma= CovFun(this_scale,this_HP);
+                                    Sigma= CovFun(this_scale,this_HP, this_params);
 
                                     % replicate covariance matrix if needed
                                     Sigma= replicate_covariance(P(r,d).replicate, Sigma);
@@ -2220,12 +2222,12 @@ classdef regressor
 
             if isempty(B) % no basis functions: use equation 15
                 % evaluate prior covariance between train and test set
-                KK = P.CovFun({W.scale,scale},this_HP);
+                KK = P.CovFun({W.scale,scale},this_HP, P.params);
 
-                mu = KK* (W.PosteriorMean / P.PriorCovariance)*KK;
+                mu = (W.PosteriorMean / P.PriorCovariance)*KK;
 
                 if nargout>1
-                    Kin = P.CovFun(scale,this_HP);
+                    Kin = P.CovFun(scale,this_HP, P.params);
                     K = zeros(nW, nW,obj.rank);
                     S = zeros(obj.rank, nW);
                     for r=1:obj.rank
@@ -3153,13 +3155,13 @@ grad.EM = @(m,Sigma) log(mean(m(:).^2 + diag(Sigma)))/2; % M-step of EM to optim
 end
 
 %% L2 covariance function when using basis (L2 on last hyperparameter)
-function varargout = L2basis_covfun(scale, HP)
+function varargout = L2basis_covfun(scale, HP, params)
 if nargin<2
     varargout = {1}; % number of hyperparameters
 else
     varargout = cell(1,nargout);
     loglambda = HP(end);
-    [varargout{:}] = L2_covfun(scale,loglambda);
+    [varargout{:}] = L2_covfun(scale,loglambda, params);
     if nargout>1
         % place gradient over variance HP as last matrix in 3-D array
         nR = size(varargout{1},1);
@@ -3183,7 +3185,7 @@ grad = zeros(nReg,nReg,0);
 end
 
 %% Automatic Relevance Discrimination (ARD) covariance function
-function [K, grad] = ard_covfun(scale, loglambda)
+function [K, grad] = ard_covfun(scale, loglambda, params)
 nReg = length(scale);
 
 if nargin<2
@@ -3296,6 +3298,8 @@ end
 end
 
 function [K, grad] = covSquaredExp_Fourier(X, HP, Tcirc)
+                    obj.Prior(d).CovFun = @(HP,scale,Tcirc) covSquaredExp_Fourier(scale, exp(HP(1)), exp(HP(2)),params.Tcirc);
+
 % Squared Exponential RBF covariance matrix, in the Fourier domain:
 %  K = RBF(X, tau, rho, sigma)
 % K(i,j) = rho*exp(- [(x(i,1)-x(j,1))^2 + ...
@@ -3467,11 +3471,6 @@ end
 
 %% REPLICATE COVARIANCE MATRIX (AND GRADIENT) WHEN SPLITTING REGRESSOR
 function [cov, grad] = replicate_covariance(nRep,cov,gg)
-% [cov, grad] = replicate_covariance(covfun, nRep)
-
-
-%function [cov, grad] = replicate_covariance(covfun, P, nRep)
-% [cov, grad] = replicate_covariance(covfun, nRep)
 
 if nRep==1
     if nargout>1
@@ -3480,12 +3479,9 @@ if nRep==1
     return;
 end
 
-%C = cell(1,nargout);
-%[C{:}] = covfun(P);
 
 % full covariance matrix is block
 % diagonal
-%cov = C{1};
 cov = repmat({cov}, 1, nRep);
 cov = blkdiag(cov{:});
 
@@ -3723,8 +3719,8 @@ end
 end
 
 %% new covariance prior function from change of coordinates
-function [K, grad] = covfun_transfo(scale, HP, M,covfun)
-[K,grad] = covfun(scale,HP);
+function [K, grad] = covfun_transfo(scale, HP, M,covfun, params)
+[K,grad] = covfun(scale,HP, params);
 K = M*K*M';
 for i=1:size(grad,3)
     grad(:,:,i) = M*grad(:,:,i)*M';
