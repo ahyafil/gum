@@ -13,7 +13,7 @@ classdef regressor
     % with periodic kernel)
     % - 'constant': fixed regressor (no parameter)
     %
-    % V = regressor(...,'prior',str) to use a non-default prior type. Value can be:
+    % V = regressor(...,'prior',str) to use a non-default prior type. Non-default value can be:
     % - 'none' to use no-prior (i.e. infinite covariance) instead of L2-regularization
     % (for linear and categorical regressors only).
     % - 'ard' for Automatic Relevance Discrimination (i.e. one hyperparameter per regressor), for linear regressors only.
@@ -316,7 +316,11 @@ classdef regressor
             if ~iscell(basis)
                 basis = {basis};
             end
+            if ~iscell(prior)
+                prior = {prior};
+            end
             basis = [cell(1,nD-length(basis)) basis];
+                        prior = [cell(1,nD-length(prior)) prior];
             single_tau = [false(1,nD-length(single_tau)) single_tau];
 
             %  obj.scale(length(scale)+1:nD) = {[]}; % extend scale cell array
@@ -408,24 +412,24 @@ classdef regressor
                     end
 
                     % hyperpameters for first dimension
-                    switch prior
+                    switch prior{nD}
                         case 'L2'
-                            obj.HP(nD) = HPstruct_L2(1, HP{1}, HPfit);
+                            obj.HP(nD) = HPstruct_L2(nD, HP{nD}, HPfit);
                             obj.Prior(nD).CovFun = @L2_covfun; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
                         case 'none'
                             obj.Prior(nD).CovFun = @infinite_cov; % @(x) L2_covfun(nWeights, x); % L2-regularization (diagonal covariance prior)
                         case 'ARD'
-                            obj.HP(nD) = HPstruct_ard(nWeight, 1, HP{1}, HPfit);
+                            obj.HP(nD) = HPstruct_ard(nWeight, nD, HP{nD}, HPfit);
                             obj.Prior(nD).CovFun = @ard_covfun;
                     end
-                    obj.Prior(nD).type = prior;
+                    obj.Prior(nD).type = prior{nD};
 
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, nD, summing, HP, scale, basis, single_tau);
-                    % !!! warning it seems should be
-                    % nD-1 in certain circ
+                    obj = define_priors_across_dims(obj, nD, summing, prior, HP, scale, basis, single_tau);
+                    % !!! seems to overwrite all commands before, maybe we
+                    % can just remove them?
 
                     obj.formula = label{nD};
 
@@ -457,7 +461,7 @@ classdef regressor
                     nVal = length(obj.Weights(nD).scale); % number of values/levels
                     obj.Weights(nD).nWeight = nVal;
 
-                    if strcmp(prior, 'L2')
+                    if strcmp(prior{nD}, 'L2')
                         % define prior covariance function (L2-regularization)
                         obj.Prior(nD).CovFun = @L2_covfun; %(x) L2_covfun(nVal, x); % L2-regularization (diagonal covariance prior)
 
@@ -470,14 +474,14 @@ classdef regressor
                     else % no prior (infinite covariance)
                         obj.Prior(nD).CovFun = @infinite_cov;
                     end
-                    obj.Prior(nD).type = prior;
+                    obj.Prior(nD).type = prior{nD};
 
 
                     obj.HP(nD) = HPstruct_L2(nD, HP_L2, HPfit);
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, nD-1, summing, HP, scale, basis, single_tau);
+                    obj = define_priors_across_dims(obj, nD-1, summing, prior, HP, scale, basis, single_tau);
 
                     obj.formula = ['cat(' label{nD} ')'];
 
@@ -515,7 +519,7 @@ classdef regressor
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, nD-1, summing, HP, scale, basis, single_tau);
+                    obj = define_priors_across_dims(obj, nD-1, summing, prior, HP, scale, basis, single_tau);
 
                     obj.formula = ['f(' label{nD} ')'];
 
@@ -1013,10 +1017,13 @@ classdef regressor
 
             % fixed part of the weights
             Uconst = repelem(Uc2,repelem(nR',[obj.rank]))';
+
+            % we treated fixed weights apart, let's add them here
+            Uconst(fixedw) = Uconst(fixedw) + UU(fixedw);
         end
 
         %% DEFINE PRIOR FOR ARRAY DIMENSIONS
-        function  obj = define_priors_across_dims(obj, dim_max, summing, HP, scale, basis, single_tau)
+        function  obj = define_priors_across_dims(obj, dim_max, summing, prior, HP, scale, basis, single_tau)
             summing = tocell(summing);
             HP = tocell(HP, obj.nDim-1);
 
@@ -1030,10 +1037,24 @@ classdef regressor
                 % what type of prior are we using for this dimension
                 switch summing{d}
                     case {'weighted','linear'}
-                        obj.Prior(d).CovFun = @L2_covfun; %(x) L2_covfun(obj.Weights(d).nWeight, x); % L2-regularization (diagonal covariance prior)
-                        obj.Prior(d).type = 'L2';
-                        obj.HP(d) = HPstruct_L2(d);
-                        obj.HP(d).HP = HPwithdefault(HP{d}, 0); % log-variance hyperparameter
+
+% hyperpameters for first dimension
+if isempty(prior{d})
+    prior{d} = 'L2';
+end
+                    switch prior{d}
+                        case 'L2'
+                            obj.HP(d) = HPstruct_L2(d);
+                                                    obj.HP(d).HP = HPwithdefault(HP{d}, 0); % log-variance hyperparameter
+                            obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+                        case 'none'
+                            obj.Prior(d).CovFun = @infinite_cov; 
+                        case 'ARD'
+                            obj.HP(d) = HPstruct_ard(nWeight, d, HP{d}, HPfit);
+                            obj.Prior(d).CovFun = @ard_covfun;
+                    end
+
+                        obj.Prior(d).type = prior{d};
 
                     case 'equal'
                         obj.Weights(d).PosteriorMean = ones(1,obj.Weights(d).nWeight);
@@ -1618,7 +1639,6 @@ condthresh = 1e12; % threshold for removing low-variance regressors
                         this_scale = obj(m).Weights(d).scale;
 
                         % compute projection matrix and levels in projected space
-                        %[B.B,new_scale,B.params] = B.fun(this_scale, this_HP, this_params); % apply user-provided function (params is hyperparameter)
                         [B.B,new_scale, B.params] = B.fun(this_scale, this_HP, B.params); % apply user-provided function (params is hyperparameter)
 
                         assert( size(B.B,2)==obj(m).Weights(d).nWeight, 'Incorrect number of columns (%d) for projection on basis in component %d (expected %d)',...
@@ -2174,26 +2194,57 @@ condthresh = 1e12; % threshold for removing low-variance regressors
         end
 
         %% COMPUTE POSTERIOR FOR TEST DATA
-        function [mu,K] = posterior_test_scale(obj, d, scale)
-            % [mu, K] = posterior_test_scale(M, d, scale)
-            % returns the mean mu and covariance K of the posterior distribution
+        function [mu, S,K] = posterior_test_scale(obj, d, scale)
+            % [mu, S, K] = posterior_test_scale(M, d, scale)
+            % returns the mean mu, standard deviation S and full covariance K of the posterior distribution
             % for values scale of transformation at dimension d or regressor M.
             assert(length(obj)==1);
             assert(isscale(d) && d<=obj.nDim, 'd must be a scalar integer no larger than the dimensionality of M');
+
+            obj = obj.project_from_basis;
 
             W = obj.weights(d);
             P = obj.prior(d);
             this_HP = obj.HP(d).HP;
             assert(size(scale,1)==size(W.scale,1), 'scale must has the same number of rows as the fitting scale data');
 
+            B = W.basis;
+
+            if isempty(B) % no basis functions: use equation 15
             % evaluate prior covariance between train and test set
             KK = P.CovFun({P.scale,scale},this_HP);
 
             error('finish');
 
-            if nargin>1
+            if nargout>1
                 Kin = P.CovFun(scale,this_HP);
                 K = Kin - KK*KK';
+                            S = sqrt(diag(K))';
+
+            end
+
+            else
+%% if using basis functions
+this_HP = obj.HP(d).HP; %fixed values
+
+                        % compute projection matrix
+                        BB = B.fun(scale, this_HP, B.params);
+
+ % project mean and covariance in original domain
+                        mu = B.PosteriorMean * BB;
+
+                        if nargout>1
+                % compute posterior covariance and standard error
+                        nW = size(scale,2); % number of prediction data points
+                        K = zeros(nW, nW,obj(m).rank);
+                        S = zeros(obj.rank, nW);
+                        for r=1:obj(m).rank
+                            PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
+                            K(:,:,r) = PCov;
+                            S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
+                        end
+                        end
+
             end
         end
 

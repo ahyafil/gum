@@ -147,10 +147,12 @@ classdef gum
     % - 'PosteriorCov': computes the posterior covariance
     % - 'IRLS': core step in inference
     % - 'sample': generate observations from model
-    % - 'predictor_varance': computes the variance of the predictors across
+    % - 'ExplainedVariance': computes model explained variance
+    % - 'predictor_variance': computes the variance of the predictors across
     % datapoints
     % - 'compute_rho_variance': computes variance of predictor for each
     % datapoint
+    % - 'inverse_link_function': output inverse link function
     %
     % PLOTTING:
     % - 'plot_design_matrix': plot design matrix
@@ -224,18 +226,21 @@ classdef gum
             end
             obj.nObs = n;
 
-            %% check regressors
+            % check regressors
             for m=1:nMod
                 M(m) = checkregressorsize(M(m),n);
             end
 
-            % observation weighting
             assert(isstruct(param), 'param should be a structure');
-            fn = fieldnames(param);
-            bool = strcmpi(fn,'ObservationWeight') | strcmpi(fn,'ObservationWeights');
-            if any(bool)
-                obj.ObservationWeight = param.fn(find(bool,1));
+
+            % observation weighting
+            if isfield(param,'ObservationWeights')
+                param.ObservationWeight = param.ObservationWeights;
             end
+            if isfield(param,'ObservationWeight')
+                obj.ObservationWeight = param.ObservationWeight;
+            end
+            
 
             %% transform two-column dependent variable into one-column
             if BinaryCountCode % if binary observations with one column for counts of value 1 and one column for total counts
@@ -303,16 +308,20 @@ classdef gum
 
             %% add constant bias ('on' by default)
             if ~isfield(param,'constant') || strcmpi(param.constant, 'on')
-                Mconst = regressor(ones(n,1),'linear','label','offset');
-
                 % let's see whether we should add a prior or not on this
                 % extra weight
-                M2 = compute_prior_covariance(M);
-                if  any(isinf(diag(global_prior_covariance(M2)))) % if any other regressor has infinite variance
-                    Mconst.HP.HP = Inf;
-                    Mconst.HP.fit = false;
+                GCov = global_prior_covariance(compute_prior_covariance(M));
+                if  isempty(GCov) || any(isinf(diag(GCov))) % if any other regressor has infinite variance
+                   % Mconst.HP.HP = Inf;
+                   % Mconst.HP.fit = false;
+                   const_prior_type = 'none';
+                else
+                    const_prior_type = 'L2';
                 end
-                clear M2;
+                clear GCov;
+
+                % create regressor
+                Mconst = regressor(ones(n,1),'linear','label','offset', 'prior',const_prior_type);
 
                 M = [M,Mconst]; %structcat(M, Mconst); % append this component
                 nMod = nMod +1;
@@ -962,13 +971,10 @@ classdef gum
             if verbose
                 fprintf('Evaluating prior covariance matrix...');
             end
-
             M = compute_prior_covariance(M, false);
-
             if verbose
                 fprintf('done\n');
             end
-            %M = numberofparameters(M, rank); % number of parameters and free parameters per component
 
             %% compute prior mean and covariance and initialize weight
             M = M.check_prior_covariance();
@@ -985,7 +991,6 @@ classdef gum
                 if size(CovJacob,1)~=nParamTot || size(CovJacob,2)~=nParamTot
                     error('The number of rows and columns in field ''CovPriorJacobian'' (%d) must match the total number of weights (%d)',size(CovJacob,1),nParamTot);
                 end
-
             end
 
             %% fit weights on full dataset implement the optimization (modified IRLS) algorithm
@@ -997,7 +1002,6 @@ classdef gum
             if isfield(obj.param, 'testset') && ~isempty(obj.param.testset)
                 testset = obj.param.testset;
 
-                % [testscore,~, accuracy_test] = loglike(extract_observations(obj,testset)) ;
                 obj_test = extract_observations(obj,testset); % extract test set
                 [obj_test,testscore] = LogLikelihood(obj_test); % evaluate LLH
                 accuracy_test = Accuracy(obj_test); % and accuracy
@@ -1153,13 +1157,12 @@ classdef gum
             elseif do_grad_hyperparam % optimize parameters directly on whole dataset
 
                 PP = projection_matrix(M,'all'); % projection matrix for each dimension
-                % PP = cat(2,PP{:}); % concatenate over modules
-                % PP = blkdiag(PP{:}); % global transformation matrix from full parameter set to free basis
 
                 %compute score on whole dataset (mean log-likelihood per observation)
-                % [validationscore,grad_validationscore, Sfit.accuracy] = loglike(obj) ;
                 [obj,validationscore,grad_validationscore] = LogLikelihood(obj); % evaluate LLH
                 Sfit.accuracy = Accuracy(obj); % and accuracy
+
+                % explained variance
 
                 if isempty(obj.ObservationWeight)
                     nWeightedObs = obj.nObs;
@@ -1469,19 +1472,18 @@ classdef gum
             UpdOrder = UpdateOrder(M);
 
             PP = projection_matrix(M); % free-to-full matrix conversion
-            %  P = blkdiag_subset(PP, UpdOrder); % concatenate projection matrix corresponding to different modules for each dimension
-            %  Lambda = blkdiag_subset(prior_covariance_cell(M), UpdOrder); % group covariance corresponding to different modules for each dimension (full parameter space)
 
+            % projection matrix and prior covariance for set of weights
             P = cell(nC,D);
             Lambda = cell(nC,D);
             PrC = prior_covariance_cell(M);
-
             for cc = 1:nC
                 P(cc,:) = blkdiag_subset(PP(idxComponent==cc), UpdOrder(idxComponent==cc,:)); % concatenate projection matrix corresponding to different modules for each dimension
                 Lambda(cc,:) = blkdiag_subset(PrC(idxComponent==cc), UpdOrder(idxComponent==cc,:)); % group covariance corresponding to different modules for each dimension (full parameter space)
             end
-            priormean = prior_mean_cell(M);
 
+            % prior mean for each set of weight
+            priormean = prior_mean_cell(M);
             mu = cell(1,D);
             for d=1:D
                 this_d = UpdOrder(:,d); % over which dimension we work for each model
@@ -1510,7 +1512,6 @@ classdef gum
             end
             TolFun = obj.param.TolFun;
 
-            %      U_allstarting = cell(nM, initialpoints); % estimated weights for all starting points
             U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
 
             logjoint_allstarting = zeros(1,initialpoints); % log-joint for all starting points
@@ -1523,12 +1524,12 @@ classdef gum
             nFree = zeros(1,D); % number of free parameters
             size_mod = zeros(nM,D); % size over each dimension for each module
             precision = cell(nC,D); % for infinite variance
+
+            % project prior mean and covariance onto free space
             KP = cell(nC,D);
             nu = cell(nC,D); % projected prior mean
             for d=1:D
-
-
-                nFree(d) = size(P{cc,d},1);
+                nFree(d) = size(P{cc,d},1); % number of free parameters for this set of weight
                 this_d = UpdOrder(:,d)'; %min(d,nDim); % over which dimension we work for each model
                 for m=1:nM
                     size_mod(m,d) = M(m).Weights(this_d(m)).nWeight;
@@ -1536,7 +1537,7 @@ classdef gum
                 end
 
                 for cc=1:nC
-                    idxC = idxComponent==cc;
+                    %idxC = idxComponent==cc;
                     Lambda{d} = P{cc,d}*Lambda{cc,d}*P{cc,d}'; % project onto free basis
 
                     Lambda{cc,d} = force_definite_positive(Lambda{cc,d}); % make sure it is definite positive
@@ -1555,15 +1556,14 @@ classdef gum
                 end
             end
 
-
-            if D>1 % in case we may use Newton update on full dataset
+            % in case we may use Newton update on full dataset
+            if D>1
                 if nC>1
                     error('not coded yet');
                 end
 
                 % we create dummy 'regressor' variables to store the gradients and constant weights
                 Udc_dummy = clear_data(M);
-                %  Udc_dummy = B_dummy;
                 B_dummy = repmat({{}},1, nM);
 
                 % full prior covariance matrix
@@ -1578,7 +1578,8 @@ classdef gum
                     Kall =  Pall*Kall*Pall';
                 end
 
-                if any(isinf(Kall(:))) % use precision only if there is infinite covariance (e.g. no regularization)
+                % use precision only if there is infinite covariance (e.g. no regularization)
+                if any(isinf(Kall(:)))
                     nonzeroprec = ~isinf(diag(Kall)); % weights with nonzero precision (i.e. finite variance)
                     precision_all = zeros(size(Kall)); %
                     precision_all(nonzeroprec,nonzeroprec) = inv(Kall(nonzeroprec,nonzeroprec));
@@ -1587,7 +1588,7 @@ classdef gum
             end
 
 
-            %% repeat fitting procedure with initial points
+            %% repeat algorithn with each set of initial points
             for ip=1:initialpoints
 
                 if initialpoints>1 && strcmp(obj.param.verbose, 'on')
@@ -1595,8 +1596,6 @@ classdef gum
                     %  elseif initialpoints>1 && strcmp(obj.param.verbose,'little')
                     %      fprintf('*');
                 end
-
-
 
                 %% generate random starting points
                 if ip>1
@@ -1652,7 +1651,7 @@ classdef gum
 
                 FullHessianUpdate = false(1,nC);
 
-                %% loop until convergence
+                %% loop weight update until convergence
                 while not_converged
 
                     old_logjoint = logjoint;
@@ -1941,7 +1940,6 @@ classdef gum
                         end
 
                         %% compute predictor
-                        % obj.regressor = M;
                         if recompute
                             obj(idxC) = Predictor(obj(idxC));
                             if ~FixedDispersion
@@ -1996,7 +1994,7 @@ classdef gum
                     iter = iter+1;
                     tolfun_negiter = 1e-4; % how much we can tolerate log-joint to decrease due to numerical inaccuracies
                     not_converged = ~diverged && (iter<=maxiter) && (iter<miniter || (dLJ>TolFun) || (dLJ<-tolfun_negiter) ); % || (LLH<oldLLH))
-                end
+                end %% end of algorithm iteration loop
 
 
                 logjoint_hist(iter:end) = [];
@@ -2082,6 +2080,9 @@ classdef gum
                 obj.score.exitflag = exitflag_allstarting(ip);
                 M = set_weights(M, U_allstarting(:,ip));
                 M = set_weights(M, U_allstarting, [], 'U_allstarting');
+
+                obj.regressor = M;
+
             end
 
             % S = obj.score;
@@ -2090,7 +2091,6 @@ classdef gum
             obj.score.LogJoint_hist_allstarting = logjoint_hist_allstarting;
             obj.score.exitflag_allstarting = exitflag_allstarting;
 
-            obj.regressor = M;
             obj.score.scaling = obj.score.scaling;
             % obj.score = S;
 
@@ -2131,7 +2131,7 @@ classdef gum
                 rho = zeros(obj.nObs,nC);
             end
 
-            for cc=idxC
+            for cc=idxC % for each mixture component
                 for m= find(idxComponent==cc)
                     rho(:,cc) = rho(:,cc) + Predictor(obj.regressor(m));
                 end
@@ -2221,6 +2221,28 @@ classdef gum
             end
         end
 
+        %% LINK FUNCTION
+        function f = inverse_link_function(obj,rho)
+            % f = inverse_link_function(M) returns handle to inverse link
+            % function.
+            % a = inverse_link_function(M, rho) returns values of inverse
+            % link function evaluated at points rho
+            switch obj.link
+                case 'identity'
+                    f = @(x) x;
+                case 'logit'
+                    f = @(x) 1./(1+exp(-xx));
+                case 'log'
+                    f = @exp;
+                case 'probit'
+                    f = @normcdf;
+            end
+
+            if nargin>1 % evaluate at data points
+                f = f(rho);
+            end
+        end
+
         %% COMPUTE EXPECTED VALUE
         function [obj,Y,R] = ExpectedValue(obj)
             % obj = ExpectedValue(obj)
@@ -2237,32 +2259,38 @@ classdef gum
                 rho = obj.Predictions.rho;
             end
 
-            switch obj.link
-                case 'logit'
-                    Y = 1 ./ (1 + exp(-rho)); % predicted probability
-                    if nargout>2
+            % pass predictor through inverse link function
+            Y = obj.inverse_link_function(rho);
+
+            if nargout>2
+
+                switch obj.link
+                    case 'logit'
+                        %  Y = 1 ./ (1 + exp(-rho)); % predicted probability
                         R = Y .* (1-Y) ; % derivative wr.t. predictor
-                    end
-                case 'probit'
-                    Y = normcdf(rho);
-                    if nargout>2 % see e.g. Rasmussen 3.16
+
+                    case 'probit'
+                        %  Y = normcdf(rho);
+                        %  if nargout>2
+                        % see e.g. Rasmussen 3.16
                         n = normpdf(rho);
                         Ysgn = Y;
                         Ysgn(obj.T==0) = 1-Y(obj.T==0);
                         sgn = sign(obj.T-.5); % convert to -1/+1
                         R = (n./Ysgn)^2 + sgn.*rho.*n./Ysgn;
-                    end
+                        % end
 
-                case 'log'
-                    Y = exp(rho);
-                    if nargout>2
+                    case 'log'
+                        % Y = exp(rho);
+                        % if nargout>2
                         R = Y;
-                    end
-                case 'identity'
-                    Y = rho;
-                    if nargout>2
+                        %end
+                    case 'identity'
+                        %Y = rho;
+                        %if nargout>2
                         R = ones(obj.nObs,1);
-                    end
+                        %end
+                end
             end
 
             obj.Predictions.Expected = Y;
@@ -2384,9 +2412,10 @@ classdef gum
             end
         end
 
-        %% computes log-likelihood for set of parameters
+        %% computes accuracy for set of parameters
         function accuracy = Accuracy(obj)
-            %[obj,Y] = ExpectedValue(obj); % compute expected value
+            %[obj,Y] = Accuracy(obj); % compute accuracy of model
+            %prediction
 
             Y = obj.Predictions.Expected;
             switch obj.obs
@@ -2404,6 +2433,17 @@ classdef gum
                     accuracy = nan;
 
             end
+        end
+
+        %% computes explained variance of model
+        function [obj, EV] = ExplainedVariance(obj)
+            % M = ExplainedVariance(M)
+            %  [M,EV] = ExplainedVariance(M)
+
+            Rse = ( obj.Predictions.Expected -obj.T).^2; % residual squared error
+            EV = 1- weighted_mean(Rse, obj.ObservationWeight) / var(obj.T,obj.ObservationWeight);
+
+            obj.score.ExplainedVariance = EV;
         end
 
         %% COMPUTE LOG-PRIOR
@@ -2541,10 +2581,8 @@ classdef gum
             % compute Hessian of likelihood
             [H,P] = Hessian(obj);
 
+            % compute covariance prior
             M = obj.regressor;
-
-            %precision = cellfun(@(x) x.precision, M, 'uniformoutput',0); % precision matrix from all modules
-            %precision = [precision{:}];
             K = prior_covariance_cell(M, true);  % group prior covariance from all modules
             for i=1:length(K)
                 K{i} = force_definite_positive(K{i});
@@ -2560,7 +2598,9 @@ classdef gum
                     %% !! finish this
                 end
             end
-            K = blkdiag(K{:});
+
+
+            K = blkdiag(K{:}); % prior is block-diagonal
             Kfree = P*K*P'; % prior covariance in free basis
             K_noinf = blkdiag(K_noinf{:});
             K_noinf_free = P*K_noinf*P'; % prior covariance in free basis
@@ -2687,24 +2727,11 @@ classdef gum
                 TT = field_fun('T');
                 p = field_fun('p');
                 scale = field_fun('scale');
-                %                 U = cellfun(@(x) x(m).U, {obj.regressor},'unif',0);
-                %                 U = cat(1,U{:});
-                %                 se = cellfun(@(x) x(m).se, {obj.regressor},'unif',0);
-                %                 se = cat(1,se{:});
-                %                 TT = cellfun(@(x) x(m).T, {obj.regressor},'unif',0);
-                %                 TT = cat(1,TT{:});
-                %                 p = cellfun(@(x) x(m).p, {obj.regressor},'unif',0);
-                %                 p = cat(1,p{:});
-                %                scale = cellfun(@(x) x(m).scale, {obj.regressor},'unif',0);
-                %                scale = cat(1,scale{:});
 
                 % in case scale is not specified, use default values
                 NoScale = cellfun(@isempty, scale);
                 DefaultScale = cellfun(@(x) 1:length(x), U, 'unif',0);
                 scale(NoScale) = DefaultScale(NoScale);
-
-                %U = cat(1,obj.regressor(m).U); % all weights for this module per model (% model x dimension cell array)
-                % se = cat(1,obj.regressor(m).se); % all weights for this module per model
 
                 % check that scale is the same, and if not add nans where
                 % appropriate
@@ -2830,9 +2857,7 @@ classdef gum
                         X(m) =  all_score{m}.(mt);
                     end
                 end
-
                 Sc.(mt) = X;
-
             end
 
         end
@@ -2842,9 +2867,9 @@ classdef gum
             % T = export_scores_to_table(M);
             % exports score to table.
             if numel(obj)>1
-            S = obj.concatenate_score;
+                S = obj.concatenate_score;
             else
-S = obj.score;
+                S = obj.score;
             end
             fn = fieldnames(S);
             for f = 1:length(fn) % make sure they're all row vectors
@@ -2930,11 +2955,12 @@ S = obj.score;
             export_hyperparameters_to_csv(obj.regressor, filename);
         end
 
-        %% COMPUTE EXPLAINED PREDICTOR VARIANCE FROM EACH MODULE
+        %% COMPUTE PREDICTOR VARIANCE FROM EACH MODULE
         function [obj, PV] = predictor_variance(obj)
-            % [M, PV] = predictor_variance(M)
-            % computes explained variance PV over dataset for each module in model.
-            % PV is an array of length nMod.
+            % M = predictor_variance(M)
+            % computes raw variance PV over dataset for each module in model.
+            % PV is an array of length nMod. The variance is not
+            % normalized. For normalized variance see gum.predictor_explained_variance
             %
             % [M, PV] = predictor_variance(M)
             %
@@ -2949,7 +2975,7 @@ S = obj.score;
             end
 
             rank = [obj.regressor.rank];
-            PV = zeros(max(rank),obj.nMod);
+            PV = nan(max(rank),obj.nMod);
 
             for m=1:obj.nMod
                 for r=1:obj.regressor(m).rank
@@ -2958,6 +2984,49 @@ S = obj.score;
             end
 
             obj.score.PredictorVariance = PV;
+        end
+
+        %% COMPUTE PREDICTOR EXPLAINED VARIANCE FROM EACH MODULE
+        function [obj, PEV] = predictor_explained_variance(obj)
+            % M = predictor_explained_variance(M)
+            % computes explained variance PV over dataset for each module in model.
+            % PV is an array of length nMod.
+            %
+            % [M, PEV] = predictor_explained_variance(M)
+            %
+            % Not to be confounded with predictor_variance or compute_rho_variance
+            if ~isscalar(obj) % recursive call
+                PEV = cell(size(obj));
+                for m=1:numel(obj)
+                    [obj(m),PEV{m}] = predictor_explained_variance(obj(m));
+                end
+                return;
+            end
+
+            rank = [obj.regressor.rank];
+            PEV = nan(max(rank),obj.nMod);
+
+            for m=1:obj.nMod
+                for r=1:obj.regressor(m).rank
+
+                    % compute predictor for this regressor alone
+                    rho = Predictor(obj.regressor(m),r); % rho
+                    rho = regressor(rho, 'constant');
+
+                    % we need to include offset so we fit a model with one
+                    % parameter: offset
+                    Msingle = gum(rho, obj.T, struct('observations',obj.obs,'ObservationWeight', obj.ObservationWeight));
+                    Msingle = Msingle.infer(struct( 'verbose','off'));
+                    [~,PEV(r,m)] = Msingle.ExplainedVariance; % compute explained variance
+
+                    % alternative: not good
+                    %   Y = obj.inverse_link_function(rho); % pass through inverse link function
+                    %Mse = (Y -obj.T).^2; % model squared error
+                    %PEV(r,m) = weighted_mean(Mse, obj.ObservationWeight) / var(obj.T,obj.ObservationWeight);
+                end
+            end
+
+            obj.score.PredictorExplainedVariance = PEV;
         end
 
         %% COMPUTE ESTIMATED VARIANCE OF PREDICTOR
@@ -3541,19 +3610,14 @@ S = obj.score;
             h =  wu(H, M, sem);
             axis tight; hold on;
 
+            % plot inverse link function as reference
             xx = linspace(min(xlim), max(xlim), 200);
+            yy = obj.inverse_link_function(xx);
             switch obj.link
-                case 'identity'
-                    yy = xx;
                 case 'logit'
-                    yy = 1./(1+exp(-xx));
                     plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
                     plot([0 0],ylim, 'color',.7*[1 1 1]);
-                case 'log'
-                    yy = exp(xx);
-                    %  set(gca, 'yscale','log');
                 case 'probit'
-                    yy = normcdf(xx);
                     plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
                     plot([0 0],ylim, 'color',.7*[1 1 1]);
             end
@@ -3563,6 +3627,7 @@ S = obj.score;
 
 
         end
+
 
         %% PLOT SCORES (MODE COMPARISON)
         function [h,X] = plot_score(obj, score, ref, labels, plottype)
@@ -4686,7 +4751,8 @@ end
 
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
-metrics = {'Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence', 'accuracy','validationscore','r2','FittingTime'};
+metrics = {'Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
+    'accuracy','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','FittingTime'};
 end
 
 %% PLOT SINGLE WEIGHTS
