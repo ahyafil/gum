@@ -86,17 +86,20 @@ classdef gum
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
     % - spectral trick (TEST HP fitting)
     % - negative binomial, probit (finish)
-    % - dispersion parameter for fitting
+    % - link functions as in glmfit
+    % - dispersion parameter for CV
+        % - CV for parameterized basis functions 
+    % - correct basic fitting algo
     % - crossvalidation compatibility with matlab native (done?)
     % - constraint structure (e.g. when concat weights or split)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - work on labels
     % - load value from other model based on labels
+        % - set_hyperparameters (apply to gum object; copy from other model)
     % -ADD \sum_i for more complex formulas?
     % - add label on models
-    % - set_weights for gum, clearing all scores and predictions
-    % - set_HP
+    % - reset: weights for gum, clearing all scores and predictions
     % - plot_vif
     % - add number of (free) HPs to metrics
     % - plot with 2D scale
@@ -104,12 +107,8 @@ classdef gum
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
     % - add history regressors (with exp basis)
-    % - EM and CV for parameterized basis functions (M-step: go back to
-    % original space)
     % - knock-out model
-    % - link functions as in glmfit
     % - print summary, weights, hyperparameters
-    % - isglm if only linear/categorical regressors
     % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
 
     %
@@ -118,6 +117,7 @@ classdef gum
     % -'extract_observations': extract model for only a subset of
     % observations
     % - 'isgam': whether model corresponds to a GAM
+    % - 'isglm': whether model corresponds to a GLM
     % - 'isestimated': whether model weights have been estimated
     % - 'is_infinite_covariance': whether any regressor has infinite
     % covariance (i.e. no prior)
@@ -522,6 +522,7 @@ classdef gum
             HPfit = 'em'; % default algorithm
             display = 'iter'; % default verbosity
             use_gradient = 'on'; % use gradient for CV fitting
+            HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
 
             if nargin==1
                 param = struct;
@@ -588,29 +589,28 @@ classdef gum
             % HP_LB = cell(1,obj.nMod); % HP lower bounds
             % HP_UB = cell(1,obj.nMod); % HP upper bounds
             % HP_fittable =cell(1,obj.nMod); % which HP are fitted
-            nHP  = cell(1,obj.nMod); % number of hyperparameters in each module
-            HPidx = cell(1,obj.nMod);     % index of hyperparameters for each component
-            cnt = 0;
-            for m=1:obj.nMod
-                %ss = [M(m).Weights.nWeight];
-                HPidx{m} = cell(size(M(m).HP,1),M(m).nDim);
 
-                %% check initial values and bounds for HPs
-                % HPini{m} = [M(m).HP.HP]; % initial values for all HPs
-                % HP_LB{m} = [M(m).HP.LB];
-                % HP_UB{m} = [M(m).HP.UB];
-                % HP_fittable{m} = logical([M(m).HP.fit]);
+            % retrieve number of fittable hyperparameters and their indices
+            % for each regressor set
+[HPidx, nHP] = get_hyperparameters_indices(M);
 
-                %retrieve number of fittable hyperparameters for each function
-                this_HPfit = reshape({M(m).HP.fit}, size(M(m).HP));
-                nHP{m} = cellfun(@sum, this_HPfit); %cellfun(@length, HPini{m});
-                for d=1:M(m).nDim
-                    for r=1:size(nHP{m},1)
-                        HPidx{m}{r,d} = cnt + (1:nHP{m}(r,d)); % indices of hyperparameters for this component
-                        cnt = cnt + nHP{m}(r,d); % update counter
-                    end
-                end
-            end
+%             nHP  = cell(1,obj.nMod); % number of hyperparameters in each module
+%             HPidx = cell(1,obj.nMod);     % index of hyperparameters for each component
+%             cnt = 0;
+%             for m=1:obj.nMod
+%                 %ss = [M(m).Weights.nWeight];
+%                 HPidx{m} = cell(size(M(m).HP,1),M(m).nDim);
+% 
+%                 %retrieve number of fittable hyperparameters for each function
+%                 this_HPfit = reshape({M(m).HP.fit}, size(M(m).HP));
+%                 nHP{m} = cellfun(@sum, this_HPfit); %cellfun(@length, HPini{m});
+%                 for d=1:M(m).nDim
+%                     for r=1:size(nHP{m},1)
+%                         HPidx{m}{r,d} = cnt + (1:nHP{m}(r,d)); % indices of hyperparameters for this component
+%                         cnt = cnt + nHP{m}(r,d); % update counter
+%                     end
+%                 end
+%             end
 
 
             if sum(cellfun(@(x) sum(x,'all'),nHP))==0
@@ -621,14 +621,7 @@ classdef gum
                 return;
             end
 
-            % initial values, lower bound and upper bound on
-            % hyperparameters
-            % HPini = [HPini{:}];
-            % HP_LB = [HP_LB{:}]; % concatenate over modules
-            % HP_UB = [HP_UB{:}];
-
             % select hyperparmaters to be fitted
-            %HP_fittable = [HP_fittable{:}];
             HPini = HPini(HP_fittable);
             HP_LB = HP_LB(HP_fittable);
             HP_UB = HP_UB(HP_fittable);
@@ -643,15 +636,12 @@ classdef gum
                 obj.param.initialpoints = param.initialpoints;
             end
 
-            HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
-
             %% optimize hyperparameters
             switch lower(HPfit)
                 case 'basic' % grid search  hyperpameters that maximize marginal evidence
 
                     % clear persisitent value for best-fitting parameters
                     gum_neg_marg();
-
 
                     % run gradient descent
                     errorscorefun = @(HP) gum_neg_marg(obj, HP, HPidx);
@@ -673,7 +663,6 @@ classdef gum
                     logjoint_iter = zeros(1,maxiter);
                     still =1;
                     iter = 0;
-                    % UU = []; % initial values for weights
                     HP = HPini; % initial values for hyperparameters
                     param2 = obj.param;
                     param2.HPfit = 'none';
@@ -689,7 +678,7 @@ classdef gum
                     while still % EM iteration
                         %% E-step (running inference with current hyperparameters)
 
-                        M = assign_hyperparameter(M, HP, HPidx);
+                        M = set_hyperparameters(M, HP, HPidx);
 
                         % evaluate covariances at for given hyperparameters
                         %M2 = compute_prior_covariance(M);
@@ -2162,14 +2151,48 @@ classdef gum
             end
         end
 
-        %% TEST IF MODEL IS A GML (dimension=1)
+        %% TEST IF MODEL IS A GAM (dimension=1)
         function bool = isgam(obj)
             % bool = isgam(M)
             % tests if model M is a GAM (generalized additive model), i.e.
             % if all regressors are one-dimensional (regressors can be of
             % any type, continuous, linear, categorical, etc.)
 
+            % recursive call if more than one model
+            if size(obj)>1
+                bool = false(size(obj));
+                for i=1:numel(obj)
+                    bool(i) = isgam(obj(i));
+                end
+return;
+            end
+
             bool = all([obj.regressor.nFreeDimensions]<=1);
+        end
+
+        %% TEST IF MODEL IS A GLM (dimension=1 & linear or categorical regressors)
+        function bool = isglm(obj)
+            % bool = isglm(M)
+            % tests if model M is a GLM (generalized linear model), i.e.
+            % if all regressors are one-dimensional and linear or
+            % categorical
+
+% recursive call if more than one model
+            if size(obj)>1
+                bool = false(size(obj));
+                for i=1:numel(obj)
+                    bool(i) = isgam(obj(i));
+                end
+return;
+            end
+
+
+            bool = all([obj.regressor.nFreeDimensions]<=1);
+            if bool
+                W = [obj.regressor.Weights];
+                Wtype = {W.type};
+                bool = bool & all(strcmp(Wtype,'linear') | strcmp(Wtype,'categorical') | strcmp(Wtype,'constant'));
+            end
         end
 
         %% TEST IF MODEL WEIGHTS HAVE BEEN ESTIMATED (OR SET)
@@ -3842,24 +3865,6 @@ if M.nObs ~=n
 end
 end
 
-
-%% ASSIGN HYPERPARAMETER VALUES TO REGRESSORS
-function M = assign_hyperparameter(M, P, idx)
-for m=1:length(M) % for each regressor
-
-    for d=1:M(m).nDim % for each dimension
-        for r=1:size(M(m).HP,1) %M(m).rank
-            cc = idx{m}{r,d};  %index for corresponding module
-            % hyperparameter values for this component
-            HP_fittable = logical(M(m).HP(r,d).fit);
-            M(m).HP(r,d).HP(HP_fittable) = P(cc); % fittable values
-        end
-    end
-
-end
-end
-
-
 %% negative marginalized evidence (for hyperparameter fitting)
 function [negME, obj] = gum_neg_marg(obj, HP, idx)
 
@@ -3900,7 +3905,7 @@ if nfval>0
 end
 
 % assign hyperparameter values to regressors
-M = assign_hyperparameter(M, HP, idx);
+M = set_hyperparameters(M, HP, idx);
 
 % evaluate covariances at for given hyperparameters
 M = M.compute_prior_covariance;
@@ -3966,7 +3971,7 @@ if ~isempty(UU)
 end
 
 % assign hyperparameter values to regressors
-M = assign_hyperparameter(M, HP, idx);
+M = set_hyperparameters(M, HP, idx);
 
 param = obj.param;
 param.originalspace = false;

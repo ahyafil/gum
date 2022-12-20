@@ -925,6 +925,60 @@ classdef regressor
 
         end
 
+%% ASSIGN HYPERPARAMETER VALUES TO REGRESSORS
+function obj = set_hyperparameters(obj, HP, HPidx)
+    % R = set_hyperparameters(R, HP) sets hyperparameters in regressor R to
+    % values in vector HP
+    %
+    % R = set_hyperparameters(R, HP, idx) provides cell array of
+    % hyperparameter positions
+
+    if nargin<3
+    HPidx = get_hyperparameters_indices(obj);
+    end
+    
+for m=1:length(obj) % for each regressor
+
+    for d=1:obj(m).nDim % for each dimension
+        for r=1:size(obj(m).HP,1) %M(m).rank
+            cc = HPidx{m}{r,d};  %index for corresponding module
+
+            % hyperparameter values for this component
+            HP_fittable = logical(obj(m).HP(r,d).fit);
+            obj(m).HP(r,d).HP(HP_fittable) = HP(cc); % fittable values
+        end
+    end
+
+end
+end
+
+%% GET INDICES FOR REGRESSOR HYPERPARAMETERS
+function [HPidx, nHP] = get_hyperparameters_indices(obj)
+    % [HPidx, nHP] = get_hyperparameters_indices(obj) get indices for index
+    % of fittable hyperparameters in regressor set.
+    nM = length(obj);
+
+                nHP  = cell(1,nM); % number of hyperparameters in each module
+            HPidx = cell(1,nM);     % index of hyperparameters for each component
+            cnt = 0; % counter
+            for m=1:nM
+                this_HP = obj(m).HP;
+                HPidx{m} = cell(size(this_HP,1),obj(m).nDim);      
+
+                %retrieve number of fittable hyperparameters for each function
+                this_HPfit = reshape({this_HP.fit}, size(this_HP));
+                nHP{m} = cellfun(@sum, this_HPfit); 
+
+                % retrieve indices of hyperparameters for this component
+                for d=1:obj(m).nDim
+                    for r=1:size(nHP{m},1)
+                        HPidx{m}{r,d} = cnt + (1:nHP{m}(r,d)); 
+                        cnt = cnt + nHP{m}(r,d); % update counter
+                    end
+                end
+            end
+end
+
         %% SET RANK
         function obj = set_rank(obj, rank, bool)
             % R = R.set_rank(rank);
