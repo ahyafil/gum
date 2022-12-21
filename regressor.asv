@@ -47,9 +47,6 @@ classdef regressor
     % V = regressor(..., 'OneHotEncoding',bool) will use OneHotEncoding regressor if bool is
     % set to true (true by default for continuous and categorial regressors)
     %
-    % V = regressor(...,'spectral', bool) uses spectral trick if bool is set to
-    % true [default: false]
-    %
     % V = regressor(...,'scale',sc) for categorical regressor to specify which
     % values to code (others have zero weight)
     %
@@ -61,6 +58,7 @@ classdef regressor
     % V = regressor(...,'sum', S)
     % If X is a matrix, you may define how f(x) for each columns are summed
     % into factor. Possible values for S are:
+    % - 'joint' to use multidimensional function F_n = f(X_n1,...X_nk)
     % - 'weighted' or 'linear' to assign a different weight for each column [default], i.e. to define
     % factor as the weighted sum: F_n = sum_k w_k f(X_nk)
     % - 'equal' to assign equal weight for each column, i.e. to define
@@ -291,6 +289,9 @@ classdef regressor
             elseif ~iscell(scale)
                 scale = {scale};
             end
+            if ~iscell(summing)
+                summing = {summing};
+            end
 
             % we perform one-hot-encoding for all regressor types except
             % linear - except for continuous var if scale is provided, which means the tensor
@@ -303,7 +304,10 @@ classdef regressor
             if iscolumn(X)
                 nD = 1;
             else
-                nD = ndims(X)-(OneHotEncoding==0); % we'll add one dimension if one-hot encoding is performed
+                % we'll add one dimension if one-hot encoding is performed
+                % (unless we use joint function)
+                add_one_dim = OneHotEncoding && ~strcmp(summing{end},'joint');
+                nD = ndims(X) -1 +add_one_dim ; 
                 % elseif strcmpi(type, 'linear')
                 %     nD = ndims(X)-1;
                 % else
@@ -355,9 +359,6 @@ classdef regressor
 
             % whether splitting or separate regressors options are
             % requested
-            if ~iscell(summing)
-                summing = {summing};
-            end
             SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
             SplitOrSeparate(end+1:nD) = false;
 
@@ -491,7 +492,12 @@ classdef regressor
 
                     % build design matrix/tensor
                     if OneHotEncoding % use one-hot-encoding
-                        this_scale = unique(X)'; % use unique values as sclae
+                        if strcmp(summing{nD},'joint')
+                            % look for all unique combinations of rows
+                            this_scale = unique(reshape(X,prod(siz(1:nD-1)), siz(nD)), 'rows'); 
+                        else
+                        this_scale = unique(X)'; % use unique values as scale
+                        end
                         this_scale(isnan(this_scale)) = []; % remove nan values
                         nVal = length(this_scale);
                         obj.Data = one_hot_encoding(X, this_scale, OneHotEncoding(nD),nD);
@@ -737,6 +743,62 @@ classdef regressor
             end
         end
 
+        %% GET LABELS OF WEIGHT SET
+        function label = weight_labels(obj)
+            % label = weight_labels(R) outputs cell array of all labels for
+            % set of weights
+W = [obj.Weights];
+label = {W.label};
+        end
+
+        %% FIND SET OF WEIGHT WITH GIVEN LABEL
+        function I = find_weights(obj, label)
+            % I = find_weights(R, label) finds the set of weight with given
+            % label in regressors R. I is a 2-by-1 vector where the first
+            % element signals the index of the regressor in the regressor array and the second element
+            % signals the dimension for the corresponding label.
+            %
+            % I = find_weights(R, C) if C is a cell array of labels
+            % provides a matrix of indices with two rows, one for the index
+            % of the regressor and the second for the corresponding
+            % dimension.
+            % NaN indicates when no weight is found.
+            %
+
+            if ~iscell(label)
+                label = {label};
+            end
+
+            nR = numel(obj); % number of regressor objects
+            nD = [obj.nDim]; % dimensionality for each regressor object
+
+            % vector of regressor inde for each set of weight
+            Ridx = repelem(1:nR, nD);
+
+             % build vector for dimensionality for each set of weight
+            Dims = cell(1,nR);
+            for i=1:numel(obj)
+Dims{i} = 1:nD(i);
+            end
+            Dims = [Dims{:}];
+RD = [Ridx;Dims]; % first row: regressor index; second row: dimension
+
+Wlbl = weight_labels(obj); % label for all set of weights
+
+            % build index matrix corresponding to each label
+            nL = length(label); % number of labels
+            I = nan(2,nL);
+            for i=1:nL
+                j = find(strcmp(label{i}, Wlbl));
+                if ~isempty(j)
+                    if length(j)>1
+                        warning('more than one set of weights with label''%s''', label{i});
+                    end
+                    I(:,i) = RD(:,j(1));
+                end
+            end
+        end
+
         %% CONCATENATE ALL WEIGHTS
         function U = concatenate_weights(obj, dims, fild)
             % U = concatenate_weights(M) concatenate all weights posterior
@@ -796,6 +858,102 @@ classdef regressor
             end
         end
 
+%% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
+function [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool)
+        % R = set_weights_and_hyperparameters_from_model(R, R2),
+        % or R = set_weights_and_hyperparameters_from_model(R, M2)
+        % sets the values of weights and hyperparameters in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_weights_and_hyperparameters_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+        if isa(obj2,'gum')
+            obj2 = obj2.regressor;
+        end
+
+        if nargin<3 || isempty(lbl)
+            % default: find all set of weights that are present on both
+            % regressor objects
+            Wlbl = weight_labels(obj);
+            Wlbl2 = weight_labels(obj2);
+            lbl = intersect(Wlbl, Wlbl2);
+        elseif ~iscell(lbl)
+            lbl = {lbl};
+        end
+
+        I = nan(2,length(lbl));
+        for i=1:length(lbl)
+            % index for this label in both objects
+            ind1 = obj.find_weights(lbl{i});
+            ind2 = obj2.find_weights(lbl{i});
+
+            assert(~any(isnan([ind1;ind2])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
+            
+            if bool(1) % set weights
+            % corresponding set of weights
+            W = obj(ind1(1)).Weights(ind1(2));
+            W2 = obj2(ind2(1)).Weights(ind2(2));
+
+            assert(W.nWeight==W2.nWeight, 'the number of weights do not match for at least one set of weights with same label');
+
+            % assign value
+            obj(ind1(1)).Weights(ind1(2)).PosteriorMean = W2.PosteriorMean;
+            end
+
+            if bool(2) % set hyperparameters
+                % corresponding set of HPs
+            hp = obj(ind1(1)).HP(ind1(2));
+            hp2 = obj2(ind2(1)).HP(ind2(2));
+
+            assert(length(hp.HP)==length(hp2.HP), 'the number of hyperparameters do not match for at least one set of weights with same label');
+
+            % assign value
+            obj(ind1(1)).HP(ind1(2)).HP = hp2.HP;
+            end
+        end
+        end
+
+        %% SET HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
+        function [obj,I] = set_hyperparameters_from_model(obj, obj2, lbl)
+        % R = set_hyperparameters_from_model(R, R2) or R = set_hyperparameters_from_model(R, M2)
+        % sets the values of hyperparameters in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_hyperparameters_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+           if nargin<3
+               lbl = [];
+           end
+
+           bool = [false true]; % copy just hyperparameters, not weights
+           [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+        end
+
+        %% SET WEIGHTS FROM ANOTHER MODEL / SET OF REGRESSORS
+        function [obj,I] = set_weights_from_model(obj, obj2, lbl)
+        % R = set_weights_from_model(R, R2) or R = set_weights_from_model(R, M2)
+        % sets the values of weights in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_weights_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+           if nargin<3
+               lbl = [];
+           end
+
+           bool = [true false]; % copy just weights, not hyperparameters
+           [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+        end
+        
         %% SET WEIGHTS FOR SET OF MODULES
         function obj = set_weights(obj,U, dims, fild)
             % M = set_weights(M,M2) set values of regressor M provided by
@@ -924,6 +1082,60 @@ classdef regressor
             end
 
         end
+
+%% ASSIGN HYPERPARAMETER VALUES TO REGRESSORS
+function obj = set_hyperparameters(obj, HP, HPidx)
+    % R = set_hyperparameters(R, HP) sets hyperparameters in regressor R to
+    % values in vector HP
+    %
+    % R = set_hyperparameters(R, HP, idx) provides cell array of
+    % hyperparameter positions
+
+    if nargin<3
+    HPidx = get_hyperparameters_indices(obj);
+    end
+    
+for m=1:length(obj) % for each regressor
+
+    for d=1:obj(m).nDim % for each dimension
+        for r=1:size(obj(m).HP,1) %M(m).rank
+            cc = HPidx{m}{r,d};  %index for corresponding module
+
+            % hyperparameter values for this component
+            HP_fittable = logical(obj(m).HP(r,d).fit);
+            obj(m).HP(r,d).HP(HP_fittable) = HP(cc); % fittable values
+        end
+    end
+
+end
+end
+
+%% GET INDICES FOR REGRESSOR HYPERPARAMETERS
+function [HPidx, nHP] = get_hyperparameters_indices(obj)
+    % [HPidx, nHP] = get_hyperparameters_indices(obj) get indices for index
+    % of fittable hyperparameters in regressor set.
+    nM = length(obj);
+
+                nHP  = cell(1,nM); % number of hyperparameters in each module
+            HPidx = cell(1,nM);     % index of hyperparameters for each component
+            cnt = 0; % counter
+            for m=1:nM
+                this_HP = obj(m).HP;
+                HPidx{m} = cell(size(this_HP,1),obj(m).nDim);      
+
+                %retrieve number of fittable hyperparameters for each function
+                this_HPfit = reshape({this_HP.fit}, size(this_HP));
+                nHP{m} = cellfun(@sum, this_HPfit); 
+
+                % retrieve indices of hyperparameters for this component
+                for d=1:obj(m).nDim
+                    for r=1:size(nHP{m},1)
+                        HPidx{m}{r,d} = cnt + (1:nHP{m}(r,d)); 
+                        cnt = cnt + nHP{m}(r,d); % update counter
+                    end
+                end
+            end
+end
 
         %% SET RANK
         function obj = set_rank(obj, rank, bool)
@@ -1126,7 +1338,6 @@ classdef regressor
 
                     %obj.Prior(d).CovFun = @(HP,scale,Tcirc) covSquaredExp_Fourier(scale, exp(HP(1)), exp(HP(2)),params.Tcirc);
                     obj.Prior(d).CovFun = @covSquaredExp_Fourier;
-
 
                     B.fun = @fourier_basis;
                     B.fixed = true; % although the actual number of regressors do change
@@ -1485,146 +1696,6 @@ classdef regressor
 
 
         %% PROJECT TO SPECTRAL SPACE
-        function obj = project_to_spectral(obj) % (M,P,idx, rank)
-
-            %%% REMOVE!!!!%%%
-            S = [obj.Prior.spectral];
-            if isempty(S) || (islogical(S) && ~any(S))
-                return;
-            end
-
-            %  DD = obj.nDim; % number of dimensions for this module
-            rk = obj.rank; % rank
-            ss = [obj.Weights.nWeight]; % size of each dimension
-            cc = [obj.Weights.constraint];
-
-            %obj.spectral = tocell(obj.spectral);
-            with_spectral = ~cellfun(@isempty,  {S.fun});
-            SpectralDims = find(with_spectral); % dimension with spectral transofrmation
-
-            % remove dimensions where covariance matrix is already provided
-            NonEmptyPriorCov = ~cellfun(@isempty, obj.Prior.PriorCovariance(1,SpectralDims));
-            if any(NonEmptyPriorCov)
-                SpectralDims(NonEmptyPriorCov) = [];
-            end
-            % spectral = ~isempty(spk); % if any dimension with this module uses the spectral trick
-            % if spectral
-
-            % wvec = cell(1,length(spk)); % vector of Fourier frequencies for each component
-            % B_fft = cell(1,DD); % basis for each component
-            % B_fft2 = cell(1,DD); % same, excluding index dimensions
-
-
-            % for f= 1:length(spk) % for each component to be converted
-            %     d = spk(f);
-            for d = SpectralDims
-
-                % hyperparameter values for this component
-                this_HP = obj.HP(d).HP; %fixed values
-                this_scale = obj.Weights(d).scale;
-
-                if isa(obj.Prior(d).spectral, 'function_handle') % directly provides function for basis change
-
-                    [S(d).B_fft,S(d).wvec,Tcirc] = S(d).fun(this_scale, this_HP); % apply user-provided function (params is hyperparameter)
-                    assert( size(S(d).B_fft,2)==ss(d), 'Incorrect number of columns (%d) for spectral transformation matrix in component %d (expected %d)', size(S(d).B_fft,2), d, ss(d));
-                    ss(d) = size(S(d).B_fft,1);
-                else % compute basis for basis change
-
-                    minl = this_HP(1); % temporal scale
-
-                    range = max(this_scale) - min(this_scale);  % range of values for given component
-                    Tcirc = range + 3*minl; %   range + 3*minscale (for virtual padding to get periodic covariance)
-
-                    % if isfield(obj,'condthreshold') % threshold on condition number of covariance matrix
-                    %     condthresh = obj.condthreshold(f);
-                    % else
-                    condthresh = 1e12;
-                    % end
-
-                    % set up Fourier frequencies
-                    maxw = floor((Tcirc/(pi*minl))*sqrt(.5*log(condthresh)));  % max freq to use
-                    ss(d) = maxw*2+1; % number of fourier frequencies
-
-                    [S(d).B_fft,S(d).wvec] = realnufftbasis(this_scale,Tcirc,ss(d)); % make Fourier basis
-                    S(d).B_fft = S(d).B_fft';
-                    warning('the covfun below looks weird, shouldnt i use RBF_Fourier instead?');
-                end
-                obj.Prior(1,d).CovFun = @(s,x) obj.Prior(1,d).covfun(x, S(d).wvec,Tcirc); % use frequency scale for covariance prior function
-
-                % convert design matrix to spectral decomposition along
-                % required dimension
-                % if d<=DD % component from main design matrix
-                %                     if obj.sparse(d)
-                %                         siz = size(obj.Data{d+1});
-                %                         siz(d+1) = ss(d);
-                %                         VV = zeros(siz);
-                %                         dimdim = 1:obj.nDim+1;
-                %                         dimdim(d+1) = 1; dimdim(1) = d+1; % put along d+1 dimensions in design matrix
-                %                         for i=1:obj.size(d)
-                %                             VV = VV + (obj.Data{d+1}==i) .* permute(B_fft{d}(:,i),dimdim); % add spectral component for this value
-                %                         end
-                %                         obj.Data{1} =  obj.Data{1} .* VV;
-                %                         obj.sparse(d) = 0;
-                %                         obj.Data{d+1} = [];
-                %                     else
-                S(d).B_fft2 = S(d).B_fft;
-                %                   end
-
-                %% if weights are constraint to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                for r=1:rk
-                    if any(cc(r,d)=='msb')
-                        if ~all(cc(:,d) == cc(r,d))
-                            error('spectral dimension %d cannot have ''%s'' constraint for one order and other constraint for other orders',d, cc(r,d));
-                        end
-                        B = sum(S(d).B_fft,2); % ( 1*(Bfft*U) = const -> (1*Bfft)*U = const
-                        if cc(d)=='m' % rescale
-                            B = B/obj.Weights(d).nWeight;
-                        end
-                        invB = diag(1./B);
-                        S(d).B_fft = invB * S(d).B_fft; % change projection matrix so that constraint is sum of weight equal to one
-
-                        for r2=1:rk
-                            if cc(r,d)~='b'
-                                obj.Weights(d).constraint(r2) = 's';
-                            end
-                            obj.Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc, hp, diag(B) , obj.Prior(r2,d).covfun, obj.Prior(r2,d).params);
-                        end
-                        break; % do not do it for other orders
-                    end
-
-                end
-                obj.Weights(d).nWeight = ss(d); % size of each dimension
-                obj.Prior(d).spectral = S(d);
-
-                %% if initial value of weights are provided, compute in new basis
-                U = obj.Weights(d).PosteriorMean;
-                if ~isempty(U)
-                    for r=1:rk
-                        % if some hyperparameters associated with other
-                        % rank
-                        % need to work this case!
-                        % if ~isempty(idx{m}{r,d}) % if some hyperparameters associated with other rank
-                        %     obj.covfun{r,d} =  obj.covfun{1,d};
-                        % end
-                        % if ~isempty( obj.U{r,d})
-                        obj.Weights(d).PosteriorMean(r,:) = U(r,:) / S(d).B_fft; % obj.U{r,d}*Bfft{d}';
-                        % !! change to direct matrix mult without loop
-                        % through rank?
-                        % end
-                    end
-                end
-
-                % change basis to spectral for all components within main design matrix
-                obj.Data = tensorprod(obj.Data, [{{}},S(d).B_fft2]);
-
-
-            end
-
-
-        end
-
-
-        %% PROJECT TO SPECTRAL SPACE
         function obj = project_to_basis(obj)
 
             for m=1:length(obj) % for each module
@@ -1883,13 +1954,13 @@ classdef regressor
                                 this_HP = obj(m).HP(r,d).HP; %hyperparameter values
                                 this_nHP = length(this_HP); % number of hyperparameters
                                 this_scale = obj(m).Weights(d).scale;
-                                this_params = obj(m).Prior(d).params;
+                                this_basis = obj(m).Weights(d).basis;
 
                                 % compute associated covariance matrix
                                 CovFun = P(r,d).CovFun;
                                 % [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
                                 if with_grad % need gradient
-                                    [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
+                                    [Sigma, gg]= CovFun(this_scale,this_HP, this_basis);
 
                                     % replicate covariance matrix if needed
                                     [Sigma, gg]= replicate_covariance(P(r,d).replicate, Sigma,gg);
@@ -1916,7 +1987,7 @@ classdef regressor
                                     HP_fittable = logical(obj(m).HP(r,d).fit);
                                     gsf{r,d} = gsf{r,d}(:,:,HP_fittable);
                                 else
-                                    Sigma= CovFun(this_scale,this_HP, this_params);
+                                    Sigma= CovFun(this_scale,this_HP, this_basis);
 
                                     % replicate covariance matrix if needed
                                     Sigma= replicate_covariance(P(r,d).replicate, Sigma);
@@ -2222,12 +2293,12 @@ classdef regressor
 
             if isempty(B) % no basis functions: use equation 15
                 % evaluate prior covariance between train and test set
-                KK = P.CovFun({W.scale,scale},this_HP, P.params);
+                KK = P.CovFun({W.scale,scale},this_HP, []);
 
                 mu = (W.PosteriorMean / P.PriorCovariance)*KK;
 
                 if nargout>1
-                    Kin = P.CovFun(scale,this_HP, P.params);
+                    Kin = P.CovFun(scale,this_HP, []);
                     K = zeros(nW, nW,obj.rank);
                     S = zeros(obj.rank, nW);
                     for r=1:obj.rank
@@ -3136,7 +3207,7 @@ end
 
 %% L2-regression covariance function
 %function [K, grad] = L2_covfun(nreg, loglambda,HPdefault, which_par)
-function [K, grad] = L2_covfun(scale, loglambda, params)
+function [K, grad] = L2_covfun(scale, loglambda, B)
 if nargin<2
     K = 1; % number of hyperparameters
     return;
@@ -3155,13 +3226,13 @@ grad.EM = @(m,Sigma) log(mean(m(:).^2 + diag(Sigma)))/2; % M-step of EM to optim
 end
 
 %% L2 covariance function when using basis (L2 on last hyperparameter)
-function varargout = L2basis_covfun(scale, HP, params)
+function varargout = L2basis_covfun(scale, HP, B)
 if nargin<2
     varargout = {1}; % number of hyperparameters
 else
     varargout = cell(1,nargout);
     loglambda = HP(end);
-    [varargout{:}] = L2_covfun(scale,loglambda, params);
+    [varargout{:}] = L2_covfun(scale,loglambda, B);
     if nargout>1
         % place gradient over variance HP as last matrix in 3-D array
         nR = size(varargout{1},1);
@@ -3172,7 +3243,7 @@ end
 end
 
 %% infinite covariance
-function [K, grad] = infinite_cov(scale, P)
+function [K, grad] = infinite_cov(scale, HP, B)
 if nargin<2
     K = 0; % number of hyperparameters
     return;
@@ -3185,7 +3256,7 @@ grad = zeros(nReg,nReg,0);
 end
 
 %% Automatic Relevance Discrimination (ARD) covariance function
-function [K, grad] = ard_covfun(scale, loglambda, params)
+function [K, grad] = ard_covfun(scale, loglambda, B)
 nReg = length(scale);
 
 if nargin<2
@@ -3209,7 +3280,7 @@ grad.EM = @(m,V) log(m(:).^2 + diag(V))/2;
 end
 
 %% Squared Exponential covariance
-function [K, grad] = covSquaredExp(X, HP)
+function [K, grad] = covSquaredExp(X, HP, B)
 % radial basis function covariance matrix:
 %  K = covSquaredExp(X, [log(tau), log(rho)])
 % K(i,j) = rho^2*exp(- [(x(i,1)-x(j,1))^2 + ...
@@ -3297,9 +3368,11 @@ if nargout>1
 end
 end
 
-function [K, grad] = covSquaredExp_Fourier(X, HP, Tcirc)
-                    obj.Prior(d).CovFun = @(HP,scale,Tcirc) covSquaredExp_Fourier(scale, exp(HP(1)), exp(HP(2)),params.Tcirc);
-
+%% SQUARED EXPONENTIAL KERNEL COVARIANCE IN FOURIER DOMAIN
+function [K, grad] = covSquaredExp_Fourier(scale, HP, B)
+%
+% [K, grad] = covSquaredExp_Fourier(HP, scale, params)
+%
 % Squared Exponential RBF covariance matrix, in the Fourier domain:
 %  K = RBF(X, tau, rho, sigma)
 % K(i,j) = rho*exp(- [(x(i,1)-x(j,1))^2 + ...
@@ -3316,9 +3389,11 @@ function [K, grad] = covSquaredExp_Fourier(X, HP, Tcirc)
 tau = exp(HP(1:end-1));
 rho = exp(HP(end));
 
+Tcirc = B.params.Tcirc;
+
 % covariance matrix is diagonal in fourier domain
 % !! check the formula !!
-eexp = exp(-(2*pi^2/Tcirc^2)*tau^2*X.^2);
+eexp = exp(-(2*pi^2/Tcirc^2)*tau^2*scale.^2);
 kfdiag = sqrt(2*pi)*rho*tau*eexp;
 K = diag(kfdiag);
 
@@ -3327,13 +3402,13 @@ K = diag(kfdiag);
 %     error('tau should be scalar or a vector whose length matches the number of column in X');
 % end
 % tau = tau(:);
-n = size(X,1); % number of data points
+n = size(scale,2); % number of data points
 
 % compute gradient
 if nargout>1
     grad = zeros(n,n,2); % pre-allocate
     % if n_tau == 1
-    grad_scale = sqrt(2*pi)*rho*  (1 - 4*pi^2/Tcirc^2*tau^2*X.^2) .* eexp; % derivative w.r.t GP scale (tau)
+    grad_scale = sqrt(2*pi)*rho*  (1 - 4*pi^2/Tcirc^2*tau^2*scale.^2) .* eexp; % derivative w.r.t GP scale (tau)
     grad(:,:,1) = diag(grad_scale);
     % else
     %     for t=1:n_tau % gradient w.r.t scale for each dimension
@@ -3341,7 +3416,7 @@ if nargout>1
     %     end
     % end
     grad(:,:,2) = K/rho; % derivative w.r.t GP weight (rho)
-    grad = grad(:,:,incl);
+%    grad = grad(:,:,incl);
 end
 
 end
@@ -3719,8 +3794,8 @@ end
 end
 
 %% new covariance prior function from change of coordinates
-function [K, grad] = covfun_transfo(scale, HP, M,covfun, params)
-[K,grad] = covfun(scale,HP, params);
+function [K, grad] = covfun_transfo(scale, HP, M,covfun, B)
+[K,grad] = covfun(scale,HP, B);
 K = M*K*M';
 for i=1:size(grad,3)
     grad(:,:,i) = M*grad(:,:,i)*M';

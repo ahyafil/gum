@@ -39,16 +39,14 @@ function R = timeregressor(EventTime, dt, Tbnd, varargin)
 % R = timeregressor(..., 'split', S, 'split_label',{'val1','val2',...})
 % R = timeregressor(..., 'split', S, 'split_value',[S1 S2...Sn])
 %
-%
 % R = timeregressor(....,'label',str)
 %
 % R = timeregressor('constant',dt, [Tstart Tend]) to capture baseline
 % log-firing rate
 %
 % R = timeregressor('dt',dt, [Tstart Tend])
-
-% TODO:
-% add raised cosine
+%
+% See also regressor, gum
 
 if ~isscalar(dt) || dt<=0
     error('dt should be a positive scalar');
@@ -385,6 +383,9 @@ end
 % create sparse matrix
 EventCount=sparse(I(:), J(:),V(:),n, nCol);
 
+% basis functions for temporal kernel
+    basis = [];
+
 
 %% ADD KERNEL (TIME SHIFT)
 if ~isempty(kernel)
@@ -473,7 +474,6 @@ if ~isempty(kernel)
     %         DM = reshape(DM,n,nK*nSplit);
     %     end
 
-    basis = [];
     switch kerneltype
         case 'independent'
             summing = 'linear';

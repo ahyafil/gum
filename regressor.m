@@ -47,9 +47,6 @@ classdef regressor
     % V = regressor(..., 'OneHotEncoding',bool) will use OneHotEncoding regressor if bool is
     % set to true (true by default for continuous and categorial regressors)
     %
-    % V = regressor(...,'spectral', bool) uses spectral trick if bool is set to
-    % true [default: false]
-    %
     % V = regressor(...,'scale',sc) for categorical regressor to specify which
     % values to code (others have zero weight)
     %
@@ -61,6 +58,7 @@ classdef regressor
     % V = regressor(...,'sum', S)
     % If X is a matrix, you may define how f(x) for each columns are summed
     % into factor. Possible values for S are:
+    % - 'joint' to use multidimensional function F_n = f(X_n1,...X_nk)
     % - 'weighted' or 'linear' to assign a different weight for each column [default], i.e. to define
     % factor as the weighted sum: F_n = sum_k w_k f(X_nk)
     % - 'equal' to assign equal weight for each column, i.e. to define
@@ -291,6 +289,9 @@ classdef regressor
             elseif ~iscell(scale)
                 scale = {scale};
             end
+            if ~iscell(summing)
+                summing = {summing};
+            end
 
             % we perform one-hot-encoding for all regressor types except
             % linear - except for continuous var if scale is provided, which means the tensor
@@ -303,7 +304,10 @@ classdef regressor
             if iscolumn(X)
                 nD = 1;
             else
-                nD = ndims(X)-(OneHotEncoding==0); % we'll add one dimension if one-hot encoding is performed
+                % we'll add one dimension if one-hot encoding is performed
+                % (unless we use joint function)
+                add_one_dim = OneHotEncoding && ~strcmp(summing{end},'joint');
+                nD = ndims(X) -1 +add_one_dim ; 
                 % elseif strcmpi(type, 'linear')
                 %     nD = ndims(X)-1;
                 % else
@@ -355,9 +359,6 @@ classdef regressor
 
             % whether splitting or separate regressors options are
             % requested
-            if ~iscell(summing)
-                summing = {summing};
-            end
             SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
             SplitOrSeparate(end+1:nD) = false;
 
@@ -455,7 +456,7 @@ classdef regressor
 
                     % use one-hot encoding
                     obj.Data = one_hot_encoding(X,obj.Weights(nD).scale, OneHotEncoding(nD),nD);
-                    nVal = length(obj.Weights(nD).scale); % number of values/levels
+                    nVal = size(obj.Weights(nD).scale,2); % number of values/levels
                     obj.Weights(nD).nWeight = nVal;
 
                     if strcmp(prior{nD}, 'L2')
@@ -491,9 +492,14 @@ classdef regressor
 
                     % build design matrix/tensor
                     if OneHotEncoding % use one-hot-encoding
-                        this_scale = unique(X)'; % use unique values as sclae
-                        this_scale(isnan(this_scale)) = []; % remove nan values
-                        nVal = length(this_scale);
+                        if strcmp(summing{nD},'joint')
+                            % look for all unique combinations of rows
+                            this_scale = unique(reshape(X,prod(siz(1:nD)), siz(nD+1)), 'rows')'; 
+                        else
+                        this_scale = unique(X)'; % use unique values as scale
+                        end
+                        this_scale(:,any(isnan(this_scale),1)) = []; % remove nan values
+                        nVal = size(this_scale,2);
                         obj.Data = one_hot_encoding(X, this_scale, OneHotEncoding(nD),nD);
                     else % user-provided scale
                         this_scale = scale{nD};
@@ -737,6 +743,62 @@ classdef regressor
             end
         end
 
+        %% GET LABELS OF WEIGHT SET
+        function label = weight_labels(obj)
+            % label = weight_labels(R) outputs cell array of all labels for
+            % set of weights
+W = [obj.Weights];
+label = {W.label};
+        end
+
+        %% FIND SET OF WEIGHT WITH GIVEN LABEL
+        function I = find_weights(obj, label)
+            % I = find_weights(R, label) finds the set of weight with given
+            % label in regressors R. I is a 2-by-1 vector where the first
+            % element signals the index of the regressor in the regressor array and the second element
+            % signals the dimension for the corresponding label.
+            %
+            % I = find_weights(R, C) if C is a cell array of labels
+            % provides a matrix of indices with two rows, one for the index
+            % of the regressor and the second for the corresponding
+            % dimension.
+            % NaN indicates when no weight is found.
+            %
+
+            if ~iscell(label)
+                label = {label};
+            end
+
+            nR = numel(obj); % number of regressor objects
+            nD = [obj.nDim]; % dimensionality for each regressor object
+
+            % vector of regressor inde for each set of weight
+            Ridx = repelem(1:nR, nD);
+
+             % build vector for dimensionality for each set of weight
+            Dims = cell(1,nR);
+            for i=1:numel(obj)
+Dims{i} = 1:nD(i);
+            end
+            Dims = [Dims{:}];
+RD = [Ridx;Dims]; % first row: regressor index; second row: dimension
+
+Wlbl = weight_labels(obj); % label for all set of weights
+
+            % build index matrix corresponding to each label
+            nL = length(label); % number of labels
+            I = nan(2,nL);
+            for i=1:nL
+                j = find(strcmp(label{i}, Wlbl));
+                if ~isempty(j)
+                    if length(j)>1
+                        warning('more than one set of weights with label''%s''', label{i});
+                    end
+                    I(:,i) = RD(:,j(1));
+                end
+            end
+        end
+
         %% CONCATENATE ALL WEIGHTS
         function U = concatenate_weights(obj, dims, fild)
             % U = concatenate_weights(M) concatenate all weights posterior
@@ -796,6 +858,102 @@ classdef regressor
             end
         end
 
+%% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
+function [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool)
+        % R = set_weights_and_hyperparameters_from_model(R, R2),
+        % or R = set_weights_and_hyperparameters_from_model(R, M2)
+        % sets the values of weights and hyperparameters in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_weights_and_hyperparameters_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+        if isa(obj2,'gum')
+            obj2 = obj2.regressor;
+        end
+
+        if nargin<3 || isempty(lbl)
+            % default: find all set of weights that are present on both
+            % regressor objects
+            Wlbl = weight_labels(obj);
+            Wlbl2 = weight_labels(obj2);
+            lbl = intersect(Wlbl, Wlbl2);
+        elseif ~iscell(lbl)
+            lbl = {lbl};
+        end
+
+        I = nan(2,length(lbl));
+        for i=1:length(lbl)
+            % index for this label in both objects
+            ind1 = obj.find_weights(lbl{i});
+            ind2 = obj2.find_weights(lbl{i});
+
+            assert(~any(isnan([ind1;ind2])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
+            
+            if bool(1) % set weights
+            % corresponding set of weights
+            W = obj(ind1(1)).Weights(ind1(2));
+            W2 = obj2(ind2(1)).Weights(ind2(2));
+
+            assert(W.nWeight==W2.nWeight, 'the number of weights do not match for at least one set of weights with same label');
+
+            % assign value
+            obj(ind1(1)).Weights(ind1(2)).PosteriorMean = W2.PosteriorMean;
+            end
+
+            if bool(2) % set hyperparameters
+                % corresponding set of HPs
+            hp = obj(ind1(1)).HP(ind1(2));
+            hp2 = obj2(ind2(1)).HP(ind2(2));
+
+            assert(length(hp.HP)==length(hp2.HP), 'the number of hyperparameters do not match for at least one set of weights with same label');
+
+            % assign value
+            obj(ind1(1)).HP(ind1(2)).HP = hp2.HP;
+            end
+        end
+        end
+
+        %% SET HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
+        function [obj,I] = set_hyperparameters_from_model(obj, obj2, lbl)
+        % R = set_hyperparameters_from_model(R, R2) or R = set_hyperparameters_from_model(R, M2)
+        % sets the values of hyperparameters in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_hyperparameters_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+           if nargin<3
+               lbl = [];
+           end
+
+           bool = [false true]; % copy just hyperparameters, not weights
+           [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+        end
+
+        %% SET WEIGHTS FROM ANOTHER MODEL / SET OF REGRESSORS
+        function [obj,I] = set_weights_from_model(obj, obj2, lbl)
+        % R = set_weights_from_model(R, R2) or R = set_weights_from_model(R, M2)
+        % sets the values of weights in regressor R to corresponding values
+        % in regressor R2 or GUM model M2 by matching labels for set of
+        % weights
+        %
+        % obj = set_weights_from_model(obj, obj2, lbl) set the values for
+        % set(s) of weights with label lbl (lbl is a string or cell array
+        % of string)
+
+           if nargin<3
+               lbl = [];
+           end
+
+           bool = [true false]; % copy just weights, not hyperparameters
+           [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+        end
+        
         %% SET WEIGHTS FOR SET OF MODULES
         function obj = set_weights(obj,U, dims, fild)
             % M = set_weights(M,M2) set values of regressor M provided by
@@ -2998,10 +3156,10 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% CREATES A DESIGN MATRIX (OR ARRAY) WITH ONE-HOT ENCODING - ONE COLUMN PER VALUE OF X
-function val = one_hot_encoding(X, allval,OneHotEncoding, nD)
+function val = one_hot_encoding(X, scale,OneHotEncoding, nD)
 %function val = one_hot_encoding(X, allval,OneHotEncoding, nD, summing)
 
-nVal = length(allval);
+nVal = size(scale,2);
 siz = size(X);
 %if any(strcmp(summing,{'split','separate'})) % different function for each column
 %    f_ind = repmat(0:prod(siz(2:end))-1,siz(1),1); % indicator function
@@ -3013,7 +3171,7 @@ nFun = 1;
 %end
 
 
-X = replace(X,allval); % replace each value in the vector by its index
+X = replace(X,scale); % replace each value in the vector by its index
 sub = X + nVal*f_ind;
 nValTot = nVal*nFun; % total number of values (dimension of array along dimension nD+1)
 
@@ -3244,7 +3402,7 @@ K = diag(kfdiag);
 %     error('tau should be scalar or a vector whose length matches the number of column in X');
 % end
 % tau = tau(:);
-n = size(scale,1); % number of data points
+n = size(scale,2); % number of data points
 
 % compute gradient
 if nargout>1
@@ -3258,7 +3416,7 @@ if nargout>1
     %     end
     % end
     grad(:,:,2) = K/rho; % derivative w.r.t GP weight (rho)
-    grad = grad(:,:,incl);
+%    grad = grad(:,:,incl);
 end
 
 end
@@ -3649,7 +3807,7 @@ end
 function I = replace(X, scale) % replace X values by indices
 
 I = zeros(size(X));
-for u=1:length(scale) % replace each value in the vector by its index
+for u=1:size(scale,2) % replace each value in the vector by its index
     if iscell(scale) % cell array of strings
         I( strcmp(X,scale{u})) = u;
     else

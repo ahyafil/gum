@@ -84,21 +84,22 @@ classdef gum
     % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
     % - no prior, ARD (TEST) - Matern prior
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
-    % - spectral trick (TEST HP fitting)
+    % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - negative binomial, probit (finish)
+    % - raised cosine, correct default HPs
+    % - multidimensional GP in regressor (various columns); add as formula
+    % e.g. f(x1,x2)
     % - link functions as in glmfit
     % - dispersion parameter for CV
-        % - CV for parameterized basis functions 
+    % - CV for parameterized basis functions 
     % - correct basic fitting algo
     % - crossvalidation compatibility with matlab native (done?)
     % - constraint structure (e.g. when concat weights or split)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - work on labels
-    % - load value from other model based on labels
-        % - set_hyperparameters (apply to gum object; copy from other model)
-    % -ADD \sum_i for more complex formulas?
-    % - add label on models
+    % - ADD \sum_i for more complex formulas?
+    % - add label on models (or just dataset label?)
     % - reset: weights for gum, clearing all scores and predictions
     % - plot_vif
     % - add number of (free) HPs to metrics
@@ -697,8 +698,6 @@ classdef gum
                             param2.verbose = 'off';
                         end
 
-                        PP = projection_matrix(M); % projection matrix for each dimension
-
                         if iter==1
                             param2.initialpoints = 1;
                         end
@@ -706,12 +705,15 @@ classdef gum
                         % inference
                         obj = obj.infer(param2);
 
+                        PP = projection_matrix(M); % projection matrix for each dimension
+
+
                         %% M-step (adjusting hyperparameters)
                         midx = 0;
                         HPidx_cat = [HPidx{:}]; % concatenate over components
                         ee = 1;
                         for m=1:obj.nMod
-                            ss = M(m).nFreeParameters; % size of each dimension
+                            ss = obj.regressor(m).nFreeParameters; % size of each dimension
 
                             for d=1:M(m).nDim
                                 for r=1:size(HPidx{m},1)
@@ -745,19 +747,23 @@ classdef gum
                                             this_P = PP{m}{r,d};
                                             this_Prior = obj.regressor(m).Prior(r,d);
                                             this_PriorMean = this_Prior.PriorMean;
-                                            B = W.basis;
+                                            B = W.basis; % here we're still in projected mode
 
                                             if ~isempty(B)
-
-                                                if B.fixed % working in projected space
-                                                    this_scale = B.scale;
-                                                else % working in original space
+                                                if ~B.fixed 
+                                                 % working in original
+                                                 % space (otherwise working
+                                                 % in projected space)
                                                     this_mean = this_mean*B.B;
                                                     this_PriorMean = this_PriorMean*B.B;
                                                     this_cov = B.B' * this_cov *B.B;
-                                                    this_P = eye(length(this_cov));
+                                                   
                                                     assert(W.constraint=='f', 'EM not coded for non-free basis');
+                                                else
+                                                   2;
                                                 end
+                                                 this_P = eye(length(this_cov));
+
                                             end
                                             this_cov = force_definite_positive(this_cov);
                                             %this_cov_chol = chol(this_cov);
@@ -1504,7 +1510,9 @@ classdef gum
             end
             TolFun = obj.param.TolFun;
 
-            U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
+          %  U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
+                        U_allstarting = zeros(length(concatenate_weights(M)), initialpoints); % estimated weights for all starting points
+
 
             logjoint_allstarting = zeros(1,initialpoints); % log-joint for all starting points
             exitflag_allstarting = zeros(1,initialpoints); % exitflag for all starting points
@@ -2051,7 +2059,7 @@ classdef gum
                 end
 
                 %% store weights, log-joint and exitflag for this starting point
-                U_allstarting(:,ip) = concatenate_weights(M); %{M.U};
+                U_allstarting(:,ip) = concatenate_weights(M);
                 logjoint_allstarting(ip) = logjoint;
                 logjoint_hist_allstarting{ip} = logjoint_hist;
                 exitflag_allstarting(ip) = extflg;
@@ -2698,6 +2706,21 @@ return;
             else
                 obj.score.df = sum(obj.ObservationWeight) - obj.score.nParameters; % degree of freedom
             end
+        end
+
+        %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL 
+        function [obj,I] = set_weights_and_hyperparameters_from_model(obj, varargin)
+            [obj.regressor,I] = set_weights_and_hyperparameters_from_model(obj.regressor, varargin{:});
+        end
+        
+        %% SET HYPERPARAMETERS FROM ANOTHER MODEL 
+        function [obj,I] = set_hyperparameters_from_model(obj, varargin)
+            [obj.regressor,I] = set_hyperparameters_from_model(obj.regressor, varargin{:});
+        end
+
+        %% SET WEIGHTS FROM ANOTHER MODEL 
+        function [obj,I] = set_weights_from_model(obj, varargin)
+            [obj.regressor,I] = set_weights_from_model(obj.regressor, varargin{:});
         end
 
         %% CONCATENATE ALL WEIGHTS
@@ -4047,11 +4070,11 @@ msgid2 = warning('off','MATLAB:SingularMatrix');
 
 mdif = (m-mu)*P'; % difference between prior and posterior means (in free basis)
 
-if ~isempty(B) && B.fixed
-    scl = B.scale;
-else
+%if ~isempty(B) && B.fixed
+%    scl = B.scale;
+%else
     scl = scale;
-end
+%end
 
 [K, gradK] = covfun(scl, HPs.HP, B); % prior covariance matrix and gradient w.r.t hyperparameters
 if isstruct(gradK), gradK = gradK.grad; end
