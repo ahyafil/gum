@@ -63,41 +63,43 @@ classdef gum
     % 'linear','categorical', 'continous', 'periodic','none')
     % flin(x) is equivalent to f(x, type=linear)
     % fper(x) is equivalent to f(x, type=periodic)
-    % - f(x,sum=V) to enforce the sum of regressor values to be equal to
+    % - f(x;sum=V) to enforce the sum of regressor values to be equal to
     % V (either 1 or 0)
-    % - f(x,mean=V) to enforce the mean of regressor values to be equal
+    % - f(x;mean=V) to enforce the mean of regressor values to be equal
     % to V (either 1 or 0)
-    % - f(x,tau=V) to set an (initial) value V for the scale hyperparameter
-    % - f(x, variance= V) to set an (initial) value V for the variance hyperparameter
-    % - f(x, type=periodic, period=V) to define period of periodic
+    % - f(x;tau=V) to set an (initial) value V for the scale hyperparameter
+    % - f(x; variance= V) to set an (initial) value V for the variance hyperparameter
+    % - f(x; type=periodic; period=V) to define period of periodic
     % regressor
-    % - f(x, fit=V) to define which hyperparameters can be fitted (others
+    % - f(x; fit=V) to define which hyperparameters can be fitted (others
     % are fixed). Possible values: 'all' (default), 'none', 'variance',
     % 'tau'
-    % - f(x,binning=V) to bin values in variable in V bins (binned by quantiles)
+    % - f(x;binning=V) to bin values in variable in V bins (binned by quantiles)
     % Use ' y|x ~ ...' if you want to define separate GUM for each level in
     % variable 'x' (the output will be a vector of GUM objects).
     %
 
 
     % TODO:
+    % - debug split dimensions with basis functions
     % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
     % - no prior, ARD (TEST) - Matern prior
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
-    % - spectral trick (TEST HP fitting)
-    % - load weights and HPs from other model based on labels (TEST)
+    % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
+    % - spectral trick for periodic: test; change prior (do not use Squared
+    % Exp)
     % - negative binomial, probit (finish)
+    % - raised cosine, correct default HPs
+    % - 'fourier' for periodic (TEST)
     % - link functions as in glmfit
-    % - dispersion parameter for CV
-    % - CV for parameterized basis functions 
-    % - correct basic fitting algo
+    % - CV gradient for dispersion parameter
+    % - CV gradient for parameterized basis functions
     % - crossvalidation compatibility with matlab native (done?)
     % - constraint structure (e.g. when concat weights or split)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - work on labels
-    % - ADD \sum_i for more complex formulas?
-    % - add label on models
+    % - add label on models (or just dataset label?)
     % - reset: weights for gum, clearing all scores and predictions
     % - plot_vif
     % - add number of (free) HPs to metrics
@@ -239,7 +241,7 @@ classdef gum
             if isfield(param,'ObservationWeight')
                 obj.ObservationWeight = param.ObservationWeight;
             end
-            
+
 
             %% transform two-column dependent variable into one-column
             if BinaryCountCode % if binary observations with one column for counts of value 1 and one column for total counts
@@ -311,9 +313,9 @@ classdef gum
                 % extra weight
                 GCov = global_prior_covariance(compute_prior_covariance(M));
                 if  isempty(GCov) || any(isinf(diag(GCov))) % if any other regressor has infinite variance
-                   % Mconst.HP.HP = Inf;
-                   % Mconst.HP.fit = false;
-                   const_prior_type = 'none';
+                    % Mconst.HP.HP = Inf;
+                    % Mconst.HP.fit = false;
+                    const_prior_type = 'none';
                 else
                     const_prior_type = 'L2';
                 end
@@ -584,33 +586,10 @@ classdef gum
             HP_LB = [HPall.LB]; % HP lower bounds
             HP_UB = [HPall.UB]; % HP upper bounds
             HP_fittable = logical([HPall.fit]);  % which HP are fitted
-            %   HPini = cell(1,obj.nMod); % cell array of
-            % HP_LB = cell(1,obj.nMod); % HP lower bounds
-            % HP_UB = cell(1,obj.nMod); % HP upper bounds
-            % HP_fittable =cell(1,obj.nMod); % which HP are fitted
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
-[HPidx, nHP] = get_hyperparameters_indices(M);
-
-%             nHP  = cell(1,obj.nMod); % number of hyperparameters in each module
-%             HPidx = cell(1,obj.nMod);     % index of hyperparameters for each component
-%             cnt = 0;
-%             for m=1:obj.nMod
-%                 %ss = [M(m).Weights.nWeight];
-%                 HPidx{m} = cell(size(M(m).HP,1),M(m).nDim);
-% 
-%                 %retrieve number of fittable hyperparameters for each function
-%                 this_HPfit = reshape({M(m).HP.fit}, size(M(m).HP));
-%                 nHP{m} = cellfun(@sum, this_HPfit); %cellfun(@length, HPini{m});
-%                 for d=1:M(m).nDim
-%                     for r=1:size(nHP{m},1)
-%                         HPidx{m}{r,d} = cnt + (1:nHP{m}(r,d)); % indices of hyperparameters for this component
-%                         cnt = cnt + nHP{m}(r,d); % update counter
-%                     end
-%                 end
-%             end
-
+            [HPidx, nHP] = get_hyperparameters_indices(M);
 
             if sum(cellfun(@(x) sum(x,'all'),nHP))==0
                 % if requested to fit but there are no hyperparameter in
@@ -642,7 +621,7 @@ classdef gum
                     % clear persisitent value for best-fitting parameters
                     gum_neg_marg();
 
-                    % run gradient descent
+                    % run gradient descent on negative marginal evidence
                     errorscorefun = @(HP) gum_neg_marg(obj, HP, HPidx);
                     optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'display',display,'MaxIterations',maxiter);
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
@@ -703,7 +682,7 @@ classdef gum
                         % inference
                         obj = obj.infer(param2);
 
-                        PP = projection_matrix(obj.regressor); % projection matrix for each dimension
+                        PP = projection_matrix(M); % projection matrix for each dimension
 
 
                         %% M-step (adjusting hyperparameters)
@@ -748,19 +727,20 @@ classdef gum
                                             B = W.basis; % here we're still in projected mode
 
                                             if ~isempty(B)
-
-                                                if ~B.fixed 
-                                                 % working in original
-                                                 % space (otherwise working
-                                                 % in projected space)
+                                                if ~B.fixed
+                                                    % working in original
+                                                    % space (otherwise working
+                                                    % in projected space)
                                                     this_mean = this_mean*B.B;
                                                     this_PriorMean = this_PriorMean*B.B;
                                                     this_cov = B.B' * this_cov *B.B;
-                                                    this_P = eye(length(this_cov));
+
                                                     assert(W.constraint=='f', 'EM not coded for non-free basis');
                                                 else
                                                     2;
                                                 end
+                                                this_P = eye(length(this_cov));
+
                                             end
                                             this_cov = force_definite_positive(this_cov);
                                             %this_cov_chol = chol(this_cov);
@@ -847,15 +827,15 @@ classdef gum
 
 
             % allocate fitted hyperparameters to each module
-            for m=1:obj.nMod
-                for d=1:M(m).nDim
-                    for r=1:size(M(m).HP,1)
-                        % M(m).HP{d} = HP(idx{m}{d}); % associate each parameter to corresponding module
-                        this_HP_fittable = M(m).HP(r,d).fit;
-                        M(m).HP(r,d).HP(this_HP_fittable) = HP(HPidx{m}{r,d}); % associate each parameter to corresponding module
-                    end
-                end
-            end
+            M = M.set_hyperparameters(HP);
+            %             for m=1:obj.nMod
+            %                 for d=1:M(m).nDim
+            %                     for r=1:size(M(m).HP,1)
+            %                         this_HP_fittable = M(m).HP(r,d).fit;
+            %                         M(m).HP(r,d).HP(this_HP_fittable) = HP(HPidx{m}{r,d}); % associate each parameter to corresponding module
+            %                     end
+            %                 end
+            %             end
 
         end
 
@@ -1044,6 +1024,7 @@ classdef gum
                 warning('off','MATLAB:nearlySingularMatrix');
                 % end
 
+                s = 1; % !!warning: dispersion parameter - change for normal observations
 
                 % parfor p=1:nperm % for each permutation
                 for p=1:nSet % for each permutation
@@ -1062,30 +1043,15 @@ classdef gum
 
                     %fit on training set
                     obj_train = IRLS(extract_observations(obj,trainset));
-
                     exitflag_CV(p) = obj_train.score.exitflag;
-
-                    % store weights for each CV set
-                    %                     for m=1:nM
-                    %                         for d=1:M(m).nDim
-                    %                             for r=1:M(m).rank
-                    %                                 obj.regressor(m).Weights(d).U_CV{r}(p,:) = obj_train.regressor(m).Weights{d}.U(r,:);
-                    %                             end
-                    %                         end
-                    %                     end
 
                     allU = concatenate_weights(obj_train);
                     U_CV(:,p) = allU;
-
-                    s = 1; % !!warning: change for normal observations
 
                     %compute score on testing set (mean log-likelihood per observation)
                     obj_v = extract_observations(obj,validationset); % model with validat
                     obj_v.regressor = set_weights(obj_v.regressor, obj_train.regressor); % set weights computed from training data
                     obj_v.Predictions.rho = [];
-                    % for m=1:nM
-                    %     obj_v.regressor(m).U = obj_train.regressor(m).U;
-                    % end
 
                     [obj_v,validationscore(p),grad_validationscore] = LogLikelihood(obj_v); % evaluate LLH, gradient of LLH
                     accuracy(p) = Accuracy(obj_v); % and accuracy
@@ -1130,7 +1096,6 @@ classdef gum
                     warning('gum:notconverged', 'Failed to converge for %d/%d permutations', n_nonconverged, nSet);
                 end
 
-
                 Sfit.validationscore = mean(validationscore);
                 Sfit.validationscore_all = validationscore;
                 Sfit.accuracy_validation = mean(accuracy);
@@ -1146,7 +1111,7 @@ classdef gum
                     Sfit.grad = mean(grad_hp,2); % gradient is mean of gradient over permutations
                 end
 
-            elseif do_grad_hyperparam % optimize parameters directly on whole dataset
+            elseif do_grad_hyperparam % optimize parameters directly likelihood of whole dataset (not recommended)
 
                 PP = projection_matrix(M,'all'); % projection matrix for each dimension
 
@@ -1167,16 +1132,16 @@ classdef gum
                 allU = concatenate_weights(M);
 
                 % [~,H] = PosteriorCov(obj); % Hessian w.r.t weights
-                Hinv = Hessian(obj); % Hessian w.r.t weights
-                error('check all these equations again');
+                %Hinv = Hessian(obj); % Hessian w.r.t weights
+                PCov = PosteriorCov(obj); % posterior covariance computed from train data
                 grd = zeros(size(CovJacob,3),1);
                 for q=1:size(CovJacob,3) % for each hyperparameter
                     % Ucat = cellfun(@(x) x.U, M, 'uniformoutput',0);
                     % Ucat = [Ucat{:}];
                     warning('looks like should be derivative for inverse of GHP here');
-                    gradgrad = [allU{:}]*CovJacob(:,:,q)*PP'; % LLH derived w.r.t to U (free basis) and hyperparameter
-                    gradU = - PP' * Hinv * gradgrad';% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
-                    grd(q) = grad_validationscore * gradU; % derivate of score w.r.t hyperparameter
+                    gradgrad = PP*CovJacob(:,:,q)'*allU'; % LLH derived w.r.t to U (free basis) and hyperparameter
+                    gradU = - PP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
+                    grd(q) = grad_validationscore * gradU/s; % derivate of score w.r.t hyperparameter
                 end
                 obj.grad = grd;
             end
@@ -1228,7 +1193,7 @@ classdef gum
                         W.p(r,:) = all_p(idx);
                         W.PosteriorCov(:,:,r) = Sfit.covb(idx,idx);
                         if any(strcmp(W.type, {'continuous','periodic'}))
-                        W.invHinvK(:,:,r) = invHinvK(idx,idx);
+                            W.invHinvK(:,:,r) = invHinvK(idx,idx);
                         end
                     end
                     M(m).Weights(d) = W;
@@ -1507,7 +1472,9 @@ classdef gum
             end
             TolFun = obj.param.TolFun;
 
-            U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
+            %  U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
+            U_allstarting = zeros(length(concatenate_weights(M)), initialpoints); % estimated weights for all starting points
+
 
             logjoint_allstarting = zeros(1,initialpoints); % log-joint for all starting points
             exitflag_allstarting = zeros(1,initialpoints); % exitflag for all starting points
@@ -2054,7 +2021,7 @@ classdef gum
                 end
 
                 %% store weights, log-joint and exitflag for this starting point
-                U_allstarting(:,ip) = concatenate_weights(M); %{M.U};
+                U_allstarting(:,ip) = concatenate_weights(M);
                 logjoint_allstarting(ip) = logjoint;
                 logjoint_hist_allstarting{ip} = logjoint_hist;
                 exitflag_allstarting(ip) = extflg;
@@ -2167,7 +2134,7 @@ classdef gum
                 for i=1:numel(obj)
                     bool(i) = isgam(obj(i));
                 end
-return;
+                return;
             end
 
             bool = all([obj.regressor.nFreeDimensions]<=1);
@@ -2180,13 +2147,13 @@ return;
             % if all regressors are one-dimensional and linear or
             % categorical
 
-% recursive call if more than one model
+            % recursive call if more than one model
             if size(obj)>1
                 bool = false(size(obj));
                 for i=1:numel(obj)
                     bool(i) = isgam(obj(i));
                 end
-return;
+                return;
             end
 
 
@@ -2260,7 +2227,7 @@ return;
                 case 'identity'
                     f = @(x) x;
                 case 'logit'
-                    f = @(x) 1./(1+exp(-xx));
+                    f = @(x) 1./(1+exp(-x));
                 case 'log'
                     f = @exp;
                 case 'probit'
@@ -2703,17 +2670,17 @@ return;
             end
         end
 
-        %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL 
+        %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
         function [obj,I] = set_weights_and_hyperparameters_from_model(obj, varargin)
             [obj.regressor,I] = set_weights_and_hyperparameters_from_model(obj.regressor, varargin{:});
         end
-        
-        %% SET HYPERPARAMETERS FROM ANOTHER MODEL 
+
+        %% SET HYPERPARAMETERS FROM ANOTHER MODEL
         function [obj,I] = set_hyperparameters_from_model(obj, varargin)
             [obj.regressor,I] = set_hyperparameters_from_model(obj.regressor, varargin{:});
         end
 
-        %% SET WEIGHTS FROM ANOTHER MODEL 
+        %% SET WEIGHTS FROM ANOTHER MODEL
         function [obj,I] = set_weights_from_model(obj, varargin)
             [obj.regressor,I] = set_weights_from_model(obj.regressor, varargin{:});
         end
@@ -3899,16 +3866,11 @@ if isempty(fval)
 end
 
 M = obj.regressor;
-%nMod = obj.nMod;
 if ~isempty(UU)
     M = M.set_weights(UU);
-    % for m=1:nMod
-    %     M(m).U = UU{m};
-    % end
 end
 
 param = obj.param;
-%param.crossvalidation = [];
 param.originalspace = false;
 if strcmp(param.verbose, 'full')
     param.verbose = 'on';
@@ -3951,10 +3913,6 @@ negME = -obj.score.LogEvidence;
 if negME < fval
     fval = negME;
     UU = concatenate_weights(M);
-    % UU = cell(1,nMod); % group all weights into a cell array
-    % for m=1:nMod
-    %     UU{m} = M(m).U;
-    % end
 end
 
 nfval = nfval+1;
@@ -3983,9 +3941,6 @@ M = obj.regressor;
 
 if ~isempty(UU)
     M = M.set_weights(UU);
-    % for m=1:nMod
-    %     M(m).U = UU{m};
-    % end
 end
 
 % assign hyperparameter values to regressors
@@ -4065,19 +4020,40 @@ msgid2 = warning('off','MATLAB:SingularMatrix');
 
 mdif = (m-mu)*P'; % difference between prior and posterior means (in free basis)
 
-if ~isempty(B) && B.fixed
-    scl = B.scale;
-else
-    scl = scale;
-end
+%if ~isempty(B) && B.fixed
+%    scl = B.scale;
+%else
+scl = scale;
+%end
 
 [K, gradK] = covfun(scl, HPs.HP, B); % prior covariance matrix and gradient w.r.t hyperparameters
 if isstruct(gradK), gradK = gradK.grad; end
 
 if ~isempty(B) && ~B.fixed % work on original space
 
+ if isrow(B.scale)
     [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
+ else
 
+             error('gradient of basis functions not coded with splitting variable');
+ % !! TODO
+                            % more rows in scale means we fit different
+                            % functions for each level of splitting
+                            % variable
+                            [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
+                            B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
+                            gradB = zeros(0,size(B.scale,2),length(HPs.HP))
+                            for g=1:length(id_list)
+                                subset = split_id==g; % subset of weights for this level of splitting variable
+                                [this_B,this_new_scale,B.params] = B.fun(this_scale(1,subset), this_HP, B.params);
+                                n_new = size(this_B,1);
+                                B.B(end+1 : end+n_new, subset) = this_B; % 
+                               
+                            end
+
+                        end
+
+    
     nHP = length(HPs.HP);
 
     % gradient for K for basis hyperparameter
@@ -4231,8 +4207,15 @@ CloseBracketPos = []; % position of closing brackets
 option_list = {'sum','mean','tau','variance','binning','constraint', 'type', 'period','fit'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
+basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)('}; % regular expressions for 'basis' options
+lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
 
 is_null_regressor = false;
+inLag = false; % if we're within a lag operator
+LagStruct = {};
+CloseBrackPos = [];
+separator = ';'; % separator for options
+
 
 % check for mixture model
 [mixture_type, fmla] = starts_with_word(fmla, {'multinomial','regression', 'hmm'});
@@ -4268,6 +4251,15 @@ while ~isempty(fmla)
         fmla = trimspace(fmla(2:end));
     end
 
+    % chech for lag operator
+    [transfo, fmla] = starts_with_word(fmla,{'lag('});
+    if ~isempty(transfo)
+        assert(~inLag, 'cannot define nested lag operators');
+        inLag = true;
+        LS = struct;
+        LS.ini = length(O); % position of start of lag operator
+    end
+
     transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+('};
     [transfo, fmla, transfo_no_number] = starts_with_word(fmla,transfo_label);
     if ~isempty(transfo) % for syntax f(..) or cat(...)
@@ -4291,7 +4283,20 @@ while ~isempty(fmla)
         if isempty(v)
             error('''%s'' in formula must be followed by variable name',transfo);
         end
+        v = string(v); % string array
 
+        % check for multiple variables (i.e f(x,y)
+        while fmla(1)==','
+            fmla(1) = [];
+
+            [new_v, fmla] = starts_with_word(fmla, VarNames);
+            if isempty(new_v)
+                error('''%s'' in formula must be followed by variable name',transfo);
+            end
+            v(end+1) = string(new_v);
+
+            opts.sum = 'joint';
+        end
 
         %% process regressor options
 
@@ -4299,9 +4304,8 @@ while ~isempty(fmla)
         % check for split variable first
         [opts, fmla] = process_split_variable(fmla, opts, VarNames);
 
-
         while fmla(1)~=')'
-            if fmla(1) ~= ','
+            if fmla(1) ~= separator
                 error('incorrect character in formula (should be comma or closing parenthesis) at ''%s''', fmla);
             end
             fmla(1) = [];
@@ -4342,9 +4346,7 @@ while ~isempty(fmla)
                         error('%s=%f: not coded yet', option, Num);
                     end
                 case 'basis'
-
-                    [opts.basis, fmla] = starts_with_word(fmla, ...
-                        {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)('});
+                    [opts.basis, fmla] = starts_with_word(fmla, basis_regexp  );
                     assert(~isempty(opts.basis), 'incorrect basis type');
 
                 case 'type' % define regressor type
@@ -4359,7 +4361,7 @@ while ~isempty(fmla)
                         error('incorrect fit option for variable ''%s''', v);
                     end
                 case 'period' % define period
-                    i = find(fmla==')' | fmla==',',1); % find next coma or parenthesis
+                    i = find(fmla==')' | fmla==separator,1); % find next coma or parenthesis
                     if isempty(i)
                         error('incorrect formula, could not parse the value of period')
                     end
@@ -4435,12 +4437,66 @@ while ~isempty(fmla)
         break;
     end
 
-    % check for closing bracket
-    if fmla(1)==')'
-        pp = find(isnan(CloseBrackPos),1,'last'); % check last open bracket which has not been closed yet
-        assert(~isempty(pp) || withMixture, 'there is no open parenthesis to close');
-        if ~isempty(pp)
-            CloseBracketPos(pp) = length(O);
+    % check for closing bracket or separator (for lag operator)
+    if any(fmla(1)==');')
+
+
+        pp_bracket = find(isnan(CloseBrackPos),1,'last'); % check last open bracket which has not been closed yet
+        assert(fmla(1)==')' || inLag, 'incorrect separator '';'' in formula');
+        assert(~isempty(pp_bracket) || withMixture || inLag, 'there is no open parenthesis to close');
+
+        if fmla(1)==';' || (inLag && isempty(pp_bracket)) || (inLag && LS.ini>=pp_bracket) % end of lag operator
+
+            LS.end = length(O)+1; % position of operator
+
+
+            while fmla(1)~=')'  % process lag options
+                fmla(1) = []; % remove separator
+
+                i = find(fmla=='=',1);
+                if isempty(i)
+                    error('missing ''='' sign for option in formula at ''%s''', fmla);
+                end
+
+                option = trimspace(fmla(1:i-1));
+                if ~any(strcmpi(option, lag_option_list))
+                    error('incorrect lag option type: %s',option);
+                end
+                fmla(1:i) = [];
+                fmla = trimspace(fmla);
+
+
+                switch lower(option)
+                    case 'lags'
+                        i = find(fmla==')' | fmla==separator,1);
+                        assert(~isempty(i),'lag operator is not closed');
+                        LS.lags = str2num(fmla(1:i-1));
+                        fmla(1:i-1) = [];
+                        if isnan(LS.lags)
+                            error('Value for option ''%s'' should be numeric',option);
+                        end
+                    case 'split'
+                        [ LS.splitvalue, fmla] = starts_with_boolean(fmla);
+                        assert( ~isnan( LS.splitvalue), 'Value for option ''split'' should be boolean');
+                    case 'placelagfirst'
+                        [LS.placelagfirst, fmla] = starts_with_boolean(fmla);
+                        assert( isnan(LS.placelagfirst), 'Value for option ''placelagfirst'' should be boolean');
+                    case 'basis'
+                        basis_regexp_nofinal = cellfun(@(x) x(1:end-1),basis_regexp,'UniformOutput',false);
+                        [LS.basis, fmla] = starts_with_word(fmla, basis_regexp_nofinal  );
+                        assert(~isempty(LS.basis), 'incorrect basis type');
+                    case 'group'
+                        [GroupVar, fmla] = starts_with_word(fmla, VarNames);
+                        LS.group = Tbl.(GroupVar);
+                end
+                fmla = trimspace(fmla);
+
+            end
+            LagStruct{end+1} = LS; % add to other lag operators
+            inLag = false; % we're officially out of lag operator
+
+        elseif ~isempty(pp_bracket) % signalling the end of a bracket
+            CloseBracketPos(pp_bracket) = length(O);
         end
         fmla = trimspace(fmla(2:end));
     end
@@ -4483,9 +4539,22 @@ assert(~any(isnan(OpenBracketPos)), 'one or more parenthesis was not closed');
 for v=1:length(V)
     w = V{v}.variable;
     if ischar(w)
-        x = Tbl.(w);
-        label = w;
-    else
+        w = string(w);
+    end
+    if isstring(w) % for f(x) or f(x,y,...)
+        label = char(w(1));
+        x = zeros(nObs,length(w));
+        for idxV = 1:length(w)
+            x(:,idxV) = Tbl.(w(idxV));
+            if idxV>1
+                label = [label ',' char(w(idxV))];
+            end
+        end
+
+        %  elseif isstring(w) || ischar(w) % variable name
+        %      x = Tbl.(w);
+        %      label = w;
+    else % numerical value
         x = w*ones(nObs,1);
         label = num2str(w);
     end
@@ -4511,7 +4580,7 @@ end
 
 
 %build predictor from operations between predictors
-[M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos);
+[M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct);
 
 if  withMixture
     param.mixture = mixture_type;
@@ -4532,55 +4601,49 @@ if  withMixture
     end
 end
 
-
-% %% build predictor from operations between predictors
-% while length(V)>1
-%
-%     % first perform products
-%     if any(O=='*')
-%         v = find(O=='*',1);
-%
-%         V{v} = V{v} * V{v+1}; % compose product
-%
-%         % remove regressor and operation
-%         V(v+1) = [];
-%         O(v) = [];
-%
-%     else % now we're left with additions and substractions
-%         if O(1)=='-' % substraction
-%             V{2} = V{2}*(-1);
-%         end
-%
-%         V{1} = V{1} + V{2}; % compose addition
-%
-%         % remove regressor and operation
-%         V(2) = [];
-%         O(1) = [];
-%
-%     end
-%
-% end
-%
-% M = V{1};
-
 end
 
 %% compose regressors into predictor
-function [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos)
+function [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct)
 
 
-%% process parentheses first
-while ~isempty(OpenBracketPos) % as long as there are parenthesis to process
-    % select which parenthesis to process first
-    i = 1;
-    while length(OpenBracketPos)>i && OpenBracketPos(i+1)<CloseBracketPos(i)
-        i = i+1; % if another bracket is opened before this one is closed, then process the inner bracket first
+%% process parentheses and lag operators first
+while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are parenthesis or lag operators to process
+
+    if ~isempty(OpenBracketPos)
+        % select which parenthesis to process first
+        i = 1;
+        while length(OpenBracketPos)>i && OpenBracketPos(i+1)<CloseBracketPos(i)
+            i = i+1; % if another bracket is opened before this one is closed, then process the inner bracket first
+        end
+
+        % make sure there's no lag operator within this bracket
+        if ~isempty(LagStruct)
+            LSini = cellfun(@(x) x.ini,LagStruct);
+            i_lag = find(LSini>OpenBracketPos(i) & LSini<=OpenBracketPos(i),1);
+            process_lag = ~isempty(i_lag);
+        else
+            process_lag = false;
+        end
+
+    else % if there's no more brackets to process, then we're left with processing lags
+        process_lag = true;
+        i_lag =1; % start with first lag operator
     end
 
-    idx = OpenBracketPos(i)+1:CloseBracketPos(i); % indices of regressors into the bracket
+    if process_lag
+        %process lag
+        LS = LagStruct{i_lag};
+        idx = LS.ini+1 : LS.end; % indices of regressors into the bracket
+        i = i_lag;
+    else
+        % process brackets
+        idx = OpenBracketPos(i)+1:CloseBracketPos(i); % indices of regressors into the bracket
+    end
+
 
     % recursive call: compose regressors within brackets
-    [V{i}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], []);
+    [V{i}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], [],[]);
     assert( all(this_idxC==1), 'incorrect formula: cannot use mixture break within brackets');
 
 
@@ -4591,9 +4654,28 @@ while ~isempty(OpenBracketPos) % as long as there are parenthesis to process
         this_idxC(length(V{i})+1:end) = [];
     end
 
-    % remove elements already processed
-    OpenBracketPos(i) = [];
-    CloseBracketPos(i) = [];
+    if process_lag
+        % process lag operator
+        LS = rmfield(LS, {'ini','end'});
+        if isfield(LS, 'lags')
+            Lags = LS.lags;
+                    LS = rmfield(LS, 'lags');
+        else
+            Lags = 1;
+        end
+        opts_fields = fieldnames(LS);
+        opts_values = struct2cell(LS);
+        opts_combined = [opts_fields opts_values]';
+        V{i} = laggedregressor(V{i},Lags, opts_combined{:});
+
+        LagStruct(i) = [];
+    else
+
+        % remove elements already processed
+        OpenBracketPos(i) = [];
+        CloseBracketPos(i) = [];
+    end
+
     V(idx(2:end)) = []; % regressors
     O(idx(1:end-1)) = []; % operators
 end
@@ -4657,44 +4739,60 @@ word_no_number = '';
 
 R = regexp(str,WordList);
 
-for w=1:length(WordList)
-    if ~isempty(R{w}) && R{w}(1)==1
-        %we've got a match
-        word = WordList{w};
-        % wd = WordList{w};
-        % if length(str)>=length(wd) && strcmp(str(1:length(wd)),wd)
-        %   word = wd;
+% check whether there's a match (starting at first position)
+WordMatch = cellfun(@(x) ~isempty(x)&&x(1)==1, R);
 
-        str = trimspace(str);
+w = find(WordMatch);
+if length(w)>1 % if more than one match
 
-        % check if word includes number (e.g. 'exp4')
-        number_extent = regexp(word,'(\[\\d\]\+)','tokenExtents');
+    % select longer string
+    wLength = cellfun(@length, WordList(w));
+    [~,i_maxLength] = max(wLength);
+    w = w(i_maxLength);
+end
 
-        word_no_number = word;
+%for w=1:length(WordList)
+%    if ~isempty(R{w}) && R{w}(1)==1
+if ~isempty(w)
+    %we've got a match
+    word = WordList{w};
+    % wd = WordList{w};
+    % if length(str)>=length(wd) && strcmp(str(1:length(wd)),wd)
+    %   word = wd;
+
+    str = trimspace(str);
+
+    % check if word includes number (e.g. 'exp4')
+    number_extent = regexp(word,'(\[\\d\]\+)','tokenExtents');
+
+    word_no_number = word;
 
 
-        if ~isempty(number_extent)
-            % remove number
+    if ~isempty(number_extent)
+        % remove number
 
-            number_extent = number_extent{1};
-            word_no_number(number_extent(1):number_extent(end)) = [];
+        number_extent = number_extent{1};
+        word_no_number(number_extent(1):number_extent(end)) = [];
 
-            % remove corresponding characters from string
-            word_token = word;
-            % word_token(find(word_token=='(',1)) = [];
-            %             word_token(find(word_token==')',1)) = [];
-            word_token = ['(' strrep(word_token, '(','\(') ')'];
-            word_extent = regexp(str,word_token,'tokenExtents');
 
-            word = str(1:word_extent{1}(2));
-            str(1:word_extent{1}(2)) = [];
-        else
-            str(1:length(word)) = []; % remove corresponding characters from string
 
-        end
-        return;
+        % remove corresponding characters from string
+        word_token = word;
+        % word_token(find(word_token=='(',1)) = [];
+        %             word_token(find(word_token==')',1)) = [];
+        word_token = strrep(word_token,'([\d]+)','[\d]+'); % new!!
+
+        word_token = ['(' strrep(word_token, '(','\(') ')'];
+        word_extent = regexp(str,word_token,'tokenExtents');
+
+        word = str(1:word_extent{1}(2));
+        str(1:word_extent{1}(2)) = [];
+    else
+        str(1:length(word)) = []; % remove corresponding characters from string
+
     end
 end
+%end
 end
 
 %% check if string starts with a number
@@ -4720,6 +4818,16 @@ else
     fmla = trimspace(fmla);
 end
 end
+
+%% check if string starts with a boolean
+function [bool,fmla] = starts_with_boolean(fmla)
+
+WordList = {'0','1','false','true','False','True'};
+[bool,fmla] = starts_with_word(fmla, WordList);
+
+bool = any(strcmp(bool,{'1','true','True'} ));
+end
+
 
 %% process split variable (TODO: should allow more than one splitting variable, e.g. x|z1,z2)
 function [opts, fmla] = process_split_variable(fmla, opts, VarNames)
@@ -4869,10 +4977,10 @@ end
 %% plot
 if twodmap
     % color plot
-    h_nu = colorplot(scale{1}(:,1),scale{1}(:,2), U);
+    h_nu = colorplot(scale{1}(:,1),scale{1}(:,2), real(U));
 elseif imageplot
     % image plot
-    h_nu = imagesc(scale{2},scale{1}, U);
+    h_nu = imagescnan(scale{2},scale{1}, U);
 else
     % cufve/bar plot with errors
     [~,~,h_nu] = wu([],U,se,scale,plot_opt{:});

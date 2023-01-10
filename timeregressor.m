@@ -48,6 +48,8 @@ function R = timeregressor(EventTime, dt, Tbnd, varargin)
 %
 % See also regressor, gum
 
+% Todo: work on labels
+
 if ~isscalar(dt) || dt<=0
     error('dt should be a positive scalar');
 end

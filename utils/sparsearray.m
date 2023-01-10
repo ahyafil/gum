@@ -117,7 +117,10 @@ classdef sparsearray
 
         %% CONCATENATE
         function obj = cat(d, varargin)
-
+            % X = cat(d, X1, X2, ...) concatenates arrays X1, X2,... across dimension
+            % d.
+            %
+            % Note: X does not use one-hot-encoding even if input arrays do.
             varargin = cellfun(@sparsearray, varargin, 'UniformOutput',false); % convert all input to sparse array
             nObj = length(varargin);
             nD = max(cellfun(@ndims, varargin)); % number of dimensions for all array
@@ -263,6 +266,18 @@ classdef sparsearray
         %% ISMATRIX
         function bool = ismatrix(obj)
             bool = ndims(obj)<=2;
+        end
+
+        %% ISCOLUMN
+        function bool = iscolumn(obj)
+            S = size(obj);
+            bool = all(S(2:end)==1);
+        end
+
+        %% ISORW
+        function bool = isrow(obj)
+            S = size(obj);
+            bool = S(1)==1 && all(S(3:end)==1);
         end
 
         %% CONVERT TO SPARSE MATRIX
