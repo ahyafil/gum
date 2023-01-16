@@ -164,11 +164,11 @@ end
 modulation = ~isempty(M);
 
 
-    if isequal(duration, 'untilnext')
-        % compute time until next event (for last event, time until final
-        % time step)
-        duration = diff([EventTime;Tbnd(2)]);
-    end
+if isequal(duration, 'untilnext')
+    % compute time until next event (for last event, time until final
+    % time step)
+    duration = diff([EventTime;Tbnd(2)]);
+end
 
 if any(EventTime<Tbnd(1)) || any(EventTime>Tbnd(2))
     nRemove = sum(EventTime<Tbnd(1) | EventTime>Tbnd(2));
@@ -347,7 +347,7 @@ else % if modelling response with certain duration (uniform or ramp)
         % update vector
         l = length(K);
         if etb+l-1>n % trim if it goes out of bounds
-            K(etb+l-1>n) = [];
+            K(etb+(0:l-1)>n) = [];
             l = length(K);
         end
 
@@ -356,8 +356,6 @@ else % if modelling response with certain duration (uniform or ramp)
 
         % row indices
         I(idx) = etb+(0:l-1);
-
-
 
         if doSplit % for split, to which column we should assign it
             J(idx) = find(select_from_val(split_value, split,i));
@@ -382,11 +380,12 @@ else
     nCol = nSplit;
 end
 
-% create sparse matrix
+% create sparse matrix (note: if there's an overlap in indices of I and J
+% across events, values are summed - which is great!)
 EventCount=sparse(I(:), J(:),V(:),n, nCol);
 
 % basis functions for temporal kernel
-    basis = [];
+basis = [];
 
 
 %% ADD KERNEL (TIME SHIFT)
@@ -489,7 +488,7 @@ if ~isempty(kernel)
             if length(kerneltype)>3 && strcmp(kerneltype(1:3), 'exp')
                 nExp = str2double(kerneltype(4:end)); % number of exponentials
                 % default hyperparameter values
-                HP = linspace(log(dt), log(diff(kernel)),nExp); % log-time scale are uniformally spaced between dt and the kernel width 
+                HP = linspace(log(dt), log(diff(kernel)),nExp); % log-time scale are uniformally spaced between dt and the kernel width
                 HP(end+1) = 0; % variance hyperparameter
             elseif length(kerneltype)>12 && strcmp(kerneltype(1:12), 'raisedcosine')
                 HP = [];
@@ -534,16 +533,16 @@ if use_reg
 
         % create other regressor object without modulation just to get
         % weights properties
-   Rdummy = regressor(DM_dummy, 'linear','scale',scale,'sum',summing, 'basis', basis,'hyperparameter',HP,'label',label);
+        Rdummy = regressor(DM_dummy, 'linear','scale',scale,'sum',summing, 'basis', basis,'hyperparameter',HP,'label',label);
 
         R.Weights(1) = Rdummy.Weights;
         R.Prior(1) = Rdummy.Prior;
         R.HP(1) = Rdummy.HP;
 
-      %  W = R.Weights;
-      %  W(1).nWeight = nK;
-      %  W(1).scale = scale;
-      %          R.Weights = W;
+        %  W = R.Weights;
+        %  W(1).nWeight = nK;
+        %  W(1).scale = scale;
+        %          R.Weights = W;
 
         if any([R.Weights.constraint]=='f') % if any other dimension is without constraint
             R.Weights(1).constraint = 'm'; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
