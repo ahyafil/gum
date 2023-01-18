@@ -1,6 +1,10 @@
 function [B,scale,params] = fourier_basis(X, HP, params)
 % builds FFT transformation matrix concatenating for multiple processes
-%  [B,scale] = basis_fft_cat(xx, len, n, condthresh, minl,addreg)
+%  B = fourier_basis(X, HP, params);
+%
+% [B,scale]= fourier_basis(...)
+%
+% [B,scale,params]= fourier_basis(...)
 
 if nargin<3 
     params.condthresh = 1e12; % threshold on condition number of covariance matrix

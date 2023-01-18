@@ -81,7 +81,6 @@ classdef gum
 
 
     % TODO:
-    % - debug split dimensions with basis functions
     % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
     % - no prior, ARD (TEST) - Matern prior
     % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
@@ -689,10 +688,10 @@ classdef gum
                         midx = 0;
                         HPidx_cat = [HPidx{:}]; % concatenate over components
                         ee = 1;
-                        for m=1:obj.nMod
+                        for m=1:obj.nMod % for each regressor object
                             ss = obj.regressor(m).nFreeParameters; % size of each dimension
 
-                            for d=1:M(m).nDim
+                            for d=1:M(m).nDim % for each dimension
                                 for r=1:size(HPidx{m},1)
                                     this_HPidx = HPidx{m}{r,d}; % indices of hyperparameters for this set of weight
                                     if ~isempty(this_HPidx)
@@ -4031,30 +4030,27 @@ if isstruct(gradK), gradK = gradK.grad; end
 
 if ~isempty(B) && ~B.fixed % work on original space
 
- if isrow(B.scale)
-    [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
- else
-
-             error('gradient of basis functions not coded with splitting variable');
- % !! TODO
-                            % more rows in scale means we fit different
-                            % functions for each level of splitting
-                            % variable
-                            [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
-                            B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
-                            gradB = zeros(0,size(B.scale,2),length(HPs.HP))
-                            for g=1:length(id_list)
-                                subset = split_id==g; % subset of weights for this level of splitting variable
-                                [this_B,this_new_scale,B.params] = B.fun(this_scale(1,subset), this_HP, B.params);
-                                n_new = size(this_B,1);
-                                B.B(end+1 : end+n_new, subset) = this_B; % 
-                               
-                            end
-
-                        end
-
-    
     nHP = length(HPs.HP);
+
+
+    if isrow(B.scale)
+        [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
+    else
+        % more rows in scale means we fit different
+        % functions for each level of splitting
+        % variable
+        [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
+        B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
+        gradB = zeros(0,size(B.scale,2),nHP);
+        for g=1:length(id_list)
+            subset = split_id==g; % subset of weights for this level of splitting variable
+            [this_B,~,~, this_gradB] = B.fun(B.scale(1,subset), HPs.HP, B.params);
+            n_new = size(this_B,1);
+            B.B(end+1 : end+n_new, subset) = this_B; %
+            gradB(end+1 : end+n_new, subset,:) = this_gradB;
+        end
+
+    end
 
     % gradient for K for basis hyperparameter
     gradK_tmp = zeros(B.nWeight, B.nWeight,nHP);
@@ -4659,7 +4655,7 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         LS = rmfield(LS, {'ini','end'});
         if isfield(LS, 'lags')
             Lags = LS.lags;
-                    LS = rmfield(LS, 'lags');
+            LS = rmfield(LS, 'lags');
         else
             Lags = 1;
         end

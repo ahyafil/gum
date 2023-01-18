@@ -1072,33 +1072,41 @@ end
                                 
                             case  {'fill', 'area', 'marge'} %error areas
                                 nonnan = ~isnan(Yfill(:,w));
+                                XY = {Xfill(nonnan)+shift(w), Yfill(nonnan,w)};
+                                if strcmp(maxis, 'x')
+                                    XY = XY([2 1]);
+                                end
                                 if any(nonnan)
-                                    phandle.error(:,w) = fill( Xfill(nonnan)+shift(w), Yfill(nonnan,w), lightcolour(w,:), 'LineStyle', errorlinestyle);
+                                    phandle.error(:,w) = fill( XY{:}, lightcolour(w,:), 'LineStyle', errorlinestyle);
                                     set(phandle.error(:,w),'FaceAlpha',.5);
                                 else
                                     phandle.error(:,w) = gobjects(1);
                                 end
                             case {'curve', 'curves', 'errorcurve', 'errorcurves'} %error lines
-                                if strcmp(maxis, 'y')
-                                    phandle.error(:,w) = plot( XX, [MM(:,w)-LL(:,w) MM(:,w)+UU(:,w)], 'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
-                                else
-                                    phandle.error(:,w) = plot(  [MM(:,w)-LL(:,w) MM(:,w)+UU(:,w)], XX,'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
+                                XY = {XX, [MM(:,w)-LL(:,w) MM(:,w)+UU(:,w)]};
+                                if strcmp(maxis, 'x')
+                                    XY = XY([2 1]);
                                 end
+                                %    phandle.error(:,w) = plot( XX, [MM(:,w)-LL(:,w) MM(:,w)+UU(:,w)], 'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
+                                % else
+                                phandle.error(:,w) = plot( XY{:} ,'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
+                                % end
                         end
                     end
                 end
                 
                 for w = 1:nVar % for each variable
                     XX = X + shift(w);
-                    
-                    %plot curve
-                    if strcmp(maxis, 'y')
-                        phandle.mean(w) = plot(XX, MM(:,w), 'Color', cor(w,:), 'Marker',marker, 'markersize', markersize, ...
-                            'Linestyle', linestyle{w}, 'linewidth', linewidth);
-                    else
-                        phandle.mean(w) = plot( MM(:,w), XX,'Color', cor(w,:), 'Marker',marker, 'markersize', markersize, ...
-                            'Linestyle', linestyle{w}, 'linewidth', linewidth);
+                    XY = {XX, MM(:,w)};
+                    if strcmp(maxis, 'x')
+                        XY = XY([2 1]);
                     end
+
+                    %plot curve
+                    %  if strcmp(maxis, 'y')
+                    phandle.mean(w) = plot(XY{:}, 'Color', cor(w,:), 'Marker',marker, 'markersize', markersize, ...
+                        'Linestyle', linestyle{w}, 'linewidth', linewidth);
+                    % end
                     
                     %                     %plot significances character between 2 x-values
                     %                     if nbp==2 && PP.FF1(1,1,w)<.1

@@ -90,7 +90,7 @@ M(4) = M(4).fit;
 figure;
 M(4).plot_weights;
 
-% actually we are collapsing data over different sessions. Because the side
+%% actually we are collapsing data over different sessions. Because the side
 % values are reset at each session, the last trials in a session will not
 % influence the first trials of the next session. We add the 'group' option
 % so that the regressors do not 'spill over' one session to the next;
@@ -102,14 +102,16 @@ M(5).plot_weights;
 % let's check that in the Design matrix zooming at the end of session 1 -
 % start of session 2
 figure;
-M(3).plot_design_matrix(1:200);
+M(5).plot_design_matrix(SessionLength + (-50:50));
 hold on; 
-plot(xlim,)
+plot(xlim, (50+1.5)*[1 1],'r'); % the red line marks the session change
 
-% add split
+%% add split
 M(6) = gum(T, 'ResponseBinary ~ lag(Response|Outcome; Lags=1:10; split=false)', options);
 M(6) = M(6).infer;
 figure;
 M(6).plot_weights;
+
+
 
 

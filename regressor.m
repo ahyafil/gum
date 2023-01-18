@@ -717,8 +717,11 @@ classdef regressor
             % when using basis, use number of basis functions instead
             Bcell = {obj.Weights.basis};
             B = [Bcell{:}];
+            withBasis = ~cellfun(@isempty, Bcell);
             if ~isempty(B)
-                ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
+                            projectedBasis = [B.projected];
+                %ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
+                ss(withBasis) = [B.nWeight].*(1-projectedBasis) + [obj.Weights(withBasis).nWeight].*projectedBasis;
             end
 
             % number of free parameters per set weight (remove one if there is a constraint)
@@ -980,6 +983,9 @@ classdef regressor
                 U = concatenate_weights(U);
 
             end
+        if isrow(U)
+            U = U';
+        end
 
             if nargin<4
                 fild = 'PosteriorMean';
@@ -1013,7 +1019,7 @@ classdef regressor
                         case {'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'}
                             idx = ii+(1:nR*obj(m).rank);
                             this_U = reshape(U(idx,:), [nR, obj(m).rank, size(U,2)]); % weights x rank x initial point
-                            this_U = permute(this_U,[3 2 1]); % initial point x weights x rank
+                            this_U = permute(this_U,[3 1 2]); % initial point x weights x rank
                             obj(m).Weights(d).(fild) = this_U;
                         otherwise
                             error('incorrect field');
@@ -1022,7 +1028,7 @@ classdef regressor
                     ii = ii + obj(m).rank*nR;
                 end
             end
-            assert(ii==length(U), 'did not arrive to the end of the vector');
+            assert(ii==size(U,1), 'did not arrive to the end of the vector');
         end
 
         %% SET FREE WEIGHTS (or anything of same size - used only for gradient i think)
@@ -1243,6 +1249,11 @@ classdef regressor
         function  obj = define_priors_across_dims(obj, all_dims, summing, prior, HP, scale, basis, single_tau, condthresh)
             % make sure these options are in cell format and have minimum
             % size
+
+if isempty(all_dims)
+    return;
+end
+
             summing = tocell(summing, max(all_dims));
             HP = tocell(HP, max(all_dims));
              prior = tocell(prior, max(all_dims));
@@ -1661,23 +1672,6 @@ classdef regressor
             cc = [obj.Weights.constraint]; % constraint for this module
             rk = obj.rank;
 
-
-            %    if ~isempty(obj.sigma)
-            %        sig = obj.sigma;
-            %    else
-            %        sig = [];
-            %    end
-
-            %    if isempty(sig)
-            %        sig = cell(rk,nD);
-            %    elseif ~iscell(sig)
-            %        sig = {sig};
-            %    end
-
-            %             if isvector(obj.Prior) && rk>1
-            %                 Prior = repmat(sig(:)',rk,1);
-            %             end
-
             for r=1:rk % for each rank
                 for d=1:nD % for each dimension
                     % if more than one rank and only defined for first, use
@@ -1693,26 +1687,11 @@ classdef regressor
                             obj.Prior(r,d).PriorCovariance = speye(ss(d));
                         end
                     end
-                    % if length(Sigma) == 1
-                    %     assert(Sigma>0,'ridge parameter should be positive');
-                    %     Sigma = speye(ss(d)) * Sigma;
-                    % elseif (numel(Sigma) == ss(d))
-                    %     assert(all(Sigma>0),'ridge vector should contain only positive values');
-                    %     Sigma = spdiags(Sigma(:), 0, ss(d), ss(d));
-                    %
-                    % else
                     if ~isequal(size(obj.Prior(r,d).PriorCovariance),[ss(d) ss(d)])
                         error('Prior covariance for dimension %d should be a square matrix of size %d', d, ss(d));
                     end
-
-                    % end
-
-
-
                 end
             end
-            %  obj.sigma = sig;
-
         end
 
 
@@ -1721,9 +1700,9 @@ classdef regressor
 
             for m=1:length(obj) % for each module
 
-                for d=1:obj(m).nDim
+                for d=1:obj(m).nDim % each dimension
                     B = obj(m).Weights(d).basis;
-                    if ~isempty(B) && ~B.projected
+                    if ~isempty(B) && ~B.projected % if we're using a set of basis functions
 
                         % hyperparameter values for this component
                         this_HP = obj(m).HP(d).HP; %fixed values
@@ -1754,6 +1733,7 @@ classdef regressor
                             size(B.B,2), d, obj(m).Weights(d).nWeight);
                         new_nWeight = size(B.B,1);
 
+                        % store values for full space in B
                         B.scale = obj(m).Weights(d).scale;
                         B.nWeight = obj(m).Weights(d).nWeight;
                         obj(m).Weights(d).nWeight = new_nWeight;
@@ -2133,10 +2113,7 @@ this_scale = unique(this_scale(1,:));
             cc = [obj.Weights.constraint]; % constraint for this module
             rk = obj.rank;
 
-
-
-            for d=1:nD
-
+            for d=1:nD % for each dimension
                 for r=1:rk
                     if  ~isempty(obj.Prior(r,d).PriorMean)
                         mu = obj.Prior(r,d).PriorMean;
@@ -2145,7 +2122,6 @@ this_scale = unique(this_scale(1,:));
                         %    Mu = repmat(Mu,rk,1);
                         %end
                     else
-
 
                         switch cc(r,d) % what constraint on set of weights
                             case {'f','n','b'} % mean 0
@@ -2219,7 +2195,6 @@ this_scale = unique(this_scale(1,:));
                     C{i}(:,d) = obj(i).Weights(d).constraint;
                 end
             end
-
         end
 
         %% INITIALIZE WEIGHTS
@@ -2279,9 +2254,7 @@ this_scale = unique(this_scale(1,:));
                     end
                 end
             end
-
         end
-
 
 
         %% SAMPLE WEIGHTS FROM PRIOR
@@ -2643,7 +2616,7 @@ this_scale = unique(this_scale(1,:));
             % obj.label = [obj1.label obj2.label];
             obj.formula = [obj1.formula ' * ' obj2.formula];
 
-            FreeRegressors = [obj.Weights.constraint]=='f';
+            FreeRegressors = isFreeWeights(obj);
             if sum(FreeRegressors)>1
                 % fprintf('multiplying free regressors ... now only first will be free\n');
 
@@ -2652,9 +2625,12 @@ this_scale = unique(this_scale(1,:));
                     obj.Weights(obj1.nDim+d).constraint = 'm';
                 end
             end
+        end
 
-
-
+        %% WHETHER WEIGHTS ARE FREE (NOT CONSTRAINED)
+        function bool = isFreeWeights(obj)
+            assert(numel(obj)==1, 'only for scalar regressor object');
+            bool = [obj.Weights.constraint]=='f';
         end
 
         % R1 * R2 is the same as R1 .* R2
@@ -3187,9 +3163,9 @@ this_scale = unique(this_scale(1,:));
             obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, []);
             obj.Weights(nDim_new).label = 'lag';
             if any(SplitValue) || isempty(SplitValue)
-            obj.Weights(nDim_new).constraint = 'f';
-            else
-            obj.Weights(nDim_new).constraint = 'm';
+                obj.Weights(nDim_new).constraint = 'f';
+            else % if no splitting, i.e multidimensional regressor, need to set some constraint
+                obj.Weights(nDim_new).constraint = 'm';
             end
 
             % place dimension for lag-weights first

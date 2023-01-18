@@ -2,10 +2,10 @@
 
 %% first simulate a simple Reinforcement Learning model in a very simple environement (no stimulus, two possible actions)
 clear; close all;
-SessionLength = 1000; % length of each session
+SessionLength = 200; % length of each session
 nSession = 10; % number of sessions
 
-p_reversal = .05; % probability of reversal of the rewarded action
+p_reversal = .1; % probability of reversal of the rewarded action
 beta = .2; % learning rate
 eta = .3; % decision noise
 
@@ -106,10 +106,12 @@ M(5).plot_design_matrix(SessionLength + (-50:50));
 hold on; 
 plot(xlim, (50+1.5)*[1 1],'r'); % the red line marks the session change
 
-%% add split
-M(6) = gum(T, 'ResponseBinary ~ lag(Response|Outcome; Lags=1:10; split=false)', options);
-M(6) = M(6).infer;
+%% so far we inferred independent kernels for rewarded and unrewarded responses. We can enforce similar dynamics for both by setting the splitting option to false
+M(6) = gum(T, 'ResponseBinary ~ lag(Response|Outcome; Lags=1:15; split=false)', options);
+M(6) = M(6).fit;
 figure;
 M(6).plot_weights;
+
+
 
 

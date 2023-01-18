@@ -338,8 +338,6 @@ classdef gum
             end
 
             for m=1:obj.nMod
-                %  rr = M(m).rank;
-                %  dd = M(m).nDim; % dimension in this module
 
                 % weight constraint
                 cc = [M(m).Weights.constraint];
@@ -347,27 +345,7 @@ classdef gum
                 if ~all(any(cc(:)== ['fbms1n' 0],2))
                     error('Field constraint must be composed of the following characters: ''f'', ''b'',''m'',''s'',''1'',''n''');
                 end
-                %  if rr>1 && size(cc,1)==1
-                %      M(m).constraint(2:rr,1:M(m).nDim) = repmat(M(m).constraint,rr-1,1);
-                %  end
-                % else % default: first dimension is free, for other dimensions average is one (add free for additional regressors)
-                %     M(m).constraint = repmat('f',rr,dd); % all free by default
-                % end
             end
-
-            %             %initial value of weights
-            %             for m =1:nMod
-            %               %  if ~isempty(M(m).U)
-            %                     if M(m).rank>1
-            %                         for d=1:M(m).nDim
-            %                             size(M(m).U,1)==1 % if multiple rank and only weight is provided for rank 1
-            %                         M(m).U(2:M(m).rank,:) = cell(M(m).rank-1,M(m).nDim); % .. start the other ones from default values
-            %                             end
-            %                         end
-            %               %  else
-            %               %      M(m).U = cell(M(m).rank,M(m).nDim);
-            %               %  end
-            %             end
 
             obj.param = param;
             obj.regressor = M;
@@ -688,10 +666,10 @@ classdef gum
                         midx = 0;
                         HPidx_cat = [HPidx{:}]; % concatenate over components
                         ee = 1;
-                        for m=1:obj.nMod
+                        for m=1:obj.nMod % for each regressor object
                             ss = obj.regressor(m).nFreeParameters; % size of each dimension
 
-                            for d=1:M(m).nDim
+                            for d=1:M(m).nDim % for each dimension
                                 for r=1:size(HPidx{m},1)
                                     this_HPidx = HPidx{m}{r,d}; % indices of hyperparameters for this set of weight
                                     if ~isempty(this_HPidx)
@@ -3468,8 +3446,6 @@ classdef gum
             cols = defcolor;
             colmaps = {'jet','hsv','winter','automn'};
 
-
-
             NoFixedWeights = cell(1,obj.nMod);
             constraint = constraint_cell(M);
             for m=1:numel(M)%obj.nMod
@@ -3753,15 +3729,15 @@ D = max([M.nFreeDimensions]);
 UpOrder = zeros(nM, D);
 
 constraint = constraint_cell(M);
-for m=1:nM
-    if all(constraint{m}(:)=='n') %all(M(m).constraint=='n','all')
-        UpOrder(m,:) = ones(1,D);
+for m=1:nM % for each regressor object
+    if all(constraint{m}(:)=='n') % if all fixed weights
+        UpOrder(m,:) = ones(1,D); % then we really don't care
     else
-        fir = first_update_dimension(M(m));
-        free_dims = find(any(constraint{m} ~= 'n',1));
-        fir = find(free_dims== fir);
-        UpOrder(m,:) = 1+mod(fir-1+(0:D-1),length(free_dims)); % update dimension 'fir', then 'fir'+1, .. and loop until D
-        UpOrder(m,:) = free_dims(UpOrder(m,:));
+        fir = first_update_dimension(M(m)); % find first update dimension
+        no_fixed_dims = find(any(constraint{m} ~= 'n',1)); % find all dimensions whose weights aren't completely fixed
+        fir = find(no_fixed_dims== fir);
+        UpOrder(m,:) = 1+mod(fir-1+(0:D-1),length(no_fixed_dims)); % update dimension 'fir', then 'fir'+1, .. and loop until D
+        UpOrder(m,:) = no_fixed_dims(UpOrder(m,:));
     end
 end
 end
