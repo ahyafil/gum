@@ -1827,7 +1827,7 @@ end
                         B.p = W.p;
 
                         % compute posterior back in original domain
-                        obj(m).Weights(d).PosteriorMean = W.PosteriorMean * B.B;
+                        W.PosteriorMean = W.PosteriorMean * B.B;
 
                         % compute posterior covariance, standard error
                         % of weights in original domain
