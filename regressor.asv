@@ -1700,9 +1700,9 @@ end
 
             for m=1:length(obj) % for each module
 
-                for d=1:obj(m).nDim
+                for d=1:obj(m).nDim % each dimension
                     B = obj(m).Weights(d).basis;
-                    if ~isempty(B) && ~B.projected
+                    if ~isempty(B) && ~B.projected % if we're using a set of basis functions
 
                         % hyperparameter values for this component
                         this_HP = obj(m).HP(d).HP; %fixed values
@@ -1733,6 +1733,7 @@ end
                             size(B.B,2), d, obj(m).Weights(d).nWeight);
                         new_nWeight = size(B.B,1);
 
+                        % store values for full space in B
                         B.scale = obj(m).Weights(d).scale;
                         B.nWeight = obj(m).Weights(d).nWeight;
                         obj(m).Weights(d).nWeight = new_nWeight;
@@ -1817,27 +1818,36 @@ end
                         obj(m).Weights(d).scale = tmp_scale;
 
                         W = obj(m).Weights(d);
-                        B.PosteriorMean =  W.PosteriorMean; % save weight in basis space
+
+                         % save weights (mean, covariance, T-stat, p-value) in basis space in basis structure
+                        B.PosteriorMean =  W.PosteriorMean;
                         B.PosteriorStd =  W.PosteriorStd;
                         B.PosteriorCov = W.PosteriorCov;
-
+                        B.T = W.T;
+                        B.p = W.p;
 
                         % compute posterior back in original domain
                         obj(m).Weights(d).PosteriorMean = W.PosteriorMean * B.B;
 
-                        % compute posterior covariance and standard error
+                        % compute posterior covariance, standard error
                         % of weights in original domain
-                        obj(m).Weights(d).PosteriorCov = zeros(W.nWeight, W.nWeight,obj(m).rank);
+                        W.PosteriorCov = zeros(W.nWeight, W.nWeight,obj(m).rank);
                         obj(m).Weights(d).PosteriorStd = zeros(obj(m).rank, W.nWeight);
                         for r=1:obj(m).rank
-                            PCov  = B.B' * W.PosteriorCov(:,:,r) * B.B;
+                            PCov  = B.B' * B.PosteriorCov(:,:,r) * B.B;
                             obj(m).Weights(d).PosteriorCov(:,:,r) = PCov;
                             obj(m).Weights(d).PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
                         end
-                        B.projected = false;
+
+                        % compute T-statistic and p-value
+                        W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
+                        W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0                       
 
                         % replace basis structure
-                        obj(m).Weights(d).basis = B;
+                        B.projected = false;
+                        W.basis = B;
+
+                        obj(m).Weights(d) = W;
 
                         % recover original data
                         obj(m).Data = obj(m).DataOriginal;
@@ -2299,6 +2309,58 @@ this_scale = unique(this_scale(1,:));
 
         end
 
+        %% SAMPLE WEIGHTS FROM POSTERIOR
+        function [obj,U] = sample_weights_from_posterior(obj)
+           % R = R.sample_weights_from_posterior() sample weights from
+           % posterior. The sampled weights are placed in field 'PosteriorMean'.
+           %
+           %[R, U] = sample_weights_from_posterior(R);
+           % U is the vector of weights
+            for i=1:numel(obj)
+               % PP = ProjectionMatrix(obj(i));
+
+                for r=1:obj(i).rank
+                    for d=1:obj(i).nDim
+                      %  P = obj(i).Prior(r,d);
+                        W = obj(i).Weights(d);
+                        if isempty(W.PosteriorCov) && W.nWeights>0
+                            error('Posterior has not been computed. Infer model first');
+                        end
+                        ct = W.constraint(r);
+                        if ct ~= 'n' % except for fixed weights
+                        
+                            % sampled for mvn distribution with linear constraint
+%                                 pp = PP{r,d};
+%                                 Sigma = pp*P.PriorCovariance*pp';
+%                                 if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
+%                                     Sigma = (Sigma+Sigma')/2;
+%                                 end
+%                                 UU =  P.PriorMean + mvnrnd(zeros(1,size(pp,1)), Sigma)*pp;
+% 
+%                             switch ct
+%                                 case 'b' %mean zero
+%                                     UU = UU - mean(UU);
+%                                 case 'm' % mean equal to one
+%                                     UU = UU/mean(UU); % all weight set to one
+%                                 case 's' % sun of weights equal to one
+%                                     UU = UU/sum(UU); % all weights equal summing to one
+%                                 case '1' % first weight set to one
+%                                     UU(1) = 1;
+%
+%                            end
+UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
+                            obj(i).Weights(d).PosteriorMean(r,:) = UU;
+                       
+                        end
+                    end
+                end
+            end
+
+            if nargout>1
+            U = M.concatenate_weights;
+            end
+        end
+
         %% COMPUTE POSTERIOR FOR TEST DATA
         function [mu, S,K] = posterior_test_data(obj, scale, d)
             % [mu, S, K] = posterior_test_data(M, scale)
@@ -2615,7 +2677,7 @@ this_scale = unique(this_scale(1,:));
             % obj.label = [obj1.label obj2.label];
             obj.formula = [obj1.formula ' * ' obj2.formula];
 
-            FreeRegressors = [obj.Weights.constraint]=='f';
+            FreeRegressors = isFreeWeights(obj);
             if sum(FreeRegressors)>1
                 % fprintf('multiplying free regressors ... now only first will be free\n');
 
@@ -2629,7 +2691,7 @@ this_scale = unique(this_scale(1,:));
         %% WHETHER WEIGHTS ARE FREE (NOT CONSTRAINED)
         function bool = isFreeWeights(obj)
             assert(numel(obj)==1, 'only for scalar regressor object');
-        
+            bool = [obj.Weights.constraint]=='f';
         end
 
         % R1 * R2 is the same as R1 .* R2
@@ -3162,9 +3224,9 @@ this_scale = unique(this_scale(1,:));
             obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, []);
             obj.Weights(nDim_new).label = 'lag';
             if any(SplitValue) || isempty(SplitValue)
-            obj.Weights(nDim_new).constraint = 'f';
-            else
-            obj.Weights(nDim_new).constraint = 'm';
+                obj.Weights(nDim_new).constraint = 'f';
+            else % if no splitting, i.e multidimensional regressor, need to set some constraint
+                obj.Weights(nDim_new).constraint = 'm';
             end
 
             % place dimension for lag-weights first
