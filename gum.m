@@ -137,6 +137,8 @@ classdef gum
     % - 'vif': Variance Inflation Factor
     % - 'sample_weights_from_prior': assign weight values sampling from
     % prior
+    % - 'sample_weights_from_posterior': assign weight values sampling from
+    % posterior
     % - 'Predictor': compute the predictor for each observation
     % - 'ExpectedValue': computes the expected value for each observation
     % - 'LogPrior': computes the LogPrior of the model
@@ -146,7 +148,9 @@ classdef gum
     % - 'Hessian': computes the Hessian of the negative LogLihelihood
     % - 'PosteriorCov': computes the posterior covariance
     % - 'IRLS': core step in inference
-    % - 'sample': generate observations from model
+    % - 'Sample': generate observations from model using MAP weights
+    % - 'Sample_Observations_From_Posterior': generate observations from
+    % model sampling from weight posterior
     % - 'ExplainedVariance': computes model explained variance
     % - 'predictor_variance': computes the variance of the predictors across
     % datapoints
@@ -450,7 +454,7 @@ classdef gum
                 objS(v) = extract_observations(obj,subset);
                 objS(v).param.split = (S==V(v)); % know the index of selected datapoints is useful for stratified cross-validation
 
-                objS(v).score.Dataset = V(v); % give label to dataset
+                objS(v).score.Dataset = string(V(v)); % give label to dataset
             end
 
         end
@@ -2036,13 +2040,23 @@ classdef gum
         end
 
         %% sample weights from gaussian prior
-        function M = sample_weights_from_prior(M)
-            for m=1:length(M)
-                M(m).sample_weights_from_prior;
+        function obj = sample_weights_from_prior(obj)
+                 % M = M.sample_weights_from_prior();
+
+            for m=1:length(obj)
+                obj(m).regressor = obj(m).regressor.sample_weights_from_prior;
+                return;
             end
         end
 
-
+%% sample weights from posterior (approximate)
+ function obj = sample_weights_from_posterior(obj)
+     % M = M.sample_weights_from_posterior();
+            for m=1:length(obj)
+                obj(m).regressor = obj(m).regressor.sample_weights_from_posterior;
+                return;
+            end
+        end
 
         %% COMPUTE PREDICTOR RHO
         function  [obj,rho] = Predictor(obj,idxC)
@@ -2271,6 +2285,12 @@ classdef gum
 
         %% GENERATE SAMPLE FROM MODEL
         function [obj, smp] = Sample(obj)
+        % M = M.Sample(); 
+        % sample observations from model, using inferred weights (Posterior
+        % Mean, i.e. MAP weights)
+        %
+        % [M, smp] = Sample(M) outputs the sample
+
             % retrieve expected value
             if isempty(obj.Predictions.Expected)
                 [obj,Y] = ExpectedValue(obj);
@@ -2288,6 +2308,42 @@ classdef gum
                     smp = Y + sqrt(obj.score.scaling)*randn(obj.nObs,1); % generate from normal distribution
             end
             obj.Predictions.sample = smp;
+
+        end
+
+        %% GENERATE SAMPLE FROM MODEL
+        function [obj, smp] = Sample_Observations_From_Posterior(obj, nRepetitions)
+ % M = M.Sample_Observations_From_Posterior();
+        % sample observations from model, using weights sampled from the posterior
+        %
+        % M = M.Sample_Observations_From_Posterior(nRepetitions) to repeat
+        % the sampling process nRepetitions time (each with a new sample
+        % from the posterior)
+        %
+        % [M, smp] = Sample_Observations_From_Posterior(M) outputs the sample
+
+if nargin<2
+    nRepetitions=1;
+end
+
+if numel(obj)>1
+for i=1:numel(obj)
+[obj(i), smp{i}] = Sample_Observations_From_Posterior(obj(i), nRepetitions);
+end
+return;
+end
+
+% preallocate matrix of sample (nRepetitions x nWeights)
+smp = zeros(nRepetitions, obj.nObs);
+for r=1:nRepetitions
+    % sample weights from posterior
+            obj2 = obj.sample_weights_from_posterior;
+
+            % sample observations with given set of weights
+            [~, smp(r,:)] = obj2.Sample();
+end
+            
+            obj.Predictions.sample_from_posterior = smp;
 
         end
 
@@ -2566,7 +2622,7 @@ classdef gum
                 % if infinite covariance and no hyperparameter, remove
                 % from computation of log marginal evidence
                 hp = [M.HP];
-                inf_no_hp = cellfun(@(x) any(isinf(x(:))), K) & cellfun(@isempty, {hp.HP});
+                inf_no_hp = cellfun(@(x) full(any(isinf(x(:)))), K) & cellfun(@isempty, {hp.HP});
                 for i=inf_no_hp
                     %% !! finish this
                 end
@@ -4860,7 +4916,7 @@ end
 
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
-metrics = {'Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
+metrics = {'nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
     'accuracy','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','FittingTime'};
 end
 
