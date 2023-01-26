@@ -2895,13 +2895,20 @@ end
             for i=1:length(metrics)
                 mt = metrics{i};
 
+                if strcmp(mt, 'Dataset')
+                    for m=1:n
+                        all_score{m}.Dataset = string(all_score{m}.Dataset);
+                    end
+                end
+                
                 % pre-allocate values for each model
                 X = nan(length(all_score{1}.(mt)),length(obj));
 
                 % add values from each model where value is present
                 for m=1:n
                     if ~isempty(all_score{m}) && isfield(all_score{m}, mt) && ~isempty(all_score{m}.(mt))
-                        X(:,m) =  all_score{m}.(mt);
+                        xx = all_score{m}.(mt);
+                        X(:,m) =  xx;
                     end
                 end
                 Sc.(mt) = X;
