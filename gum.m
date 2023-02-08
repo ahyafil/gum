@@ -2783,8 +2783,13 @@ end
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
+<<<<<<< Updated upstream
                     if ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
                             ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) %isequal(x,scale{1,d}) ,scale(2:end,d)))
+=======
+                    if ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d))) || ...
+                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) % just in case of numerical imprecisions
+>>>>>>> Stashed changes
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
