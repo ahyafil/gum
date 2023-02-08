@@ -2551,6 +2551,7 @@ UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
         function obj = clear_data(obj)
             for i=1:numel(obj)
                 obj(i).Data = [];
+                obj(i).DataOriginal = [];
             end
         end
 
