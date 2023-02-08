@@ -2783,7 +2783,8 @@ end
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
-                    if ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)))
+                    if ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
+                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) %isequal(x,scale{1,d}) ,scale(2:end,d)))
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
@@ -2967,8 +2968,8 @@ end
                     W = obj.regressor(m).Weights(d);
                     X = W.PosteriorMean;
 
-                    W.PosteriorMean = mean(X,dd); % population average
-                    W.PosteriorStd = std(X,[],dd)/sqrt(n); % standard error of the mean
+                    W.PosteriorMean = mean(X,dd,'omitnan'); % population average
+                    W.PosteriorStd = std(X,[],dd,'omitnan')/sqrt(n); % standard error of the mean
                     W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
                     W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
 
