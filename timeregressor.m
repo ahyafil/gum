@@ -24,7 +24,7 @@ function R = timeregressor(EventTime, dt, Tbnd, varargin)
 % creates time-shifted regressors with all time-shifts from kini to kend
 %
 % R = timeregressor(..., 'kernel', [kini kend], 'kerneltype', type)
-% 'independent' [default],'exponentialN' (e.g. 'exponential4', etc.), 'raisedcosineN','gaussian' (default)
+% 'independent' [default],'exponentialN' (e.g. 'exponential4', etc.), 'raisedcosineN','gammaN','gaussian' (default)
 %
 % R = timeregressor(...,'timescale',T) to define time scale hyperparameter
 % of kernel in second (default: 0.05 s)
@@ -492,6 +492,8 @@ if ~isempty(kernel)
                 HP(end+1) = 0; % variance hyperparameter
             elseif length(kerneltype)>12 && strcmp(kerneltype(1:12), 'raisedcosine')
                 HP = [];
+            elseif length(kerneltype)>=5 && strcmp(kerneltype(1:5), 'gamma')
+                HP= [];
             else
                 error('incorrect kernel type: %s', kerneltype);
             end

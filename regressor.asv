@@ -61,6 +61,7 @@ classdef regressor
     % Squared Exponential prior; for 'fourier' the number of basis
     % functions is determined automatically)
     % - 'raisedcosineN'
+    % - 'gammaN' for gamma distribution
     %
     % V = regressor('basis','fourier','condthresh', c) to define conditional threshold for defining number of basis functions (default:1e12)
     %
@@ -412,7 +413,7 @@ classdef regressor
                     if ~isempty(variance), HP{1} = log(variance)/2; end
 
                     nWeight = siz(1+nD);
-                    
+
                     if isempty(obj.Weights(nD).scale)
                         scale{nD} = 1:nWeight;
                         obj.Weights(nD).scale = scale{nD};
@@ -719,7 +720,7 @@ classdef regressor
             B = [Bcell{:}];
             withBasis = ~cellfun(@isempty, Bcell);
             if ~isempty(B)
-                            projectedBasis = [B.projected];
+                projectedBasis = [B.projected];
                 %ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
                 ss(withBasis) = [B.nWeight].*(1-projectedBasis) + [obj.Weights(withBasis).nWeight].*projectedBasis;
             end
@@ -983,9 +984,9 @@ classdef regressor
                 U = concatenate_weights(U);
 
             end
-        if isrow(U)
-            U = U';
-        end
+            if isrow(U)
+                U = U';
+            end
 
             if nargin<4
                 fild = 'PosteriorMean';
@@ -1250,14 +1251,14 @@ classdef regressor
             % make sure these options are in cell format and have minimum
             % size
 
-if isempty(all_dims)
-    return;
-end
+            if isempty(all_dims)
+                return;
+            end
 
             summing = tocell(summing, max(all_dims));
             HP = tocell(HP, max(all_dims));
-             prior = tocell(prior, max(all_dims));
-             single_tau(end+1:max(all_dims)) = true;
+            prior = tocell(prior, max(all_dims));
+            single_tau(end+1:max(all_dims)) = true;
 
             for d= all_dims % for all specified dimensions
                 if isempty(summing{d}) % by default: linear set of weights for each dimension
@@ -1424,6 +1425,22 @@ end
                 B.params = struct('nFunctions',nCos);
                 obj.Prior(d).type = 'L2_raisedcosine';
 
+            elseif length(basis)>=5 && strcmp(basis(1:5),'gamma')
+
+                %% GAMMA FUNCTIONS (i.e. http://dx.doi.org/10.17605/OSF.IO/4FQJ9)
+                if length(basis)==5
+                    nFun =1;
+                else
+                    nFun = str2double(basis(6:end));
+                end
+
+                obj.Prior(d).CovFun = @L2basis_covfun;
+
+                B.nWeight = nFun;
+                B.fun = @basis_gamma;
+                B.fixed = false;
+                B.params = struct('nFunctions',nFun);
+                obj.Prior(d).type = 'L2_gamma';
             else
                 error('incorrect basis type: %s', basis);
 
@@ -1497,17 +1514,70 @@ end
 
                     dt = min(diff(scale)); % time step
                     Ttot = scale(end)-scale(1); % total span
-                    a = (2*nCos+5)*pi/4/log(2*Ttot/dt); % time power, this formula is to tile all time steps with
-                    c = 0; % time shift
-                    if scale(end)<0
-                        c = mean(scale);
+                    %                     a = (2*nCos+5)*pi/4/log(2*Ttot/dt); % time power, this formula is to tile all time steps with
+                    %                     c = 0; % time shift
+                    %                     if scale(end)<0
+                    %                         c = mean(scale);
+                    %                     end
+                    %                    Phi_1 = pi+a*log(dt/2); % angle for first basis function
+
+                    c = dt-scale(1); % time shift
+                    if nCos<=3
+                        k_ini = -1; % first basis function starts on the rise
+                    elseif nCos<=5
+                        k_ini = 0; % first basis function starts at peak
+                    else
+                        k_ini = 1; % first basis function starts on decay
                     end
-                    Phi_1 = pi+a*log(dt/2); % angle for first basis function
+                    if nCos<=6
+                        k_end = 1; % last basis function end on decay
+                    elseif nCos<=9
+                        k_end = 0; % last basis function end on peak
+                    else
+                        k_end = -1; % last basis function end on rise
+                    end
+                    a = (nCos-1+k_end-k_ini)*pi/2/log(1+Ttot/dt);  % time power, this formula is to tile all time steps with
+
+                    Phi_1 = a*log(dt) - k_ini*pi/2; % angle for first basis function
                     HH.HP = [a c Phi_1 0];
                     HH.LB = [a-2 -max(scale)  Phi_1-pi   -max_log_var];
                     HH.UB = [a+2 -min(scale)  Phi_1+pi    max_log_var];
                     HH.fit = true(1,4);
                     HH.label = {'power','timeshift', '\Phi_1','\log \alpha'};
+
+                 case 'L2_gamma'   
+
+                      log_min_tau = log(min(diff(scale)));
+                    log_max_tau = log(scale(end)-scale(1));
+
+                    if nFun==1
+                        logtau = (log_min_tau+log_max_tau)/2;
+                        alpha = exp(log_max_tau)-exp(logtau); % required std for basis function
+                    else
+                    logtau = linspace(log_min_tau,log_max_tau,nFun); % default tau values: logarithmically spaced (tau = k*theta)                      
+                    alpha = exp(logtau(2)-logtau(1)); % required std for basis function
+                    end
+
+                        tau = exp(logtau); % time scale
+                    k = ones(1,nFun) / sqrt(alpha-1); % shape parameter computing for 'optimal' tiling of space (same for all funs)
+                    k = max(k,1.2);
+                    theta = tau ./ k; % scale parameter
+                  
+                    if any(scale==0)
+                        theta_LB = ones(1,nFun);
+                    else
+theta_LB = zeros(1,nFun);
+                    end
+
+                    HH.HP = [theta k  0];
+                    HH.LB = [zeros(1,nFun) theta_LB -max_log_var];
+                    HH.UB = [inf(1,2*nFun)    max_log_var];
+                    HH.fit = true(1,2*nFun+1);
+                    if nFun ==1
+                        HH.label = ["\theta","k","\log \alpha"];
+                    else
+                        HH.label = ["\theta_"+(1:nFun),"k_"+(1:nFun),"\log \alpha"];
+                    end
             end
 
             obj.HP(d) =  HH ;
@@ -1710,7 +1780,7 @@ end
 
                         % compute projection matrix and levels in projected space
                         if isrow(this_scale)
-                        [B.B,new_scale, B.params] = B.fun(this_scale, this_HP, B.params); % apply function (params is hyperparameter)
+                            [B.B,new_scale, B.params] = B.fun(this_scale, this_HP, B.params); % apply function (params is hyperparameter)
                         else
                             % more rows in scale means we fit different
                             % functions for each level of splitting
@@ -1722,7 +1792,7 @@ end
                                 subset = split_id==g; % subset of weights for this level of splitting variable
                                 [this_B,this_new_scale,B.params] = B.fun(this_scale(1,subset), this_HP, B.params);
                                 n_new = size(this_B,1);
-                                B.B(end+1 : end+n_new, subset) = this_B; % 
+                                B.B(end+1 : end+n_new, subset) = this_B; %
                                 new_scale(1,end+1:end+n_new) = this_new_scale;
                                 new_scale(2,end-n_new+1:end) = repmat(id_list(g,:)',1,n_new);
                             end
@@ -1817,9 +1887,9 @@ end
                         obj(m).Weights(d).nWeight = tmp_nWeight;
                         obj(m).Weights(d).scale = tmp_scale;
 
-                        W = obj(m).Weights(d);
+                        W = obj(m).Weights(d); % weight structure
 
-                         % save weights (mean, covariance, T-stat, p-value) in basis space in basis structure
+                        % save weights (mean, covariance, T-stat, p-value) in basis space in basis structure
                         B.PosteriorMean =  W.PosteriorMean;
                         B.PosteriorStd =  W.PosteriorStd;
                         B.PosteriorCov = W.PosteriorCov;
@@ -1827,21 +1897,21 @@ end
                         B.p = W.p;
 
                         % compute posterior back in original domain
-                        obj(m).Weights(d).PosteriorMean = W.PosteriorMean * B.B;
+                        W.PosteriorMean = W.PosteriorMean * B.B;
 
                         % compute posterior covariance, standard error
                         % of weights in original domain
                         W.PosteriorCov = zeros(W.nWeight, W.nWeight,obj(m).rank);
-                        obj(m).Weights(d).PosteriorStd = zeros(obj(m).rank, W.nWeight);
+                        W.PosteriorStd = zeros(obj(m).rank, W.nWeight);
                         for r=1:obj(m).rank
                             PCov  = B.B' * B.PosteriorCov(:,:,r) * B.B;
-                            obj(m).Weights(d).PosteriorCov(:,:,r) = PCov;
-                            obj(m).Weights(d).PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
+                            W.PosteriorCov(:,:,r) = PCov;
+                            W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
                         end
 
                         % compute T-statistic and p-value
                         W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
-                        W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0                       
+                        W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
 
                         % replace basis structure
                         B.projected = false;
@@ -1877,7 +1947,7 @@ end
                 this_HP = obj.HP(d).HP; %fixed values
                 this_scale = obj.Weights(d).scale;
                 if size(this_scale,1)>1 % if splitting variable is used
-this_scale = unique(this_scale(1,:));
+                    this_scale = unique(this_scale(1,:));
                 end
                 this_params = B.params;
 
@@ -1995,8 +2065,8 @@ this_scale = unique(this_scale(1,:));
 
                                     while nRep_check<nRep && iRow>1
                                         iRow=iRow-1; % move one row up
-                                       [id_list,~,split_id] = unique(this_scale(iRow:end,:)','rows'); % get id using last rows
-                                        
+                                        [id_list,~,split_id] = unique(this_scale(iRow:end,:)','rows'); % get id using last rows
+
                                         nRep_check = size(id_list,1); % number of unique sets
                                     end
                                     assert(nRep_check==nRep, 'weird error, could not find out splitting rows in scale');
@@ -2311,53 +2381,53 @@ this_scale = unique(this_scale(1,:));
 
         %% SAMPLE WEIGHTS FROM POSTERIOR
         function [obj,U] = sample_weights_from_posterior(obj)
-           % R = R.sample_weights_from_posterior() sample weights from
-           % posterior. The sampled weights are placed in field 'PosteriorMean'.
-           %
-           %[R, U] = sample_weights_from_posterior(R);
-           % U is the vector of weights
+            % R = R.sample_weights_from_posterior() sample weights from
+            % posterior. The sampled weights are placed in field 'PosteriorMean'.
+            %
+            %[R, U] = sample_weights_from_posterior(R);
+            % U is the vector of weights
             for i=1:numel(obj)
-               % PP = ProjectionMatrix(obj(i));
+                % PP = ProjectionMatrix(obj(i));
 
                 for r=1:obj(i).rank
                     for d=1:obj(i).nDim
-                      %  P = obj(i).Prior(r,d);
+                        %  P = obj(i).Prior(r,d);
                         W = obj(i).Weights(d);
                         if isempty(W.PosteriorCov) && W.nWeights>0
                             error('Posterior has not been computed. Infer model first');
                         end
                         ct = W.constraint(r);
                         if ct ~= 'n' % except for fixed weights
-                        
+
                             % sampled for mvn distribution with linear constraint
-%                                 pp = PP{r,d};
-%                                 Sigma = pp*P.PriorCovariance*pp';
-%                                 if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
-%                                     Sigma = (Sigma+Sigma')/2;
-%                                 end
-%                                 UU =  P.PriorMean + mvnrnd(zeros(1,size(pp,1)), Sigma)*pp;
-% 
-%                             switch ct
-%                                 case 'b' %mean zero
-%                                     UU = UU - mean(UU);
-%                                 case 'm' % mean equal to one
-%                                     UU = UU/mean(UU); % all weight set to one
-%                                 case 's' % sun of weights equal to one
-%                                     UU = UU/sum(UU); % all weights equal summing to one
-%                                 case '1' % first weight set to one
-%                                     UU(1) = 1;
-%
-%                            end
-UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
+                            %                                 pp = PP{r,d};
+                            %                                 Sigma = pp*P.PriorCovariance*pp';
+                            %                                 if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
+                            %                                     Sigma = (Sigma+Sigma')/2;
+                            %                                 end
+                            %                                 UU =  P.PriorMean + mvnrnd(zeros(1,size(pp,1)), Sigma)*pp;
+                            %
+                            %                             switch ct
+                            %                                 case 'b' %mean zero
+                            %                                     UU = UU - mean(UU);
+                            %                                 case 'm' % mean equal to one
+                            %                                     UU = UU/mean(UU); % all weight set to one
+                            %                                 case 's' % sun of weights equal to one
+                            %                                     UU = UU/sum(UU); % all weights equal summing to one
+                            %                                 case '1' % first weight set to one
+                            %                                     UU(1) = 1;
+                            %
+                            %                            end
+                            UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
                             obj(i).Weights(d).PosteriorMean(r,:) = UU;
-                       
+
                         end
                     end
                 end
             end
 
             if nargout>1
-            U = M.concatenate_weights;
+                U = M.concatenate_weights;
             end
         end
 
@@ -2551,6 +2621,7 @@ UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
         function obj = clear_data(obj)
             for i=1:numel(obj)
                 obj(i).Data = [];
+                obj(i).DataOriginal = [];
             end
         end
 
@@ -3220,7 +3291,7 @@ UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
                 summing{nDim_new} = 'continuous';
             end
             basis = [cell(1,nDim_new-1) {basis}];
-            
+
             obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, []);
             obj.Weights(nDim_new).label = 'lag';
             if any(SplitValue) || isempty(SplitValue)
@@ -3947,7 +4018,7 @@ end
 %% REPLICATE COVARIANCE MATRIX (AND GRADIENT) WHEN SPLITTING REGRESSOR
 function [cov, grad] = replicate_covariance(nRep,cov,gg)
 
-if isempty(nRep)|| nRep==1 
+if isempty(nRep)|| nRep==1
     if nargout>1
         grad = gg;
     end
@@ -4033,11 +4104,48 @@ if nargout>3
     gradB = zeros(nCos, length(X),length(HP));
     for p=1:nCos
         alog = a*log(X+c)-Phi(p);
-        nz = (alog>-pi) & (alog<pi); % time domain with non-null value
+        nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
         sin_alog = sin(alog(nz)) / 2;
         gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
         gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
         gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
+    end
+end
+end
+
+%% compute basis functions as gamma distribution
+function [B, scale, params, gradB] = basis_gamma(X,HP, params)
+nFun = params.nFunctions;
+theta = HP(1:nFun); % scale parameter
+k = HP(nFun+1:2*nFun); % shape parameter
+X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
+
+B = zeros(nFun,length(X));
+    nz = (X>=0); % time domain with non-null value
+for p=1:nFun
+    B(p,nz) = X(nz).^(k(p)-1) .* exp(-X(nz)/theta(p)) / gamma(k(p)) / theta(p).^k(p);
+    if k(p)==1
+        B(p,X==0) = 0;
+    end
+end
+scale = 1:nFun;
+
+if nargout>3
+    % compute gradient over each hyperparameter
+    gradB = zeros(nFun, length(X),length(HP));
+    for p=1:nFun
+
+    % gradient over scale parameter
+    gradB(p,nz,p) = B(p,nz).* (X(nz) - k(p)*theta(p)) / theta(p)^2;
+
+    X(nz).^(k(p)-1) .* exp(-X(nz)/theta(p)) / gamma(k(p)) / theta(p).^k(p);
+
+    % gradient over shape parameter
+        gradB(p,nz,p+nFun) = B(p,nz).* ( log(X(nz)) - psi(k(p)) - log(theta(p))   );
+
+        if k(p)>=1
+            gradB(p,X==0,p+[0 nFun])=0;
+        end
     end
 end
 end
@@ -4082,7 +4190,7 @@ if nargin>1
     DataSize(end+1:nD+1) = 0;
     for d=1:nD
         W(d).nWeight = DataSize(d+1); % number of weights/regressors in each dimension
-       W(d).nFreeWeight = DataSize(d+1); % number of weights/regressors in each dimension
+        W(d).nFreeWeight = DataSize(d+1); % number of weights/regressors in each dimension
 
 
         % define plotting color
@@ -4280,7 +4388,7 @@ if iscell(scale)
 else
     bool = scale ==scale(:,1);
 end
-    bool = all(bool(:));
+bool = all(bool(:));
 end
 
 %% create Level string for lags

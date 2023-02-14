@@ -496,6 +496,7 @@ classdef gum
             % to compute gradient of MAP LLH over hyperparameters.
             % - 'maxiter_HP': integer, defining the maximum number of iterations for
             % hyperparameter optimization (default: 200)
+            % - 'TolFun': tolerance criterion for stopping optimization
             % - 'no_fitting': if true, does not fit parameters, simply provide as output variable a structure with LLH and
             % accuracy for given set of parameters (values must be provided in field
             % 'U')
@@ -504,6 +505,7 @@ classdef gum
             HPfit = 'em'; % default algorithm
             display = 'iter'; % default verbosity
             use_gradient = 'on'; % use gradient for CV fitting
+                                        maxiter = 200; % maximum number of iterations
             HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
 
             if nargin==1
@@ -586,10 +588,19 @@ classdef gum
             HP_UB = HP_UB(HP_fittable);
 
             %% optimization parameters
-            if isfield(param, 'maxiter_HP')
-                maxiter = param.maxiter_HP;
+            if isfield(param, 'maxiter')
+                maxiter = param.maxiter;
+    param.maxiter_HP = param.maxiter;
+    param = rmfield(param, 'maxiter');
             else
-                maxiter = 200;
+                param.maxiter_HP = maxiter;
+            end
+            if isfield(param, 'TolFun')
+    HP_TolFun = param.TolFun;
+    param.TolFun_HP = param.TolFun;
+    param = rmfield(param, 'TolFun');
+            else
+                param.TolFun_HP = HP_TolFun;
             end
             if isfield(param, 'initialpoints')
                 obj.param.initialpoints = param.initialpoints;
@@ -788,6 +799,9 @@ classdef gum
                     % obj.regressor = M2;
                     obj.param = param_tmp;
 
+% allocate fitted hyperparameters to each module
+            obj.regressor = obj.regressor.set_hyperparameters(HP);
+
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
 
                     % clear persisitent value for best-fitting parameters
@@ -807,8 +821,8 @@ classdef gum
             end
 
 
-            % allocate fitted hyperparameters to each module
-            M = M.set_hyperparameters(HP);
+         %   % allocate fitted hyperparameters to each module
+         %   M = M.set_hyperparameters(HP);
             %             for m=1:obj.nMod
             %                 for d=1:M(m).nDim
             %                     for r=1:size(M(m).HP,1)
@@ -2783,13 +2797,9 @@ end
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
-<<<<<<< Updated upstream
-                    if ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
-                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) %isequal(x,scale{1,d}) ,scale(2:end,d)))
-=======
+
                     if ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d))) || ...
                             ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) % just in case of numerical imprecisions
->>>>>>> Stashed changes
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
@@ -4101,7 +4111,9 @@ if ~isempty(B) && ~B.fixed % work on original space
     gradK_tmp = zeros(B.nWeight, B.nWeight,nHP);
 
     for p=1:nHP % for all fitted hyperparameter
-        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
+        BKgradB =B.B'*K*gradB(:,:,p);
+        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + BKgradB + BKgradB';
+        %gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
     end
     gradK = gradK_tmp;
 
@@ -4112,8 +4124,11 @@ if ~isempty(B) && ~B.fixed % work on original space
     % basis functions - now there's no guarantee that the LLH will increase
     % in each EM iteration, and no guarantee that it converges to a
     % meaningful result
-    K = force_definite_positive(K, max(eig(K))*1e-3);
-    Sigma = force_definite_positive(Sigma, max(eig(Sigma))*1e-3);
+%K = force_definite_positive(K, max(eig(K))*1e-3);
+ %   Sigma = force_definite_positive(Sigma, max(eig(Sigma))*1e-3);
+
+    K = force_definite_positive(K, sqrt(min(diag(K)))*1e-3); % changing to see if we can avoid null values along diagonal
+    Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
 
 end
 K = P*K*P'; % project on free base
