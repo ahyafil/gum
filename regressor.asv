@@ -84,16 +84,16 @@ classdef regressor
     %
     %
     % V = regressor(...,'constraint', C) to define constraints for the
-    % different factors. C is a character string where character at position d
+    % different factors. C is an array of character string where character string at position d
     % defines the constraint for the corresponding dimension. Possible
     % character values are:
-    % - 'f': free, unconstrained (one and only one dimension)
-    % - 'b': sum of weights is set to 0
-    % - 'm': mean over weights in dimension d is set to 1
-    % - 's': sum over weights in dimension d is set to 1
-    % - '1': first element in weight vector is set to 1
-    % - 'n': fixed weights (not estimated)
-    % Default value is 'f' (unconstrained) for first dimension, 'm' for other
+    % - 'free': free, unconstrained (one and only one dimension)
+    % - 'nullsum': sum of weights is set to 0
+    % - 'mean1': mean over weights in dimension d is set to 1
+    % - 'sum1': sum over weights in dimension d is set to 1
+    % - 'first1': first element in weight vector is set to 1
+    % - 'fixed': fixed weights (not estimated)
+    % Default value is 'fixed' (unconstrained) for first dimension, 'mean1' for other
     % dimensions. C must be a character array of length D (or rank x D matrix)
     %
     % V = regressor(...,'label', N) to add label to regressor
@@ -145,7 +145,7 @@ classdef regressor
             HPfit = [];
             HP = [];
             summing = 'weighted';
-            constraint = '';
+            constraint = [];
             binning = [];
             label = '';
             variance = [];
@@ -183,6 +183,7 @@ classdef regressor
                         scale = varargin{v+1};
                     case 'variance'
                         variance = varargin{v+1};
+                        assert(all(variance>0),'variance hyperparameter must be positive')
                     case 'tau'
                         tau = varargin{v+1};
                     case 'period'
@@ -196,7 +197,8 @@ classdef regressor
                         %   assert(any(strcmp(summing, {'weighted','linear','continuous','equal','split','separate'})), 'incorrect value for option ''sum''');
                     case 'constraint'
                         constraint = varargin{v+1};
-                        assert(ischar(constraint), 'constraint C should be a character array');
+
+                        % assert(ischar(constraint), 'constraint C should be a character array');
                     case 'binning'
                         binning = varargin{v+1};
                         if ~isempty(binning)
@@ -388,7 +390,7 @@ classdef regressor
                 case 'constant'
                     obj.Data = X;
                     obj.nDim = 1;
-                    obj.Weights(1).constraint = 'n';
+                    obj.Weights(1).constraint = 'fixed';
                     % obj.U = {}; %{ones(1,obj.nWeight)};
                     obj.formula = label{1};
                     obj.Prior(1).type = 'none';
@@ -550,14 +552,22 @@ classdef regressor
             if ~strcmpi(type, 'constant')
                 FreeDim = find(~SplitOrSeparate,1);
                 for d=1:nD
-                    obj.Weights(d).constraint = 's'; % sum-one constraint
+                    obj.Weights(d).constraint = "sum1"; % sum-one constraint
                 end
-                obj.Weights(FreeDim).constraint = 'f';
+                obj.Weights(FreeDim).constraint = "free";
             end
 
             % whether components should be reordered according to variance, default: reorder if all components have same constraints
             if obj.rank>1
-                obj.ordercomponent = all(all(constraint==constraint(1,:)));
+                obj.ordercomponent = true;
+                for d=1:nD
+                   % cc_rank1 = constraint(1,d);
+                  %  if ~all( cellfun(@(cc) isequal(cc,cc_rank1), constraint(:,d)) )
+                   if ~all(  constraint(:,d) == constraint(1,d))
+                        obj.ordercomponent = false;
+                    end
+                end
+                %  obj.ordercomponent = all(all(constraint==constraint(1,:)));
             end
 
             obj = obj.split_or_separate(summing);
@@ -682,7 +692,7 @@ classdef regressor
 
             if ~isempty(constraint)
                 assert(length(constraint)==nD, 'length of constraint C should match the number of dimensions in the regressor');
-                assert(all(ismember(constraint, 'fbsm1n')), 'possible characters in constraint C are: ''fbsm1n''');
+                % assert(all(ismember(constraint, 'fbsm1n')), 'possible characters in constraint C are: ''fbsm1n''');
                 for d=1:nD
                     obj.Weights(d).constraint = constraint(d);
                 end
@@ -710,10 +720,20 @@ classdef regressor
         end
 
         %% GET NUMBER OF FREE PARAMETERS
-        function nf = get.nFreeParameters(obj) % !! change to nFreeWeights?
-            cc = [obj.Weights.constraint];
-            ss = [obj.Weights.nWeight]; % number of total weights
-            ss = ss - (cc~='f') - (ss-1).*(cc=='n' | ~cc); % reduce free weights for constraints
+        function nFreeWeights = get.nFreeParameters(obj) % !! change to nFreeWeights?
+
+            % number of total weights
+            W = [obj.Weights];
+            nWeight = [W.nWeight]; 
+
+            % reduce free weights for constraints
+                        nConstraint = zeros(size(W));
+            for c=1:numel(W)
+                cc = constraint_structure(W(c));
+                nConstraint(c) = cc.nConstraint;
+            end
+            nFreeWeights = nWeight-nConstraint;
+            % ss = ss - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
 
             % when using basis, use number of basis functions instead
             Bcell = {obj.Weights.basis};
@@ -722,21 +742,23 @@ classdef regressor
             if ~isempty(B)
                 projectedBasis = [B.projected];
                 %ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
-                ss(withBasis) = [B.nWeight].*(1-projectedBasis) + [obj.Weights(withBasis).nWeight].*projectedBasis;
+                nFreeWeights(withBasis) = [B.nWeight].*(1-projectedBasis) + [obj.Weights(withBasis).nWeight].*projectedBasis;
             end
 
-            % number of free parameters per set weight (remove one if there is a constraint)
-            nf = repmat(ss,obj.rank,1);
+            % number of free parameters per set weight
+            nFreeWeights = repmat(nFreeWeights,obj.rank,1);
             %               nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
 
         end
 
         %% GET NUMBER OF FREE DIMENSIONS
-        function fd = nFreeDimensions(obj)
-            fd = zeros(size(obj));
+        function nFreeDim = nFreeDimensions(obj)
+            nFreeDim = zeros(size(obj));
             for i=1:numel(obj)
-                cc = [obj(i).Weights.constraint];
-                fd(i) = max(sum(cc~='n',2));
+                constraint = constraint_type([obj(i).Weights]);
+                isFixed = constraint~="fixed";
+                nFreeDim(i) = max(sum(isFixed,2));
+                % fd(i) = max(sum(constraint~='n',2));
             end
         end
 
@@ -744,7 +766,10 @@ classdef regressor
         function bool = isFreeMultipleRank(obj)
             bool = false(size(obj));
             for i=1:numel(obj)
-                bool(i) = obj(i).rank>1 && all([obj(i).Weights.constraint]=='f','all');
+
+                constraint = constraint_type([obj(i).Weights]);
+                isFree = constraint=="free";
+                bool(i) = obj(i).rank>1 && all(isFree,'all');
             end
         end
 
@@ -1006,14 +1031,15 @@ classdef regressor
                     nR = obj(m).Weights(d).nWeight; % number of regressors
                     switch fild
                         case 'PosteriorMean'
+                            this_constraint = constraint_type(obj(m).Weights(d));
                             for r=1:obj(m).rank % assign new set of weight to each component
-                                if obj(m).Weights(d).constraint(r)~='n' % unless fixed weights
+                                if this_constraint~="fixed" % unless fixed weights
 
                                     idx = ii + (nR*(r-1)+1 : nR*r); % index of regressors for this component
                                     obj(m).Weights(d).PosteriorMean(r,:) = U(idx); % weight for corresponding adim and component
-                                    if obj(m).Weights(d).constraint(r)=='1' % enforce this
+                                    if this_constraint=="first1" % enforce this
                                         obj(m).Weights(d).PosteriorMean(r,1)=1;
-                                        warning('chech if I should change idx to idx+1');
+                                        warning('check if I should change idx to idx+1');
                                     end
                                 end
                             end
@@ -1056,8 +1082,9 @@ classdef regressor
                 nR = obj(m).nFreeParameters;
                 for d = dim_list
 
+                    constraint = constraint_type(obj(m).Weights(d));
                     for r=1:obj(m).rank % assign new set of weight to each component
-                        if obj(m).Weights(d).constraint(r)~='n' % unless fixed weights
+                        if constraint(r)~="fixed" % unless fixed weights
                             idx = ii + (1:nR(r,d)); % index of regressors for this component
                             FW{m}{r,d} = U(idx); % weight for corresponding adim and component
                         end
@@ -1072,8 +1099,10 @@ classdef regressor
         %% ORTHOGONALIZE WEIGHTS (FOR PWA)
         function obj = orthogonalize_weights(obj, d)
             if nargin<1
-                constraint = [obj.Weights.constraint];
-                FreeDims = find(all(constraint=='f',1));
+                %  constraint = [obj.Weights.constraint];
+                constraint = constraint_type([obj.Weights]);
+
+                FreeDims = find(all(constraint=="free",1));
                 [~,i_d] = min(obj.nWeight(FreeDims));
                 d = FreeDims(i_d);
             end
@@ -1107,7 +1136,7 @@ classdef regressor
             % hyperparameter positions
             if nargin<3
                 [HPidx, nHP] = get_hyperparameters_indices(obj);
-                assert(length(HP)==sum(nHP{:}),'incorrect length for HP');
+                assert(length(HP)==sum([nHP{:}]),'incorrect length for HP');
             end
 
             for m=1:length(obj) % for each regressor
@@ -1191,21 +1220,26 @@ classdef regressor
 
             %% first process fixed set of weights
             ii=0;
-            redo = 0;
-            fixedw = false(1,nRegTotal);
+            %recompute_rho = false;
+            FixedWeight = false(1,nRegTotal);
             for m=1:nM
-                if any(W(m).constraint == 'n') % if weight is fixed, remove entire projection
-                    for r=find(W(m).constraint == 'n') % for each set fo fixed weight
-                        idx  = ii + (nR(m)*(r-1)+1:nR(m)*r); % index of regressors
-                        fixedw(idx) = true;
-                    end
-                    redo = 1;
+                % constraint = constraint_type(W(m));
+                %  if any(constraint == "fixed") % if weight is fixed, remove entire projection
+                %      for r = find(constraint == "fixed") % for each set fo fixed weight
+                for r=1:obj(m).rank
+                    idx  = ii + (nR(m)*(r-1)+1:nR(m)*r); % index of regressors
+                    FixedWeight(idx) = constrained_weight(W(m)); % fixed weights (either whole set or just subset of weights)
                 end
+                %          FixedWeight(idx) = true;
+                %          recompute_rho = true;
+
+                %      end
+                %   end
                 ii = ii + obj(m).rank*nR(m);
             end
 
-            if redo % compute the projection without fixed weights (if any)
-                rho = rho - Phi(:,fixedw)*UU(fixedw)';
+            if any(FixedWeight) % compute the projection without fixed weights (if any)
+                rho = rho - Phi(:,FixedWeight)*UU(FixedWeight)';
             end
 
 
@@ -1215,23 +1249,43 @@ classdef regressor
             ii=0;
             for m=1:nM % for each module
                 U_const = zeros(1,obj(m).rank); % constant weight for each component
+
                 for r=1:obj(m).rank
-                    switch W(m).constraint(r)
-                        case {'f','b','1','n'}
-                            U_const(r) = 0;
-                        case 'm'
-                            U_const(r) = 1; % constant offset to maintain constraint
-                        case 's' % sum to one
-                            U_const(r) = 1/nR(m);
-                    end
 
                     idx = ii + (1:nR(m)); % index of regressors
 
                     % removing portion of rho due to projections of weights perpendicular to constraints
-                    rho = rho - U_const(r)*sum(Phi(:,idx),2);
-                    if W(m).constraint(r) == '1' % if first weight constrained to one, treat as fixed offset
-                        rho = rho - Phi(:,idx(1));
+                    ct = constraint_structure(W(m));
+                    nMultiConstraint = ct.nConstraint - sum(constrained_weight(W(m))); % constraints that apply on sets of weights (not individual ones, which have been dealt before hand)
+                    if nMultiConstraint>0
+                        if ct.nConstraint==1 && all(ct.V==ct.V(1)) % constraint applies equally to all weights (e.g. "sum1", "mean1")
+                            if ct.u~=0
+                                U_const(r) = ct.u / sum(ct.V); %
+
+                                % removing portion of rho due to projections
+                                rho = rho - U_const(r)*sum(Phi(:,idx),2);
+                            end
+                        else
+                            error('not coded yet');
+                        end
+
                     end
+
+                    %                     switch W(m).constraint(r)
+                    %                         case {'f','b','1','n'}
+                    %                             U_const(r) = 0;
+                    %                         case 'm'
+                    %                             U_const(r) = 1; % constant offset to maintain constraint
+                    %                         case 's' % sum to one
+                    %                             U_const(r) = 1/nR(m);
+                    %                     end
+
+
+                    % removing portion of rho due to projections of weights perpendicular to constraints
+                    %     rho = rho - U_const(r)*sum(Phi(:,idx),2);
+                    %   if W(m).constraint(r) == '1' % if first weight constrained to one, treat as fixed offset
+                    %       rho = rho - Phi(:,idx(1));
+                    %   end
                     ii =idx(end);
 
                 end
@@ -1243,7 +1297,7 @@ classdef regressor
             Uconst = repelem(Uc2,repelem(nR',[obj.rank]))';
 
             % we treated fixed weights apart, let's add them here
-            Uconst(fixedw) = Uconst(fixedw) + UU(fixedw);
+            Uconst(FixedWeight) = Uconst(FixedWeight) + UU(FixedWeight);
         end
 
         %% DEFINE PRIOR FOR ARRAY DIMENSIONS
@@ -1265,8 +1319,12 @@ classdef regressor
                     summing{d} = 'linear';
                 end
                 obj.Weights(d).type = summing{d};
-                obj.Weights(d).scale = scale{d};
-                obj.Weights(d).nWeight = size(scale{d},2);
+                if ~isempty(scale{d})
+                    obj.Weights(d).scale = scale{d};
+                    obj.Weights(d).nWeight = size(scale{d},2);
+                else
+                    obj.Weights(d).scale = 1:obj.Weights(d).nWeight;
+                end
 
                 % what type of prior are we using for this dimension
                 switch summing{d}
@@ -1320,7 +1378,7 @@ classdef regressor
             obj.Weights(d).type = type; % 'continuous';
 
             if nargin<6 || strcmp(basis,'auto')
-                if size(scale,2)>100 && ~any(strcmp(summing,{'split','separate'})) && size(scale,1)==1
+                if size(scale,2)>100 && ~any(strcmp(summing{d},{'split','separate'})) && size(scale,1)==1
                     % Fourier basis is the default if more than 100 levels
                     basis = 'fourier';
                 else % otherwise no basis functions
@@ -1541,32 +1599,32 @@ classdef regressor
                     Phi_1 = a*log(dt) - k_ini*pi/2; % angle for first basis function
                     HH.HP = [a c Phi_1 0];
                     HH.LB = [a-2 -max(scale)  Phi_1-pi   -max_log_var];
-                    HH.UB = [a+2 -min(scale)  Phi_1+pi    max_log_var];
+                    HH.UB = [a+2 max(scale)-2*min(scale)  Phi_1+pi    max_log_var];
                     HH.fit = true(1,4);
                     HH.label = {'power','timeshift', '\Phi_1','\log \alpha'};
 
-                 case 'L2_gamma'   
+                case 'L2_gamma'
 
-                      log_min_tau = log(min(diff(scale)));
+                    log_min_tau = log(min(diff(scale)));
                     log_max_tau = log(scale(end)-scale(1));
 
                     if nFun==1
                         logtau = (log_min_tau+log_max_tau)/2;
                         alpha = exp(log_max_tau)-exp(logtau); % required std for basis function
                     else
-                    logtau = linspace(log_min_tau,log_max_tau,nFun); % default tau values: logarithmically spaced (tau = k*theta)                      
-                    alpha = exp(logtau(2)-logtau(1)); % required std for basis function
+                        logtau = linspace(log_min_tau,log_max_tau,nFun); % default tau values: logarithmically spaced (tau = k*theta)
+                        alpha = exp(logtau(2)-logtau(1)); % required std for basis function
                     end
 
-                        tau = exp(logtau); % time scale
+                    tau = exp(logtau); % time scale
                     k = ones(1,nFun) / sqrt(alpha-1); % shape parameter computing for 'optimal' tiling of space (same for all funs)
                     k = max(k,1.2);
                     theta = tau ./ k; % scale parameter
-                  
+
                     if any(scale==0)
                         theta_LB = ones(1,nFun);
                     else
-theta_LB = zeros(1,nFun);
+                        theta_LB = zeros(1,nFun);
                     end
 
                     HH.HP = [theta k  0];
@@ -1588,40 +1646,46 @@ theta_LB = zeros(1,nFun);
         % parameters
         function PP = ProjectionMatrix(obj)
 
-            dd = obj.nDim;
+            D = obj.nDim;
             rr = obj.rank;
-            ss = [obj.Weights.nWeight];
-            cc = [obj.Weights.constraint];
-            PP = cell(rr,dd);
-            for d=1:dd % for each dimension
+         %   nWeights = [obj.Weights.nWeight];
+         %   cc = {obj.Weights.constraint};
+            PP = cell(rr,D);
+            for d=1:D % for each dimension
                 for r=1:rr % for each component
-                    switch cc(r,d)
-                        case 'f' % free dimension
-                            PP{r,d} = speye(ss(d)); % no projection for first set of weight
-                        case {'b','m','s'} % sum to zero, average weight or sum set to one
 
-                            PP{r,d} = zeros(ss(d)-1,ss(d)); % rows: free, col:complete
-                            for i=1:ss(d)-1
-                                PP{r,d}(i,:) = [ones(1,i) -i zeros(1,ss(d)-i-1)]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
-                            end
+                    this_constraint = constraint_structure(obj.Weights(d));
+                    PP{r,d} = compute_orthonormal_basis_project(this_constraint.V);
 
-                            %                             %PP{r,d} = sparse(ss(d)-1,ss(d)); % rows: free, col:complete
-                            %                             I = []; % rows: free parameters
-                            %                             J = []; % columns: complete parameter set
-                            %                             VV = []; % value
-                            %                             for i=1:ss(d)-1
-                            %                                 vv = [ones(1,i) -i]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
-                            %                                 I = [I i*ones(1,length(vv))];
-                            %                                 J = [J 1:i+1];
-                            %                                 VV = [VV vv];
-                            %
-                            %                             end
-                            %                             PP{r,d} = sparse(I,J,VV,ss(d)-1,ss(d));
-                        case '1' % first weight set to 1
-                            PP{r,d} = [sparse(ss(d)-1,1) speye(ss(d)-1)]; % first col is just 0, then identity matrix
-                        case 'n' % fixed set of weights (no free parameter)
-                            PP{r,d} = sparse(0,ss(d));
-                    end
+
+                    %                     switch cc(r,d)
+                    %
+                    %                         case 'f' % free dimension
+                    %                             PP{r,d} = speye(nWeights(d)); % no projection for first set of weight
+                    %                         case {'b','m','s'} % sum to zero, average weight or sum set to one
+                    %
+                    %                             PP{r,d} = zeros(nWeights(d)-1,nWeights(d)); % rows: free, col:complete
+                    %                             for i=1:nWeights(d)-1
+                    %                                 PP{r,d}(i,:) = [ones(1,i) -i zeros(1,nWeights(d)-i-1)]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
+                    %                             end
+                    %
+                    %                             %                             %PP{r,d} = sparse(ss(d)-1,ss(d)); % rows: free, col:complete
+                    %                             %                             I = []; % rows: free parameters
+                    %                             %                             J = []; % columns: complete parameter set
+                    %                             %                             VV = []; % value
+                    %                             %                             for i=1:ss(d)-1
+                    %                             %                                 vv = [ones(1,i) -i]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
+                    %                             %                                 I = [I i*ones(1,length(vv))];
+                    %                             %                                 J = [J 1:i+1];
+                    %                             %                                 VV = [VV vv];
+                    %                             %
+                    %                             %                             end
+                    %                             %                             PP{r,d} = sparse(I,J,VV,ss(d)-1,ss(d));
+                    %                         case '1' % first weight set to 1
+                    %                             PP{r,d} = [sparse(nWeights(d)-1,1) speye(nWeights(d)-1)]; % first col is just 0, then identity matrix
+                    %                         case 'n' % fixed set of weights (no free parameter)
+                    %                             PP{r,d} = sparse(0,nWeights(d));
+                    %                     end
                 end
             end
 
@@ -1739,7 +1803,7 @@ theta_LB = zeros(1,nFun);
 
             nD = obj.nDim; % dimension in this module
             ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            cc = [obj.Weights.constraint]; % constraint for this module
+            cc = constraint_type([obj.Weights]); % constraint for this module
             rk = obj.rank;
 
             for r=1:rk % for each rank
@@ -1751,7 +1815,7 @@ theta_LB = zeros(1,nFun);
                     end
 
                     if isempty(obj.Prior(r,d).PriorCovariance) % by default:
-                        if d<=nD && cc(r,d) =='1' % no covariance for first weight (set to one), unit for the others
+                        if d<=nD && cc(r,d) =="first1" % no covariance for first weight (set to one), unit for the others
                             obj.Prior(r,d).PriorCovariance = diag([0 ones(1,ss(d)-1)]);
                         else % otherwise diagonal unit covariance
                             obj.Prior(r,d).PriorCovariance = speye(ss(d));
@@ -1810,30 +1874,56 @@ theta_LB = zeros(1,nFun);
                         obj(m).Weights(d).scale = new_scale;
 
                         %% if weights are constrained to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                        cc = obj(m).Weights(d).constraint;
-                        for r=1:obj(m).rank
-                            if any(cc(r)=='msb')
-                                if ~all(cc == cc(r))
-                                    error('spectral dimension %d cannot have ''%s'' constraint for one order and other constraint for other orders',d, cc(r,d));
+                        cc = constraint_structure(obj(m).Weights(d));
+                        if cc(1).nConstraint>0
+                            for r=2:obj(m).rank
+                                if ~isequal(cc(1), cc(r))
+                                    error('Basis functions cannot use different constraints for different orders');
                                 end
+                            end
+
+                            if cc(1).Constraint==1 && all(cc(1).U == cc(1).U(1)) % mean1, sum1, nullmean
+
                                 B2 = sum(B.B,2); % ( 1*(B*U) = const -> (1*B)*U = const
-                                if cc=='m' % rescale
-                                    B2 = B2/obj(m).Weights(d).nWeight;
+
+                                if cc(1).u~=0
+                                    B2 = B2 / cc(1).u;
+                                    cc(1).u = 1;
                                 end
+
+
+                                %
+                                % if cc=='m' % rescale
+                                %     B2 = B2/obj(m).Weights(d).nWeight;
+                                % end
+
                                 invB = diag(1./B2);
                                 B.B = invB * B.B; % change projection matrix so that constraint is sum of weight equal to one
 
-                                % !! I'm commenting because I don't
-                                % understand what it's supposed to be
-                                % doing... go back to it later on
-                                %                                 for r2=1:obj(m).rank
-                                %                                     if cc(r)~='b'
-                                %                                         obj(m).Weights(d).constraint(r2) = 's';
-                                %                                     end
-                                %                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
-                                %                                 end
-                                break; % do not do it for other orders
+                                cc(1).V = ones(new_nWeight,1);
+
+                                if cc(1).u~=0
+                                    cc(1).u = 1;
+                                end
+                            else
+                                %V*(B*U) = u -> (V*B)*U = u
+                                cc(1).V = cc(1).V * B.B;
                             end
+
+                            % !! I'm commenting because I don't
+                            % understand what it's supposed to be
+                            % doing... go back to it later on
+                            %                                 for r2=1:obj(m).rank
+                            %                                     if cc(r)~='b'
+                            %                                         obj(m).Weights(d).constraint(r2) = 's';
+                            %                                     end
+                            %                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
+                            %                                 end
+                            %break; % do not do it for other orders
+                            %end
+
+                            B.constraint = obj(m).Weights(d).constraint;
+                            obj(m).Weights(d).constraint = cc(1);
                         end
 
 
@@ -1915,6 +2005,9 @@ theta_LB = zeros(1,nFun);
 
                         % replace basis structure
                         B.projected = false;
+                        if isfield(B, 'constraint')
+                            W.constraint = B.constraint;
+                        end
                         W.basis = B;
 
                         obj(m).Weights(d) = W;
@@ -2096,12 +2189,14 @@ theta_LB = zeros(1,nFun);
                                     %% compute gradient now
                                     gsf{r,d} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
                                     for l=1:this_nHP
-                                        if obj(m).Weights(d).constraint(r)=='1' % if first weight fixed to 1, invert only the rest
-                                            gsf{r,d}(:,:,l) = - blkdiag(0, (Sigma(2:end,2:end) \ gg(2:end,2:end,l)) / Sigma(2:end,2:end));% gradient of precision matrix
-                                        else
-
-                                            gsf{r,d}(:,:,l) = - (Sigma \ gg(:,:,l)) / Sigma;% gradient of precision matrix
-                                        end
+                                        freeW = ~constrained_weight(obj(m).Weights(d)); % exclude fixed weights
+                                        gsf{r,d}(freeW,freeW,l) = - (Sigma(freeW,freeW) \ gg(freeW,freeW,l)) / Sigma(freeW,freeW);
+                                        %  if obj(m).Weights(d).constraint(r)=='1' % if first weight fixed to 1, invert only the rest
+                                        %      gsf{r,d}(:,:,l) = - blkdiag(0, (Sigma(2:end,2:end) \ gg(2:end,2:end,l)) / Sigma(2:end,2:end));% gradient of precision matrix
+                                        %  else
+                                        %
+                                        %     gsf{r,d}(:,:,l) = - (Sigma \ gg(:,:,l)) / Sigma;% gradient of precision matrix
+                                        % end
                                     end
 
                                     % select gradient only for fittable HPs
@@ -2189,7 +2284,7 @@ theta_LB = zeros(1,nFun);
 
             nD = obj.nDim; % dimension in this module
             ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            cc = [obj.Weights.constraint]; % constraint for this module
+            %cc = [obj.Weights.constraint]; % constraint for this module
             rk = obj.rank;
 
             for d=1:nD % for each dimension
@@ -2201,18 +2296,24 @@ theta_LB = zeros(1,nFun);
                         %    Mu = repmat(Mu,rk,1);
                         %end
                     else
-
-                        switch cc(r,d) % what constraint on set of weights
-                            case {'f','n','b'} % mean 0
-                                mu = zeros(1,ss(d));
-                            case '1' % first weight 1, then 0
-                                mu = [1 zeros(1,ss(d)-1)];
-                            case 's' % sum-one constraint
-                                mu = ones(1,ss(d))/ss(d);
-                            case 'm' % mean-one
-                                mu = ones(1,ss(d));
+                        W = obj.Weights(d);
+                        S = constraint_structure(W);
+                        if S.nConstraint>0 && S.nConstraint<W.nWeight % if there is a constraint (but not a full fixed weight set)
+                            obj.Prior(r,d).PriorMean = S.u*pinv(full(S.V));
+                        else
+                            obj.Prior(r,d).PriorMean = zeros(1,W.nWeight);
                         end
-                        obj.Prior(r,d).PriorMean = mu;
+                        %                         switch cc(r,d) % what constraint on set of weights
+                        %                             case {'f','n','b'} % mean 0
+                        %                                 mu = zeros(1,ss(d));
+                        %                             case '1' % first weight 1, then 0
+                        %                                 mu = [1 zeros(1,ss(d)-1)];
+                        %                             case 's' % sum-one constraint
+                        %                                 mu = ones(1,ss(d))/ss(d);
+                        %                             case 'm' % mean-one
+                        %                                 mu = ones(1,ss(d));
+                        %                         end
+                        %                        obj.Prior(r,d).PriorMean = mu;
                     end
                 end
             end
@@ -2264,18 +2365,6 @@ theta_LB = zeros(1,nFun);
 
         end
 
-        %% CONSTRAINT CELL
-        function C = constraint_cell(obj)
-            % extract all constraints from different regressor objects into
-            % a single cell array
-            C = cell(size(obj));
-            for i=1:numel(obj)
-                for d=1:numel(obj(i).Weights)
-                    C{i}(:,d) = obj(i).Weights(d).constraint;
-                end
-            end
-        end
-
         %% INITIALIZE WEIGHTS
         function obj = initialize_weights(obj, obs)
             % if more than one object, compute iteratively
@@ -2286,47 +2375,74 @@ theta_LB = zeros(1,nFun);
                 return;
             end
 
-            ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            cc = [obj.Weights.constraint]; % constraint for this module
+            % ss = [obj.Weights.nWeight]; % size along each dimension in this module
+            % cc = [obj.Weights.constraint]; % constraint for this module
             for r=1:obj.rank
                 for d=1: obj.nDim
-                    UU = obj.Weights(d).PosteriorMean;
+                    W = obj.Weights(d); %weight structure
+                    UU = W.PosteriorMean;
+                    nW = W.nWeight;
+                    constraint = constraint_structure(W);
                     if isempty(UU) || size(UU,1)<r
-                        if first_update_dimension(obj)==d && cc(r,d)~='n' && ~strcmp(obs, 'normal')
+                        if first_update_dimension(obj)==d && constraint.type~="fixed" && ~strcmp(obs, 'normal')
                             % if first dimension to update, leave as nan to
                             % initialize by predictor and not by weights (for
                             % stability of IRLS)
-                            UU = nan(1,ss(d));
-                        else
-                            switch cc(r,d)
-                                case 'f' %free basis
-                                    if any(cc(r,1:d-1)=='f')
-                                        % sample from prior (multivariate
-                                        % gaussian)
-                                        P = obj.Prior(r,d);
-                                        UU = mvnrnd(P.PriorMean,P.PriorCovariance);
-                                    else % only the first free basis is set to 0 (otherwise just stays at 0)
-                                        UU = zeros(1,ss(d));
-                                    end
-                                case 'b' % sum equal to zero
-                                    UU = zeros(1,ss(d));
-                                case 'm' % mean equal to one
-                                    UU = ones(1,ss(d)); % all weight set to one
-                                    % Uini{r,d} = rand(1,m(d)); %random intial weights
-                                    % Uini{r,d} = Uini{r,d}/mean(Uini{r,d}); % enforce mean equal to one
-                                case 's' % sun of weights equal to one
-                                    UU = ones(1,ss(d))/ss(d); % all weights equal summing to one
-                                    %Uini{r,d} = rand(1,m(d)); %random intial weights
-                                    %Uini{r,d} = Uini{r,d}/sum(Uini{r,d}); % enforce mean equal to one
-                                case '1' % first weight set to one
-                                    UU = [1 zeros(1,ss(d)-1)];
-                                case 'n' % fixed weights (if not provided by user, ones)
-                                    % warning('Fixed set of weights for component %d and rank %r not provided, will use zeros',d,r);
-                                    UU = ones(1,ss(d));
+                            UU = nan(1,nW);
+                        elseif constraint.type=="fixed"
+                            % fixed weights (if not provided by user, ones)
+                            % warning('Fixed set of weights for component %d and rank %r not provided, will use zeros',d,r);
+                            UU = ones(1,nW);
+                        elseif constraint.type=="free"
+                            if d>1 && any(constraint_type(obj.Weights(1:d-1)) =="free")
+                                % if there's a lower free dimesion, sample from prior (multivariate
+                                % gaussian)
+                                P = obj.Prior(r,d);
+                                UU = mvnrnd(P.PriorMean,P.PriorCovariance);
+                            else % only the first free basis is set to 0 (otherwise just stays at 0)
+                                UU = zeros(1,nW);
+                            end
+                        else %  under constraint
+                            % by
+                            UU =  constraint.u*pinv(full(constraint.V));
+
+                            if d>1 && all(UU==0) && any(cellfun(@(x) all(x(:)==0),  {obj.Weights(1:d-1).PosteriorMean}))
+                                % make sure we avoid the case of
+                                % weights along two dimensions set to all
+                                % zeros
+                                UU = mvnrnd(P.PriorMean,P.PriorCovariance);
                             end
                         end
+
+                        %                             switch cc(r,d)
+                        %                                 case 'f' %free basis
+                        %                                     if any(cc(r,1:d-1)=='f')
+                        %                                         % sample from prior (multivariate
+                        %                                         % gaussian)
+                        %                                         P = obj.Prior(r,d);
+                        %                                         UU = mvnrnd(P.PriorMean,P.PriorCovariance);
+                        %                                     else % only the first free basis is set to 0 (otherwise just stays at 0)
+                        %                                         UU = zeros(1,ss(d));
+                        %                                     end
+                        %                                 case 'b' % sum equal to zero
+                        %                                     UU = zeros(1,ss(d));
+                        %                                 case 'm' % mean equal to one
+                        %                                     UU = ones(1,ss(d)); % all weight set to one
+                        %                                     % Uini{r,d} = rand(1,m(d)); %random intial weights
+                        %                                     % Uini{r,d} = Uini{r,d}/mean(Uini{r,d}); % enforce mean equal to one
+                        %                                 case 's' % sun of weights equal to one
+                        %                                     UU = ones(1,ss(d))/ss(d); % all weights equal summing to one
+                        %                                     %Uini{r,d} = rand(1,m(d)); %random intial weights
+                        %                                     %Uini{r,d} = Uini{r,d}/sum(Uini{r,d}); % enforce mean equal to one
+                        %                                 case '1' % first weight set to one
+                        %                                     UU = [1 zeros(1,ss(d)-1)];
+                        %                                 case 'n' % fixed weights (if not provided by user, ones)
+                        %                                     % warning('Fixed set of weights for component %d and rank %r not provided, will use zeros',d,r);
+                        %                                     UU = ones(1,ss(d));
+                        %                             end
+                        %                        end
                         obj.Weights(d).PosteriorMean(r,:) = UU;
-                    elseif size(UU,2) ~= ss(d)
+                    elseif size(UU,2) ~= W.nWeight
                         error('number of weights for component %d (%d) does not match number of corresponding covariates (%d)',d, size(UU,2),ss(d));
                     elseif isvector(UU) && iscolumn(UU)
                         obj.Weights(d).PosteriorMean = UU';
@@ -2344,8 +2460,14 @@ theta_LB = zeros(1,nFun);
                 for r=1:obj(i).rank
                     for d=1:obj(i).nDim
                         P = obj(i).Prior(r,d);
-                        ct = obj(i).Weights(d).constraint(r);
-                        if ct ~= 'n'
+                        % cc = obj(i).Weights(d).constraint(r);
+                        W = obj(i).Weights(d);
+                        C = constraint_structure(W);
+                        if C.type == "fixed"
+                            % fixed weights: set to 1
+                            obj(i).Weights(d).PosteriorMean(r,:) = ones(1,obj(i).Weights(d).nWeight);
+                        else
+
                             if d==first_update_dimension(obj(i))
                                 % first dimension to update should be zero (more generally: prior mean)
                                 UU = P.PriorMean;
@@ -2358,20 +2480,31 @@ theta_LB = zeros(1,nFun);
                                 UU =  P.PriorMean + mvnrnd(zeros(1,size(pp,1)), Sigma)*pp;
                             end
 
-                            switch ct
-                                case 'b' %mean zero
-                                    UU = UU - mean(UU);
-                                case 'm' % mean equal to one
-                                    UU = UU/mean(UU); % all weight set to one
-                                case 's' % sun of weights equal to one
-                                    UU = UU/sum(UU); % all weights equal summing to one
-                                case '1' % first weight set to one
-                                    UU(1) = 1;
+                            % offset to make sure that it fullfils the
+                            % constraint
+                            if C.nConstraint==1 && C.type == "mean1"
+                                UU = UU/mean(UU); % all weight set to one
+                            elseif C.nConstraint==1 && C.type == "sum1"
+                                UU = UU/sum(UU); % all weights equal summing to one
+                            elseif C.nConstraint>0
 
+                                %general formula
+                                UU = UU + (C.u - UU*C.V)*pinv(full(C.V));
                             end
+
+                            %                             switch cc
+                            %                                 case 'b' %mean zero
+                            %                                     UU = UU - mean(UU);
+                            %                                 case 'm' % mean equal to one
+                            %                                     UU = UU/mean(UU); % all weight set to one
+                            %                                 case 's' % sun of weights equal to one
+                            %                                     UU = UU/sum(UU); % all weights equal summing to one
+                            %                                 case '1' % first weight set to one
+                            %                                     UU(1) = 1;
+                            %
+                            %                             end
                             obj(i).Weights(d).PosteriorMean(r,:) = UU;
-                        else % fixed weights: set to 1
-                            obj(i).Weights(d).PosteriorMean(r,:) = ones(1,obj(i).Weights(d).nWeight);
+
                         end
                     end
                 end
@@ -2396,8 +2529,7 @@ theta_LB = zeros(1,nFun);
                         if isempty(W.PosteriorCov) && W.nWeights>0
                             error('Posterior has not been computed. Infer model first');
                         end
-                        ct = W.constraint(r);
-                        if ct ~= 'n' % except for fixed weights
+                        if constraint_type(W)~="fixed" % except for fixed weights
 
                             % sampled for mvn distribution with linear constraint
                             %                                 pp = PP{r,d};
@@ -2511,7 +2643,7 @@ theta_LB = zeros(1,nFun);
             for d=1:length(dims)
                 d2 = dims(d);
                 for r=1:obj.rank % assign new set of weight to each component
-                    if obj.Weights(d2).constraint(r)~='n' % unless fixed weights
+                    if constraint_type(obj.Weights(d2))~="fixed" % unless fixed weights
                         P = obj.Prior(r,d2); % corresponding prior
                         dif =  obj.Weights(d2).PosteriorMean(r,:) - P.PriorMean; % distance between MAP and prior mean
 
@@ -2530,7 +2662,10 @@ theta_LB = zeros(1,nFun);
 
         %% first dimension to be updated in IRLS
         function d = first_update_dimension(obj)
-            d = find(any([obj.Weights.constraint]=='f',1),1); % start update with first free dimension
+             % start update with first free dimension
+            d = find(any(isFreeWeightSet(obj),1),1);
+
+            % if no one then start with first dim
             if isempty(d)
                 d = 1;
             end
@@ -2748,22 +2883,29 @@ theta_LB = zeros(1,nFun);
             % obj.label = [obj1.label obj2.label];
             obj.formula = [obj1.formula ' * ' obj2.formula];
 
-            FreeRegressors = isFreeWeights(obj);
-            if sum(FreeRegressors)>1
+            FreeRegressorSet = isFreeWeightSet(obj);
+            if sum(FreeRegressorSet)>1
                 % fprintf('multiplying free regressors ... now only first will be free\n');
 
                 % turning free regressors in second object to one-mean regressor
-                for d=find(FreeRegressors(obj1.nDim+1:end))
-                    obj.Weights(obj1.nDim+d).constraint = 'm';
+                for d=find(FreeRegressorSet(obj1.nDim+1:end))
+                    obj.Weights(obj1.nDim+d).constraint = "mean1";
                 end
             end
         end
 
         %% WHETHER WEIGHTS ARE FREE (NOT CONSTRAINED)
-        function bool = isFreeWeights(obj)
+        function bool = isFreeWeightSet(obj)
             assert(numel(obj)==1, 'only for scalar regressor object');
-            bool = [obj.Weights.constraint]=='f';
+            bool = constraint_type(obj.Weights)=="free";
         end
+
+        %% WHETHER WEIGHTS ARE FIXED (FULLY CONSTRAINED)
+        function bool = isFixedWeightSet(obj)
+            assert(numel(obj)==1, 'only for scalar regressor object');
+            bool = constraint_type(obj.Weights)=="fixed";
+        end
+
 
         % R1 * R2 is the same as R1 .* R2
         function obj = mtimes(varargin)
@@ -2822,14 +2964,14 @@ theta_LB = zeros(1,nFun);
                 i2 = find([obj2.nDim] ==1);
                 W1 = [obj1(i1).Weights];
                 W2 = [obj2(i2).Weights];
-                free_continuous1 = strcmp({W1.type}, 'continuous') & strcmp({W1.constraint}, 'f');
-                free_continuous2 = strcmp({W2.type}, 'continuous') & strcmp({W2.constraint}, 'f');
+                free_continuous1 = strcmp({W1.type}, 'continuous') & constraint_type(W1)=="free";
+                free_continuous2 = strcmp({W2.type}, 'continuous') & constraint_type(W2)=="free";
 
                 if    any(free_continuous1) && any(free_continuous2)
                     %  change second constraint to zero-sum to avoid identifiability issues with the likelihood.
                     chg = i2(free_continuous2);
                     for i=chg
-                        obj2(i).Weights.constraint = 'b';
+                        obj2(i).Weights.constraint = "nullsum";
                     end
                 end
             end
@@ -3295,9 +3437,9 @@ theta_LB = zeros(1,nFun);
             obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, []);
             obj.Weights(nDim_new).label = 'lag';
             if any(SplitValue) || isempty(SplitValue)
-                obj.Weights(nDim_new).constraint = 'f';
+                obj.Weights(nDim_new).constraint = "free";
             else % if no splitting, i.e multidimensional regressor, need to set some constraint
-                obj.Weights(nDim_new).constraint = 'm';
+                obj.Weights(nDim_new).constraint = "mean1";
             end
 
             % place dimension for lag-weights first
@@ -3310,6 +3452,33 @@ theta_LB = zeros(1,nFun);
                 SplitDims = find(SplitValue) + PlaceLagFirst;
                 obj = obj.split_dimension(SplitDims);
             end
+        end
+
+        %% SELECT REGRESSOR BY INDEX OF LABEL
+        function obj = select_regressors(obj, idx)
+            %% select regressors by index or label  (e.g. for plotting)
+            if isstring(idx)
+                idx = {idx};
+            end
+
+            AllWeights = [obj.Weights];
+            AllLabel = {AllWeights.label};
+
+            % if regressor labels are provided, convert to labels
+            jdx = cell(1,length(idx));
+            if iscell(idx)
+                for m=1:length(idx)
+                    ii = find(strcmp(idx{m},AllLabel));
+                    if isempty(ii)
+                        error('label ''%s'' does not match any regressor label', idx{m});
+                    end
+                    jdx{m} = ii;
+                end
+                idx = jdx;
+            end
+
+            % select set of regressors;
+            obj = obj(idx);
         end
 
         %% CONCATENATE REGRESSORS
@@ -3376,7 +3545,7 @@ theta_LB = zeros(1,nFun);
             obj(1).Data = cat(D+1, obj.Data); % concatenate all regressors
 
             if D==nD && isempty(obj(1).Weights(D).constraint)
-                obj(1).Weights(D).constraint = 'f';
+                obj(1).Weights(D).constraint = "free";
             end
 
             %% deal with prior
@@ -3509,7 +3678,7 @@ theta_LB = zeros(1,nFun);
 
             % add dummy weights, HP
             obj.Weights(obj.nDim+1).nWeight = 1;
-            obj.Weights(obj.nDim+1).constraint = 'n';
+            obj.Weights(obj.nDim+1).constraint = "fixed";
             obj.HP(end+1) = HPstruct;
             obj.Prior(end+1) = empty_prior_structure(1);
 
@@ -3538,6 +3707,86 @@ theta_LB = zeros(1,nFun);
 
         end
 
+        %% PLOT FITTED WEIGHTS
+        function h = plot_weights(obj, U2, varargin)
+            % plot_weights(R) plot weights from regressor R
+            % R.plot_weights()
+            % R.plot_weights(1:3)
+            % R.plot_weights('regressor1')
+            % R.plot_weights({'regressor1','regressor2'})
+            %
+            % R.plot_weights(1:3, h); to use subplots defined by handles
+            %
+            % nSub = M.plot_weights(..., 'nsubplot') to have number of
+            % subplots
+
+
+            if nargin<2 || isequal(U2, 'nsubplot') || isempty(U2)
+                if nargin>=2 && isequal(U2, 'nsubplot')
+                    varargin = {U2};
+                end
+                U2 = 1:numel(obj);
+            end
+
+
+            % select corresponding regressors to be plotted
+            obj = select_regressors(obj, U2);
+
+            only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
+            cols = defcolor;
+            colmaps = {'jet','hsv','winter','automn'};
+
+            NoFixedWeights = cell(1,numel(obj));
+            for m=1:numel(obj)
+                NoFixedWeights{m} = ~isFixedWeightSet(obj(m)); % regressors with constant
+            end
+            nNoFixedWeights  = cellfun(@sum,NoFixedWeights); % number of non-fixedd dimensions in each module
+            nSubplots = sum(nNoFixedWeights); % number of subplots
+
+            if only_nsubplot % only ask for number of subplots
+                h = nSubplots;
+                return;
+            end
+
+            % check if subplots are assigned
+            if ~isempty(varargin) && ~isequal(varargin{1}, 'nsubplot')
+                h.Axes = varargin{1};
+                varargin(1) = [];
+            else % otherwise define a grid of subplots in current figure
+                for i=1:nSubplots
+                    h.Axes(i) = subplot2(nSubplots,i);
+                end
+            end
+
+            i = 1; % subplot counter
+            c = -1; % color counter
+            cm = 1; % colormap counter
+            % h.Axes = [];
+            h.Objects = {};
+
+            for m=1:numel(obj)%obj.nMod
+
+                for d = find(NoFixedWeights{m}) % loop between subplots
+
+                    axes(h.Axes(i)); % set as active subplot
+
+                    W = obj(m).Weights(d); % set of weights
+
+                    % add label
+                    if isempty(W.label)
+                        W.label = sprintf('U%d_%d',m,d); % default label
+                    end
+
+                    % plot weights
+                    [h_nu, c, cm] = plot_single_weights(W, obj(m).rank, c, cm, cols, colmaps);
+
+                    h.Objects = [h.Objects {h_nu}];
+                    i = i+1; % update subplot counter
+                end
+            end
+        end
+
+
         %% EXPORT WEIGHTS TO TABLE
         function T = export_weights_to_table(obj)
             % T = M.export_weights_to_table(obj);
@@ -3551,7 +3800,7 @@ theta_LB = zeros(1,nFun);
             T = table(reg_idx, label, 'VariableNames',{'regressor','label'});
 
 
-            filds = {'scale','PosteriorStd','T','p'};
+            filds = {'scale','PosteriorMean','PosteriorStd','T','p'};
             for f=1:length(filds)
                 ff =  concatenate_weights(obj,0,filds{f}); % concatenate values over all regressors
                 if length(ff) == height(T)
@@ -3559,7 +3808,7 @@ theta_LB = zeros(1,nFun);
                 end
             end
 
-            % prior mea
+            % prior mean
             P = [obj.Prior];
             PM = {P.PriorMean};
             for i=1:length(W) % if using basis function, project prior mean on full space
@@ -3595,7 +3844,7 @@ theta_LB = zeros(1,nFun);
             nW_cum = [0 cumsum(nW)];
             nHP_cum = [0 cumsum(nHP)];
             nHP_reg = nHP_cum(nW_cum(2:end)+1) - nHP_cum(nW_cum(1:end-1)+1); % total number of HPs per regressor
-            reg_idx = repelem(1:length(obj), nHP_reg)';
+            RegressorId = repelem(1:length(obj), nHP_reg)';
 
             value = [H.HP]';
             label = [H.label]';
@@ -3604,9 +3853,9 @@ theta_LB = zeros(1,nFun);
             LowerBound = [H.LB]';
             if isfield(H, 'std')
                 standardDeviation = [H.std]';
-                T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound, standardDeviation);
+                T = table(RegressorId, transform, label, value, fittable, LowerBound, UpperBound, standardDeviation);
             else
-                T = table(reg_idx, transform, label, value, fittable, LowerBound, UpperBound);
+                T = table(RegressorId, transform, label, value, fittable, LowerBound, UpperBound);
             end
 
         end
@@ -3626,18 +3875,151 @@ end
 %%%% END OF METHODS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+
+%% PLOT SINGLE WEIGHTS
+function [h_nu, c, cm] = plot_single_weights(W, rk, c, cm, cols, colmaps)
+if isa(W.plot, 'function_handle')
+    %% custom-defined plot
+    h_nu = W.plot(W);
+    return;
+end
+
+title(W.label);
+
+if isempty(W.scale)
+    W.scale = 1:W.nWeight;
+end
+scale = W.scale';
+
+% error bar values
+U = W.PosteriorMean'; % concatenate over ranks
+if isempty(W.PosteriorStd)
+    se = nan(size(U));
+else
+    se = W.PosteriorStd';
+end
+
+if size(scale,2)>1
+    if size(scale,2)>2
+        warning('more than 2 dimensions for weights, ignoring extra dimensions');
+    end
+
+    [scale, U, se] = mesh_to_matrix(scale(:,1:2), U, se);
+end
+if ~iscell(scale)
+    scale = {scale};
+end
+
+
+%% plotting options
+plot_opt = {};
+
+if W.nWeight < 8
+    plot_opt = {'bar'};
+end
+
+% default color
+plot_opt{end+1} = 'Color';
+
+% select color map
+twodmap = size(scale{1},2)>1;
+nCurve = size(U,2);
+
+if nCurve<5 % different colors for each curve
+
+    plot_opt{end+1} = cols(mod(c+(1:nCurve),length(cols))+1);
+    if rk ==1
+        c = c + nCurve;
+    end
+else % use color map
+    plot_opt{end+1} = colmaps{cm};
+    cm = cm + 1;
+end
+imageplot = nCurve>9;
+
+if ~isempty(W.plot)
+    plot_opt = [plot_opt W.plot];
+end
+
+%% plot
+if twodmap
+    % color plot
+    h_nu = colorplot(scale{1}(:,1),scale{1}(:,2), real(U));
+elseif imageplot
+    % image plot
+    h_nu = imagescnan(scale{2},scale{1}, U);
+else
+    % cufve/bar plot with errors
+    [~,~,h_nu] = wu([],U,se,scale,plot_opt{:});
+end
+
+% add horizontal line for reference value
+if ~imageplot && W.nWeight >= 8
+    hold on;
+    switch constraint_type(W)
+        case "mean1"
+            y_hline = 1;
+        case "sum1"
+            y_hline = 1/W.nWeight;
+        otherwise
+            y_hline = 0;
+    end
+    plot(xlim,y_hline*[1 1], 'Color',.7*[1 1 1]);
+end
+
+
+end
+
+%% RECONSTRUCT MATRIX FROM MESH
+function [S, U, se] = mesh_to_matrix(S, U, se, cutoff)
+% [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
+% to transform mesh data to matrix form (if the inoccupancy ratio is
+% smaller than cutoff)
+
+if nargin<4
+    cutoff = 3;
+end
+
+% reconstruct weights as matrix
+x_unq = unique(S(:,1));
+y_unq = unique(S(:,2));
+nX = length(x_unq);
+nY = length(y_unq);
+
+% compute ratio of total mesh points by provided points
+ratio = nX*nY/size(S,1);
+
+% if ratio is above threshold, keep data (i.e. they don't really form a
+% mesh)
+if ratio>cutoff
+    return;
+end
+
+U2 = nan(nX,nY);
+se2 = nan(nX,nY);
+for iX=1:nX
+    for iY=1:nY
+        if isnumeric(S)
+            bool = (S(:,1) == x_unq(iX)) & (S(:,2)==y_unq(iY));
+        else
+            bool = strcmp(S(:,1),x_unq{iX}) & strcmp(S(:,2),x_unq{iY});
+
+        end
+        if any(bool)
+            U2(iX,iY) = U(find(bool,1));
+            se2(iX,iY) = se(find(bool,1));
+        end
+    end
+end
+U = U2;
+se = se2;
+S = {x_unq y_unq};
+end
+
 %% CREATES A DESIGN MATRIX (OR ARRAY) WITH ONE-HOT ENCODING - ONE COLUMN PER VALUE OF X
 function val = one_hot_encoding(X, scale,OneHotEncoding, nD)
 
 nVal = size(scale,2);
-%siz = size(X);
-%if any(strcmp(summing,{'split','separate'})) % different function for each column
-%    f_ind = repmat(0:prod(siz(2:end))-1,siz(1),1); % indicator function
-%    f_ind = reshape(f_ind, siz);
-%    nFun = prod(siz(2:end)); % total number of weights
-%else
-
-%end
 
 [X, siz] = replace(X,scale); % replace each value in the vector by its index
 
@@ -4121,7 +4503,7 @@ k = HP(nFun+1:2*nFun); % shape parameter
 X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
 
 B = zeros(nFun,length(X));
-    nz = (X>=0); % time domain with non-null value
+nz = (X>=0); % time domain with non-null value
 for p=1:nFun
     B(p,nz) = X(nz).^(k(p)-1) .* exp(-X(nz)/theta(p)) / gamma(k(p)) / theta(p).^k(p);
     if k(p)==1
@@ -4135,12 +4517,10 @@ if nargout>3
     gradB = zeros(nFun, length(X),length(HP));
     for p=1:nFun
 
-    % gradient over scale parameter
-    gradB(p,nz,p) = B(p,nz).* (X(nz) - k(p)*theta(p)) / theta(p)^2;
+        % gradient over scale parameter
+        gradB(p,nz,p) = B(p,nz).* (X(nz) - k(p)*theta(p)) / theta(p)^2;
 
-    X(nz).^(k(p)-1) .* exp(-X(nz)/theta(p)) / gamma(k(p)) / theta(p).^k(p);
-
-    % gradient over shape parameter
+        % gradient over shape parameter
         gradB(p,nz,p+nFun) = B(p,nz).* ( log(X(nz)) - psi(k(p)) - log(theta(p))   );
 
         if k(p)>=1
@@ -4180,7 +4560,7 @@ function W = empty_weight_structure(nD, DataSize, scale, color)
 W = struct('type','','label', '', 'nWeight',0, 'nFreeWeight',0,...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
-    'scale',[],'constraint','f','plot',[],'basis',[],'invHinvK',[]);
+    'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[]);
 % other possible fields: U_CV, U_allstarting
 
 % make it size nD
@@ -4422,3 +4802,71 @@ for l=1:nLevel
 end
 end
 
+%% constraint structure
+function S = constraint_structure(W)
+C = W.constraint;
+nWeight = W.nWeight;
+if isstruct(C)
+    assert(isfield(C,{'V','u'}), 'incorrect constraint structure');
+    if ~isfield(C, 'type')
+        C.type = "custom";
+    end
+    if ~isfield(C, 'nConstraint')
+        C.nConstraint = length(C.v);
+    end
+    S = C;
+    return;
+end
+assert(ischar(C) || isstring(C), 'incorrect constraint field');
+
+opt_list = ["free";"fixed";"mean1";"sum1";"nullsum";"first1"];
+old_optlist = 'fnmsb1';
+if length(char(C))==1
+    %old format
+    C = opt_list(char(C)==old_optlist);
+end
+
+
+switch string(C)
+    case "free"
+        V = spalloc(nWeight,0,0);
+        u = [];
+    case "fixed"
+        V = speye(nWeight);
+        u = [];
+    case "mean1"
+        V = ones(nWeight,1);
+        u = nWeight;
+    case "sum1"
+        V = ones(nWeight,1);
+        u = 1;
+    case "first1"
+        V = [1; zeros(nWeight-1,1)];
+        u = 1;
+    case "nullsum"
+        V = ones(nWeight,1);
+        u = 0;
+    otherwise
+        error('incorrect constraint type: %s',C);
+end
+nConstraint = size(V,2);
+S = struct('type',string(C),'V',V, 'u',u,'nConstraint',nConstraint);
+end
+
+%% constraint type
+function str = constraint_type(W)
+str = strings(size(W));
+for i=1:numel(W)
+    S = constraint_structure(W(i));
+    str(i) = string(S.type);
+end
+end
+
+%% constrained weight
+function bool = constrained_weight(W)
+% boolean array: for each weight, whether it is constrained to a fixed
+% value
+S = constraint_structure(W);
+one_constrained_weight = (sum(S.V~=0,1)==1); % for each constraint,whether it affects only one weight (i.e.fully constrains it)
+bool = any(S.V(:,one_constrained_weight),2);
+end
