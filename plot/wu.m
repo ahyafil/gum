@@ -638,11 +638,18 @@ end
 
 %% use values for xtick if set 'normal'
 if strcmp(xtick, 'normal') && ~isempty(levels{1}) && isempty(X)
+    
+    if ~any(cellfun(@iscell, levels{1}))
     % try to convert all labels into X value
     X = cellfun(@str2double, levels{1}(:)');
     if any(isnan(X)) || isempty(X) % if its fails, simply take first integers
         X = 1:nPar;
     end
+    else
+         X = 1:nPar;
+    end
+
+
 elseif isempty(X)
     X = 1:nPar;
 end

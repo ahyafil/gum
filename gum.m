@@ -21,7 +21,7 @@ classdef gum
     % - 'constant': whether a regressor of ones is included (to capture the
     % intercept). Possible values: 'on' [default], 'off'
     %
-    % - 'mixture': for mixture of GUMS: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
+    % - 'mixture': for mixture of GUMs: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
     % (e.g. 'hmm3' for 3-state HMM). The value can also be a user-defined mixture model (defined with mixturemodel). Other fields may be provided:
     % - 'indexComponent': to which component each regressor object is assigned to. If not provided, all regressors are duplicated
     % (i.e. each state corresponds to the same model but possibly with different weights). indexComponent must be a vector of indices of length K
@@ -88,7 +88,6 @@ classdef gum
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
     % - negative binomial, probit (finish)
-    % - raised cosine, correct default HPs
     % - 'fourier' for periodic (TEST)
     % - link functions as in glmfit
     % - CV gradient for dispersion parameter
@@ -103,12 +102,11 @@ classdef gum
     % - plot_vif
     % - add number of (free) HPs to metrics
     % - plot with 2D scale
-    % - move plot methods to regressors
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
     % - add history regressors (with exp basis)
     % - knock-out model
-    % - print summary, weights, hyperparameters
+    % - print summary, weights, hyperparameters  (TEST ALL)
     % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
 
     %
@@ -173,6 +171,7 @@ classdef gum
     %
 
     properties
+        formula = ''
         regressor
         T
         obs
@@ -204,7 +203,9 @@ classdef gum
             end
 
             if istable(M)
-                [M, T, param] = parse_formula(M,T, param);
+                fmla = T;% formula
+                [M, T, param] = parse_formula(M,fmla, param); % parse formula
+                obj.formula = fmla;
             end
 
             obj.regressor = M;
@@ -216,6 +217,14 @@ classdef gum
             nMod = length(M); % number of modules
 
             %  n = prod(n); % number of observations
+
+            % compose formula
+            if isempty(obj.formula)
+                for i=1:nMod
+                    obj.formula = [obj.formula M(i).formula ' + '];
+                end
+                obj.formula(1:end-3) = [];
+            end
 
             %% check dependent variable
             if isvector(T)
@@ -340,16 +349,7 @@ classdef gum
                     M(m).rank = rank(m);
                 end
             end
-
-            for m=1:obj.nMod
-
-                % weight constraint
-                cc = [M(m).Weights.constraint];
-                %  if ~isempty(cc)
-                if ~all(any(cc(:)== ['fbms1n' 0],2))
-                    error('Field constraint must be composed of the following characters: ''f'', ''b'',''m'',''s'',''1'',''n''');
-                end
-            end
+           
 
             obj.param = param;
             obj.regressor = M;
@@ -396,6 +396,132 @@ classdef gum
 
 
         end
+
+        %%% DISPLAY GUM OBJECT
+        function print(obj)
+            disp(obj);
+        end
+
+
+        function disp(obj)
+            if numel(obj)>1 || isempty(obj)
+               % disp(obj);
+                return;
+            end
+
+            fprintf('Generalized Unrestricted Model (GUM) object\n');
+            fprintf('%s\n', obj.formula);
+            if isglm(obj)
+                typestr = 'GLM';
+            elseif isgam(obj)
+                typestr = 'GAM';
+            else
+                typestr = 'GUM';
+            end
+            fprintf('%16s: %14s     %16s: %14s\n', 'Type',typestr, 'Observations', obj.obs);
+            fprintf('%16s: %14d     %16s: %14d\n', 'nRegressorBlock',obj.nObs, 'ObservationBlock', obj.nMod);
+
+            % add scores to summary
+            Sc = export_scores_to_table(obj);
+            cnt = 1;
+            ScoreLabel = Sc.Properties.VariableNames;
+            ScoreString = '';
+            ScoreValues = {};
+            for s=1:length(ScoreLabel)
+                this_score = Sc.(ScoreLabel{s});
+                if isscalar(this_score) || ischar(this_score)
+                    ScoreString = [ScoreString '%16s: %14'];
+                    if ischar(this_score)
+                        ScoreString(end+1) = 's';
+                    elseif any(strcmp(ScoreLabel{s},{'df', 'nParameters','nFreeParameters','exitflag'} ))
+                        ScoreString(end+1) = 'd';
+                    else
+                        ScoreString(end+1) = 'f';
+                    end
+                    if mod(cnt,2)
+                        ScoreString = [ScoreString '     '];
+                    else
+                        ScoreString = [ScoreString '\n'];
+                    end
+                    ScoreValues{end+1} = ScoreLabel{s};
+                    ScoreValues{end+1} = this_score;
+                    cnt = cnt+1;
+                end
+               
+            end
+             if ~mod(cnt,2)
+                    ScoreString = [ScoreString '\n'];
+                end
+            fprintf(ScoreString,ScoreValues{:});
+
+            % add weights to summary
+            if obj.isestimated()
+            print_weights(obj);
+            else
+                fprintf('Weights: not estimated\n');
+            end
+
+        end
+
+        %%% PRINT WEIGHTS
+        function print_weights(obj)
+            % print_weights(M) prints summary table for weights
+
+            if obj.isestimated()
+                W = export_weights_to_table(obj);
+                nReg = height(W);
+                if nReg>30
+                    fprintf('\nToo many regressor values (%d) to print, use export_weights_to_table instead\n', nReg);
+                elseif isgam(obj)
+                    fprintf('%12s %10s %8s %8s %8s %8s\n', 'Regressor','Level','Mean','StdDev','T-stat','p-value');
+                    for r=1:nReg
+                        fprintf('%12s %10s %8f %8f %8f %8f\n', W.label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                    end
+                else
+                    fprintf('%10s %12s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','Mean','StdDev','T-stat','p-value');
+                    for r=1:nReg
+                        fprintf('%10s %12s %8f %8f %8f %8f %8f\n', W.regressor(r), W.label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                    end
+                end
+
+            else
+                fprintf('weights have not been estimated, cannot print summary\n');
+            end
+        end
+
+
+        %%% PRINT HYPERPARAMETERS
+        function print_hyperparameters(obj)
+            % print_weights(M) prints summary table for weights
+
+            H = export_hyperparameters_to_table(obj);
+            nHP = height(H);
+            if isgam(obj)
+
+                fprintf('%20s %12s %8s %8s %8s %8s\n', 'Regressor','Level','value','fittable','LowerBnd','UpperBnd');
+                for r=1:nHP
+                    if iscell(H.label)
+                        this_label = H.label{r};
+                    else
+                        this_label = H.label(r);
+                    end
+                    fprintf('%20s %12s %8f %8d %8f %8f\n', H.transform{r}, this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
+                end
+            else
+                fprintf('%10s %20s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','value','fittable','LowerBnd','UpperBnd');
+                
+                for r=1:nHP
+                     if iscell(H.label)
+                        this_label = H.label{r};
+                    else
+                        this_label = H.label(r);
+                    end
+                    fprintf('%10s %20s %8f %8f %8d %8f %8f\n', H.RegressorId{r}, H.transform(r), this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
+                end
+            end
+
+        end
+
 
         %% SELECT SUBSET OF OBSERVATIONS FROM MODEL
         function obj = extract_observations(obj,subset)
@@ -492,10 +618,12 @@ classdef gum
             % [default], 'on' and 'check' (uses gradient but checks first that
             % numerical estimate is correct)
             %
+            % - 'display':'on','off'
             % -'CovPriorJacobian': provide gradient of prior covariance matrix w.r.t hyperparameters
             % to compute gradient of MAP LLH over hyperparameters.
             % - 'maxiter_HP': integer, defining the maximum number of iterations for
             % hyperparameter optimization (default: 200)
+            % - 'TolFun': tolerance criterion for stopping optimization
             % - 'no_fitting': if true, does not fit parameters, simply provide as output variable a structure with LLH and
             % accuracy for given set of parameters (values must be provided in field
             % 'U')
@@ -504,6 +632,7 @@ classdef gum
             HPfit = 'em'; % default algorithm
             display = 'iter'; % default verbosity
             use_gradient = 'on'; % use gradient for CV fitting
+            maxiter = 200; % maximum number of iterations
             HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
 
             if nargin==1
@@ -526,9 +655,9 @@ classdef gum
             %% which order for components
             for m=1:obj.nMod
                 if isempty(M(m).ordercomponent) && M(m).nDim>1
-                    dd = M(m).nDim; % dimension in this module
-                    cc = [M(m).Weights.constraint]; % constraint for this module
-                    M(m).ordercomponent = all(all(cc(:,1:dd)==cc(1,1:dd))); % default: reorder if all components have same constraints
+                   % dd = M(m).nDim; % dimension in this module
+                    M(m).ordercomponent = true;
+                  %  M(m).ordercomponent = all(all(cc(:,1:dd)==cc(1,1:dd))); % default: reorder if all components have same constraints
                 end
             end
 
@@ -586,10 +715,19 @@ classdef gum
             HP_UB = HP_UB(HP_fittable);
 
             %% optimization parameters
-            if isfield(param, 'maxiter_HP')
-                maxiter = param.maxiter_HP;
+            if isfield(param, 'maxiter')
+                maxiter = param.maxiter;
+                param.maxiter_HP = param.maxiter;
+                param = rmfield(param, 'maxiter');
             else
-                maxiter = 200;
+                param.maxiter_HP = maxiter;
+            end
+            if isfield(param, 'TolFun')
+                HP_TolFun = param.TolFun;
+                param.TolFun_HP = param.TolFun;
+                param = rmfield(param, 'TolFun');
+            else
+                param.TolFun_HP = HP_TolFun;
             end
             if isfield(param, 'initialpoints')
                 obj.param.initialpoints = param.initialpoints;
@@ -716,7 +854,7 @@ classdef gum
                                                     this_PriorMean = this_PriorMean*B.B;
                                                     this_cov = B.B' * this_cov *B.B;
 
-                                                    assert(W.constraint=='f', 'EM not coded for non-free basis');
+                                                    assert(W.constraint=="free", 'EM not coded for non-free basis');
                                                 else
                                                     2;
                                                 end
@@ -788,6 +926,9 @@ classdef gum
                     % obj.regressor = M2;
                     obj.param = param_tmp;
 
+                    % allocate fitted hyperparameters to each module
+                    obj.regressor = obj.regressor.set_hyperparameters(HP);
+
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
 
                     % clear persisitent value for best-fitting parameters
@@ -807,8 +948,8 @@ classdef gum
             end
 
 
-            % allocate fitted hyperparameters to each module
-            M = M.set_hyperparameters(HP);
+            %   % allocate fitted hyperparameters to each module
+            %   M = M.set_hyperparameters(HP);
             %             for m=1:obj.nMod
             %                 for d=1:M(m).nDim
             %                     for r=1:size(M(m).HP,1)
@@ -1391,6 +1532,7 @@ classdef gum
             M = obj.regressor;
             nD = [M.nDim]; % number of dimension for each module
             D = max([M.nFreeDimensions]);
+            assert(D>0, 'no free weights');
 
             if isempty(obj.mixture)
                 nC = 1; % number of components
@@ -1861,18 +2003,17 @@ classdef gum
                         % if iter<5
                         recompute = false;
                         for m=find(idxComponent==cc & nD>1)
-                            ct = [M(m).Weights.constraint];
+                            free_weight_set = isFreeWeightSet(M(m));
                             for r=1:rank(m)
                                 alpha = zeros(1,nD(m));
-                                free_weights = ct(r,:)=='f';
-                                n_freeweights = sum(free_weights);
+                                n_freeweights = sum(free_weight_set(r,:));
                                 if n_freeweights>1
-                                    this_nLP = -logprior{m}(r,free_weights);
+                                    this_nLP = -logprior{m}(r,free_weight_set);
                                     mult_prior_score = prod(this_nLP )^(1/n_freeweights);
                                     if mult_prior_score>0
-                                        alpha(free_weights) = sqrt( mult_prior_score./ this_nLP); % optimal scaling factor
+                                        alpha(free_weight_set) = sqrt( mult_prior_score./ this_nLP); % optimal scaling factor
 
-                                        for d=find(free_weights)
+                                        for d=find(free_weight_set)
                                             obj.regressor(m).Weights(d).PosteriorMean(r,:) = obj.regressor(m).Weights(d).PosteriorMean(r,:) * alpha(d);
                                             logprior{m}(r,d) = logprior{m}(r,d)*alpha(d)^2;
                                         end
@@ -1884,7 +2025,7 @@ classdef gum
 
                         %% compute predictor
                         if recompute
-                            obj(idxC) = Predictor(obj(idxC));
+                            obj = Predictor(obj,cc);
                             if ~FixedDispersion
                                 s = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  update scaling parameter: unbiased mse
                                 obj.score.scaling = s;
@@ -2041,7 +2182,7 @@ classdef gum
 
         %% sample weights from gaussian prior
         function obj = sample_weights_from_prior(obj)
-                 % M = M.sample_weights_from_prior();
+            % M = M.sample_weights_from_prior();
 
             for m=1:length(obj)
                 obj(m).regressor = obj(m).regressor.sample_weights_from_prior;
@@ -2049,9 +2190,9 @@ classdef gum
             end
         end
 
-%% sample weights from posterior (approximate)
- function obj = sample_weights_from_posterior(obj)
-     % M = M.sample_weights_from_posterior();
+        %% sample weights from posterior (approximate)
+        function obj = sample_weights_from_posterior(obj)
+            % M = M.sample_weights_from_posterior();
             for m=1:length(obj)
                 obj(m).regressor = obj(m).regressor.sample_weights_from_posterior;
                 return;
@@ -2285,14 +2426,22 @@ classdef gum
 
         %% GENERATE SAMPLE FROM MODEL
         function [obj, smp] = Sample(obj)
-        % M = M.Sample(); 
-        % sample observations from model, using inferred weights (Posterior
-        % Mean, i.e. MAP weights)
-        %
-        % [M, smp] = Sample(M) outputs the sample
+            % M = M.Sample();
+            % sample observations from model, using inferred weights (Posterior
+            % Mean, i.e. MAP weights)
+            %
+            % [M, smp] = Sample(M) outputs the sample
+
+            if numel(obj)>1
+                smp = cell(size(obj));
+                for i=1:numel
+                    [obj(i), smp{i}] = Sample(obj(i));
+                end
+                return;
+            end
 
             % retrieve expected value
-            if isempty(obj.Predictions.Expected)
+            if isempty(obj.Predictions) || isempty(obj.Predictions.Expected)
                 [obj,Y] = ExpectedValue(obj);
             else
                 Y = obj.Predictions.Expected;
@@ -2313,36 +2462,36 @@ classdef gum
 
         %% GENERATE SAMPLE FROM MODEL
         function [obj, smp] = Sample_Observations_From_Posterior(obj, nRepetitions)
- % M = M.Sample_Observations_From_Posterior();
-        % sample observations from model, using weights sampled from the posterior
-        %
-        % M = M.Sample_Observations_From_Posterior(nRepetitions) to repeat
-        % the sampling process nRepetitions time (each with a new sample
-        % from the posterior)
-        %
-        % [M, smp] = Sample_Observations_From_Posterior(M) outputs the sample
+            % M = M.Sample_Observations_From_Posterior();
+            % sample observations from model, using weights sampled from the posterior
+            %
+            % M = M.Sample_Observations_From_Posterior(nRepetitions) to repeat
+            % the sampling process nRepetitions time (each with a new sample
+            % from the posterior)
+            %
+            % [M, smp] = Sample_Observations_From_Posterior(M) outputs the sample
 
-if nargin<2
-    nRepetitions=1;
-end
+            if nargin<2
+                nRepetitions=1;
+            end
 
-if numel(obj)>1
-for i=1:numel(obj)
-[obj(i), smp{i}] = Sample_Observations_From_Posterior(obj(i), nRepetitions);
-end
-return;
-end
+            if numel(obj)>1
+                for i=1:numel(obj)
+                    [obj(i), smp{i}] = Sample_Observations_From_Posterior(obj(i), nRepetitions);
+                end
+                return;
+            end
 
-% preallocate matrix of sample (nRepetitions x nWeights)
-smp = zeros(nRepetitions, obj.nObs);
-for r=1:nRepetitions
-    % sample weights from posterior
-            obj2 = obj.sample_weights_from_posterior;
+            % preallocate matrix of sample (nRepetitions x nWeights)
+            smp = zeros(nRepetitions, obj.nObs);
+            for r=1:nRepetitions
+                % sample weights from posterior
+                obj2 = obj.sample_weights_from_posterior;
 
-            % sample observations with given set of weights
-            [~, smp(r,:)] = obj2.Sample();
-end
-            
+                % sample observations with given set of weights
+                [~, smp(r,:)] = obj2.Sample();
+            end
+
             obj.Predictions.sample_from_posterior = smp;
 
         end
@@ -2670,7 +2819,8 @@ end
 
             % check that covariance is symmetric
             if norm(V-V')>1e-3*norm(V)
-                if any(cellfun(@(x) any(sum(x=='f',2)>1), constraint_cell(M)))
+                %if any(cellfun(@(x) any(sum(x=='f',2)>1), constraint_cell(M)))
+                if any(cellfun(@(MM) any(sum(isFreeWeight(MM),2)>1), num2cell(M)))
                     warning('posterior covariance is not symmetric - this is likely due to having two free dimensions in our regressor - try adding constraints');
                 else
                     warning('posterior covariance is not symmetric - dont know why');
@@ -2783,8 +2933,9 @@ end
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
-                    if ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
-                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) %isequal(x,scale{1,d}) ,scale(2:end,d)))
+
+                    if ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d))) || ...
+                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) % just in case of numerical imprecisions
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
@@ -2901,7 +3052,7 @@ end
                         all_score{m}.Dataset = string(all_score{m}.Dataset);
                     end
                 end
-                
+
                 % pre-allocate values for each model
                 X = nan(length(all_score{1}.(mt)),length(obj));
 
@@ -2926,10 +3077,14 @@ end
             else
                 S = obj.score;
             end
+            NoIncludeField =  {'PredictorVariance', 'exitflag_allstarting','LogJoint_allstarting','LogJoint_hist_allstarting','FreeCovariance','covb'};
+            NoIncludeField = NoIncludeField(ismember(NoIncludeField, fieldnames(S)));
+            S = rmfield(S,NoIncludeField);
+
             fn = fieldnames(S);
             for f = 1:length(fn) % make sure they're all row vectors
                 X = S.(fn{f});
-                if isvector(X)
+                if isvector(X) && ~ischar(X)
                     S.(fn{f}) = X(:);
                 end
             end
@@ -3479,7 +3634,7 @@ end
                 end
                 nsub = nsub(1);
 
-                % now plot each model using recursive calls
+                % plot each model use recursive calls
                 for mm=1:nObj
                     if nsub>1 % more than one subplot per model: subplots with one row per model, one column per regressor
                         for i=1:nsub
@@ -3489,7 +3644,7 @@ end
                     else % one subplot per model: all models in a grid
                         this_h = subplot2(nObj, mm);
                     end
-                    h(mm) = plot_weights(obj(mm), U2, this_h);
+                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h);
 
                     % remove redundant labels and titles
                     if mm>1 && nsub>1
@@ -3502,64 +3657,10 @@ end
                 return;
             end
 
-
-            % select corresponding regressors to be plotted
-            M = SelectRegressors(obj.regressor, U2);
-
-            only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
-            cols = defcolor;
-            colmaps = {'jet','hsv','winter','automn'};
-
-            NoFixedWeights = cell(1,obj.nMod);
-            constraint = constraint_cell(M);
-            for m=1:numel(M)%obj.nMod
-                NoFixedWeights{m} = any(constraint{m}~='n',1); % regressors with constant
-            end
-            nNoFixedWeights  = cellfun(@sum,NoFixedWeights); % number of non-fixedd dimensions in each module
-            nSubplots = sum(nNoFixedWeights); % number of subplots
-
-            if only_nsubplot % only ask for number of subplots
-                h = nSubplots;
-                return;
-            end
-
-            % check if subplots are assigned
-            if ~isempty(varargin) && ~isequal(varargin{1}, 'nsubplot')
-                h.Axes = varargin{1};
-                varargin(1) = [];
-            else % otherwise define a grid of subplots in current figure
-                for i=1:nSubplots
-                    h.Axes(i) = subplot2(nSubplots,i);
-                end
-            end
-
-            i = 1; % subplot counter
-            c = -1; % color counter
-            cm = 1; % colormap counter
-            % h.Axes = [];
-            h.Objects = {};
-
-            for m=1:numel(M)%obj.nMod
-
-                for d = find(NoFixedWeights{m}) % loop between subplots
-
-                    axes(h.Axes(i)); % set as active subplot
-
-                    W = M(m).Weights(d); % set of weights
-
-                    % add label
-                    if isempty(W.label)
-                        W.label = sprintf('U%d_%d',m,d); % default label
-                    end
-
-                    % plot weights
-                    [h_nu, c, cm] = plot_single_weights(W, M(m).rank, c, cm, cols, colmaps);
-
-                    h.Objects = [h.Objects {h_nu}];
-                    i = i+1; % update subplot counter
-                end
-            end
+            % plot regressor weights
+            h = plot_weights(obj.regressor,U2, varargin{:});
         end
+
 
         %% PLOT HYPERPARAMETERS
         function h = plot_hyperparameters(obj)
@@ -3589,7 +3690,7 @@ end
                 for d=1:ndim(m)
                     h.Axes(end+1) = subplot2(nDim_tot,i);
                     if isempty(M(m).Weights(d).label)
-                        M(m).Weights(d).label = sprintf('U%d_%d',m,d); % default label
+                        M(m).Weights(d).label = sprintf('HP%d_%d',m,d); % default label
                     end
                     title(M(m).Weights(d).label);
 
@@ -3792,15 +3893,14 @@ nM = length(M);
 D = max([M.nFreeDimensions]);
 UpOrder = zeros(nM, D);
 
-constraint = constraint_cell(M);
 for m=1:nM % for each regressor object
-    if all(constraint{m}(:)=='n') % if all fixed weights
+    if all(isFixedWeightSet(M(m))) % if all fixed weights
         UpOrder(m,:) = ones(1,D); % then we really don't care
     else
         fir = first_update_dimension(M(m)); % find first update dimension
-        no_fixed_dims = find(any(constraint{m} ~= 'n',1)); % find all dimensions whose weights aren't completely fixed
+        no_fixed_dims = find(any(~isFixedWeightSet(M(m)),1)); % find all dimensions whose weights aren't completely fixed
         fir = find(no_fixed_dims== fir);
-        UpOrder(m,:) = 1+mod(fir-1+(0:D-1),length(no_fixed_dims)); % update dimension 'fir', then 'fir'+1, .. and loop until D
+        UpOrder(m,:) = 1 + mod(fir-1+(0:D-1),length(no_fixed_dims)); % update dimension 'fir', then 'fir'+1, .. and loop until D
         UpOrder(m,:) = no_fixed_dims(UpOrder(m,:));
     end
 end
@@ -3838,31 +3938,6 @@ end
 end
 
 
-%% select regressors by index or label  (e.g. for plotting) !! should move to regressor
-function M = SelectRegressors(M, idx)
-if isstring(idx)
-    idx = {idx};
-end
-
-AllWeights = [M.Weights];
-AllLabel = {AllWeights.label};
-
-% if regressor labels are provided, convert to labels
-jdx = cell(1,length(idx));
-if iscell(idx)
-    for m=1:length(idx)
-        ii = find(strcmp(idx{m},AllLabel));
-        if isempty(ii)
-            error('label ''%s'' does not match any regressor label', idx{m});
-        end
-        jdx{m} = ii;
-    end
-    idx = jdx;
-end
-
-% select set of regressors;
-M = M(idx);
-end
 
 %% projection matrix from free set of parameters to complete set of
 % parameters
@@ -4096,7 +4171,9 @@ if ~isempty(B) && ~B.fixed % work on original space
     gradK_tmp = zeros(B.nWeight, B.nWeight,nHP);
 
     for p=1:nHP % for all fitted hyperparameter
-        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
+        BKgradB =B.B'*K*gradB(:,:,p);
+        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + BKgradB + BKgradB';
+        %gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
     end
     gradK = gradK_tmp;
 
@@ -4107,8 +4184,11 @@ if ~isempty(B) && ~B.fixed % work on original space
     % basis functions - now there's no guarantee that the LLH will increase
     % in each EM iteration, and no guarantee that it converges to a
     % meaningful result
-    K = force_definite_positive(K, max(eig(K))*1e-3);
-    Sigma = force_definite_positive(Sigma, max(eig(Sigma))*1e-3);
+    %K = force_definite_positive(K, max(eig(K))*1e-3);
+    %   Sigma = force_definite_positive(Sigma, max(eig(Sigma))*1e-3);
+
+    K = force_definite_positive(K, sqrt(min(diag(K)))*1e-3); % changing to see if we can avoid null values along diagonal
+    Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
 
 end
 K = P*K*P'; % project on free base
@@ -4373,11 +4453,11 @@ while ~isempty(fmla)
                         error('Value for option ''%s'' should be numeric',option);
                     end
                     if Num==0
-                        opts.constraint='b';
+                        opts.constraint="nullmean";
                     elseif Num==1 && strcmpi(option, 'sum')
-                        opts.constraint='s';
+                        opts.constraint="sum1";
                     elseif Num==1 && strcmpi(option, 'mean')
-                        opts.constraint='m';
+                        opts.constraint="mean1";
                     else
                         error('%s=%f: not coded yet', option, Num);
                     end
@@ -4928,197 +5008,5 @@ metrics = {'nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','A
     'accuracy','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','FittingTime'};
 end
 
-%% PLOT SINGLE WEIGHTS
-function [h_nu, c, cm] = plot_single_weights(W, rk, c, cm, cols, colmaps)
-if isa(W.plot, 'function_handle')
-    %% custom-defined plot
-    h_nu = W.plot(W);
-    return;
-end
-
-title(W.label);
-
-if isempty(W.scale)
-    W.scale = 1:W.nWeight;
-end
-scale = W.scale';
-
-% error bar values
-U = W.PosteriorMean'; % concatenate over ranks
-if isempty(W.PosteriorStd)
-    se = nan(size(U));
-else
-    se = W.PosteriorStd';
-end
-
-%nU = size(U,1);
-%nScale = length(scale);
-%if size(U,2)>1
-%else
-%   nCurve = nU/nScale;
-%   if nCurve>1
-%       U = reshape(U, nScale,nCurve);
-%       se = reshape(se, nScale,nCurve);
-%   end
-%end
-
-if size(scale,2)>1
-    if size(scale,2)>2
-        warning('more than 2 dimensions for weights, ignoring extra dimensions');
-    end
-
-    [scale, U, se] = mesh_to_matrix(scale(:,1:2), U, se);
-end
-if ~iscell(scale)
-    scale = {scale};
-end
 
 
-%% plotting options
-plot_opt = {};
-
-% fopts = fieldnames(W.plot);
-% for ff=1:length(fopts)
-%    fopts{end+1:end+2} = {fops{f}, W.plot.(fopts{f})};
-% end
-%  else
-
-if W.nWeight < 8
-    plot_opt = {'bar'};
-end
-
-% default color
-plot_opt{end+1} = 'Color';
-
-% select color map
-twodmap = size(scale{1},2)>1;
-nCurve = size(U,2);
-
-if nCurve<5 % different colors for each curve
-
-    plot_opt{end+1} = cols(mod(c+(1:nCurve),length(cols))+1);
-    if rk ==1
-        c = c + nCurve;
-    end
-else % use color map
-    plot_opt{end+1} = colmaps{cm};
-    cm = cm + 1;
-end
-imageplot = nCurve>9;
-
-if ~isempty(W.plot)
-    plot_opt = [plot_opt W.plot];
-end
-
-%% plot
-if twodmap
-    % color plot
-    h_nu = colorplot(scale{1}(:,1),scale{1}(:,2), real(U));
-elseif imageplot
-    % image plot
-    h_nu = imagescnan(scale{2},scale{1}, U);
-else
-    % cufve/bar plot with errors
-    [~,~,h_nu] = wu([],U,se,scale,plot_opt{:});
-end
-
-%if iscell(scale)
-%   [~,~,h_nu] = wu(U,se,{scale},plot_opt{:});
-%    twodplot = 0;
-%elseif isvector(scale)
-%
-%    [~,~,h_nu] = wu(scale, U,se,plot_opt{:});
-%    twodplot = 0;
-%else
-%    if size(scale,2)>2
-%      warning('more than 2 dimensions for weights, ignoring extra dimensions');
-%    end
-%    %2d plot for scale
-%    twodplot = 1;
-%    x_unq = unique(scale(:,1));
-%    y_unq = unique(scale(:,2));
-%    nX = length(x_unq);
-%    nY = length(y_unq);
-%    U2 = nan(nX,nY);
-%    se2 = nan(nX,nY);
-%    for iX=1:nX
-%        for iY=1:nY
-%        if isnumeric(scale)
-%            bool = (scale(:,1) == x_unq(iX)) & (scale(:,2)==y_unq(iY));
-%          else
-%          bool = strcmp(scale(:,1),x_unq{iX}) & strcmp(scale(:,2),x_unq{iY});
-%
-%          end
-%            if any(bool)
-%                U2(iX,iY) = U(find(bool,1));
-%                se2(iX,iY) = se(find(bool,1));
-%            end
-%        end
-%    end
-
-%h_nu = imagesc(y_unq,x_unq, U2);
-
-%end
-
-% add horizontal line for reference value
-if ~imageplot && W.nWeight >= 8
-    hold on;
-    switch W.constraint
-        case '1'
-            y_hline = 1;
-        case 'm'
-            y_hline = 1/W.nWeight;
-        otherwise
-            y_hline = 0;
-    end
-    plot(xlim,y_hline*[1 1], 'Color',.7*[1 1 1]);
-end
-
-
-end
-
-%% RECONSTRUCT MATRIX FROM MESH
-function [S, U, se] = mesh_to_matrix(S, U, se, cutoff)
-% [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
-% to transform mesh data to matrix form (if the inoccupancy ratio is
-% smaller than cutoff)
-
-if nargin<4
-    cutoff = 3;
-end
-
-% reconstruct weights as matrix
-x_unq = unique(S(:,1));
-y_unq = unique(S(:,2));
-nX = length(x_unq);
-nY = length(y_unq);
-
-% compute ratio of total mesh points by provided points
-ratio = nX*nY/size(S,1);
-
-% if ratio is above threshold, keep data (i.e. they don't really form a
-% mesh)
-if ratio>cutoff
-    return;
-end
-
-U2 = nan(nX,nY);
-se2 = nan(nX,nY);
-for iX=1:nX
-    for iY=1:nY
-        if isnumeric(S)
-            bool = (S(:,1) == x_unq(iX)) & (S(:,2)==y_unq(iY));
-        else
-            bool = strcmp(S(:,1),x_unq{iX}) & strcmp(S(:,2),x_unq{iY});
-
-        end
-        if any(bool)
-            U2(iX,iY) = U(find(bool,1));
-            se2(iX,iY) = se(find(bool,1));
-        end
-    end
-end
-U = U2;
-se = se2;
-S = {x_unq y_unq};
-end
