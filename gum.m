@@ -2,7 +2,7 @@ classdef gum
 
     % Defines a Generalized Unrestricted Model (GUM). Two possible
     % syntaxes:
-    % * function M= gum(X, T, param)
+    % * function M = gum(X, T, param)
     %
     % where X is a regressor, a vector of regressors (type "help regressor" for more information) or a numerical array.
     % Param is a structure with optional parameters (see below).
@@ -55,6 +55,8 @@ classdef gum
     % 'f(x)+ f(y)*(-1)
     %
     % Use 'cat(x)' instead of 'f(x)' if x is a categorical variable
+    % cat(x1):cat(x2) generates interaction terms, cat(x1)^cat(x2)
+    % generates interaction terms and main effects
     % Use | to define different mappings depending on another variable
     % (e.g. a random effect), e.g. 'x|z', '1|z' or 'f(x|z)'
     % Use 'f(x, options1=V1, options2=V2,...) to specify further options for the
@@ -77,38 +79,6 @@ classdef gum
     % - f(x;binning=V) to bin values in variable in V bins (binned by quantiles)
     % Use ' y|x ~ ...' if you want to define separate GUM for each level in
     % variable 'x' (the output will be a vector of GUM objects).
-    %
-
-
-    % TODO:
-    % - boostrapping (need to work on sparsearray to allow for X(ind, ...) - TEST
-    % - no prior, ARD (TEST) - Matern prior
-    % - add anova type formulas x1:x2 (FINISH, TEST), x1*x2
-    % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
-    % - spectral trick for periodic: test; change prior (do not use Squared
-    % Exp)
-    % - negative binomial, probit (finish)
-    % - 'fourier' for periodic (TEST)
-    % - link functions as in glmfit
-    % - CV gradient for dispersion parameter
-    % - CV gradient for parameterized basis functions
-    % - crossvalidation compatibility with matlab native (done?)
-    % - constraint structure (e.g. when concat weights or split)
-    % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
-    % - use fitglme/fitlme if glmm model
-    % - work on labels
-    % - add label on models (or just dataset label?)
-    % - reset: weights for gum, clearing all scores and predictions
-    % - plot_vif
-    % - add number of (free) HPs to metrics
-    % - plot with 2D scale
-    % - allow parallel processing for crossvalid & bootstrap
-    % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
-    % - add history regressors (with exp basis)
-    % - knock-out model
-    % - print summary, weights, hyperparameters  (TEST ALL)
-    % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
-
     %
     % Complete list of methods:
     % OPERATIONS AND TESTS ON MODEL
@@ -146,6 +116,7 @@ classdef gum
     % - 'Hessian': computes the Hessian of the negative LogLihelihood
     % - 'PosteriorCov': computes the posterior covariance
     % - 'IRLS': core step in inference
+    % - 'boostrapping': generate bootstrap estimates of weight uncertainty
     % - 'Sample': generate observations from model using MAP weights
     % - 'Sample_Observations_From_Posterior': generate observations from
     % model sampling from weight posterior
@@ -169,6 +140,30 @@ classdef gum
     %
     % version 0.0. Bug/comments: send to alexandre.hyafil@gmail.com
     %
+
+    % TODO:
+    % - no prior, ARD (TEST) - Matern prior
+    % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
+    % - spectral trick for periodic: test; change prior (do not use Squared
+    % Exp)
+    % - negative binomial, probit (finish)
+    % - link functions as in glmfit
+    % - CV gradient for dispersion parameter
+    % - CV gradient for parameterized basis functions
+    % - crossvalidation compatibility with matlab native (done?)
+    % - cat_regressor: add for basis and EM 
+    % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
+    % - use fitglme/fitlme if glmm model
+    % - work on labels
+    % - add label on models (or just dataset label?)
+    % - merge select_weights (does not work) / find_weights?
+    % - reset: weights for gum, clearing all scores and predictions
+    % - plot_vif
+    % - add number of (free) HPs to metrics
+    % - allow parallel processing for crossvalid & bootstrap
+    % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
+    % - knock-out model
+    % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
 
     properties
         formula = ''
@@ -349,7 +344,7 @@ classdef gum
                     M(m).rank = rank(m);
                 end
             end
-           
+
 
             obj.param = param;
             obj.regressor = M;
@@ -405,7 +400,7 @@ classdef gum
 
         function disp(obj)
             if numel(obj)>1 || isempty(obj)
-               % disp(obj);
+                % disp(obj);
                 return;
             end
 
@@ -447,16 +442,16 @@ classdef gum
                     ScoreValues{end+1} = this_score;
                     cnt = cnt+1;
                 end
-               
+
             end
-             if ~mod(cnt,2)
-                    ScoreString = [ScoreString '\n'];
-                end
+            if ~mod(cnt,2)
+                ScoreString = [ScoreString '\n'];
+            end
             fprintf(ScoreString,ScoreValues{:});
 
             % add weights to summary
             if obj.isestimated()
-            print_weights(obj);
+                print_weights(obj);
             else
                 fprintf('Weights: not estimated\n');
             end
@@ -469,18 +464,20 @@ classdef gum
 
             if obj.isestimated()
                 W = export_weights_to_table(obj);
+                label = string(W.label);
                 nReg = height(W);
+                
                 if nReg>30
                     fprintf('\nToo many regressor values (%d) to print, use export_weights_to_table instead\n', nReg);
                 elseif isgam(obj)
                     fprintf('%12s %10s %8s %8s %8s %8s\n', 'Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
-                        fprintf('%12s %10s %8f %8f %8f %8f\n', W.label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                        fprintf(['%12s %10' char_type(W.scale) ' %8f %8f %8f %8f\n'], label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
                     end
                 else
                     fprintf('%10s %12s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
-                        fprintf('%10s %12s %8f %8f %8f %8f %8f\n', W.regressor(r), W.label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                        fprintf(['%10s %12s %8' char_type(W.scale) ' %8f %8f %8f %8f\n'], W.regressor(r), label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
                     end
                 end
 
@@ -509,9 +506,9 @@ classdef gum
                 end
             else
                 fprintf('%10s %20s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','value','fittable','LowerBnd','UpperBnd');
-                
+
                 for r=1:nHP
-                     if iscell(H.label)
+                    if iscell(H.label)
                         this_label = H.label{r};
                     else
                         this_label = H.label(r);
@@ -655,9 +652,9 @@ classdef gum
             %% which order for components
             for m=1:obj.nMod
                 if isempty(M(m).ordercomponent) && M(m).nDim>1
-                   % dd = M(m).nDim; % dimension in this module
+                    % dd = M(m).nDim; % dimension in this module
                     M(m).ordercomponent = true;
-                  %  M(m).ordercomponent = all(all(cc(:,1:dd)==cc(1,1:dd))); % default: reorder if all components have same constraints
+                    %  M(m).ordercomponent = all(all(cc(:,1:dd)==cc(1,1:dd))); % default: reorder if all components have same constraints
                 end
             end
 
@@ -751,184 +748,8 @@ classdef gum
 
                     %% expectation-maximization to find  hyperpameters that maximize marginal evidence
                 case 'em'
-
-                    if any([M.rank]>1)
-                        error('EM not coded yet for rank larger than one');
-                    end
-
-                    old_logjoint = -Inf;
-                    logjoint_iter = zeros(1,maxiter);
-                    still =1;
-                    iter = 0;
-                    HP = HPini; % initial values for hyperparameters
-                    param2 = obj.param;
-                    param2.HPfit = 'none';
-                    param2.crossvalidation = [];
-                    param2.originalspace = false;
-
-                    objective_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
-                    check_grad = strcmpi(use_gradient,'check'); % whether to use gradient
-
-                    param_tmp = obj.param;
-                    obj.param = param2;
-
-                    while still % EM iteration
-                        %% E-step (running inference with current hyperparameters)
-
-                        M = set_hyperparameters(M, HP, HPidx);
-
-                        % evaluate covariances at for given hyperparameters
-                        %M2 = compute_prior_covariance(M);
-                        obj.regressor = compute_prior_covariance(M);
-
-                        % make sure that all weigths have real-valued priors (not infinite)
-                        if iter==0
-
-                            if is_infinite_covariance(obj)
-                                error('infinite covariance (probably some regressor have no prior), cannot use the ''em'' algorithm for fitting');
-                                %% instead we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
-                            end
-
-                            param2.verbose = 'little';
-                        else
-                            param2.verbose = 'off';
-                        end
-
-                        if iter==1
-                            param2.initialpoints = 1;
-                        end
-
-                        % inference
-                        obj = obj.infer(param2);
-
-                        PP = projection_matrix(M); % projection matrix for each dimension
-
-
-                        %% M-step (adjusting hyperparameters)
-                        midx = 0;
-                        HPidx_cat = [HPidx{:}]; % concatenate over components
-                        ee = 1;
-                        for m=1:obj.nMod % for each regressor object
-                            ss = obj.regressor(m).nFreeParameters; % size of each dimension
-
-                            for d=1:M(m).nDim % for each dimension
-                                for r=1:size(HPidx{m},1)
-                                    this_HPidx = HPidx{m}{r,d}; % indices of hyperparameters for this set of weight
-                                    if ~isempty(this_HPidx)
-                                        if ~any(ismember(this_HPidx, [HPidx_cat{setdiff(1:obj.nMod,ee)}])) %
-                                            % if hyperparameters are not used in any other module
-
-                                            if ~isa(M(m).Prior(1,d).CovFun, 'function_handle') % function handle
-                                                error('hyperparameters with no function');
-                                            end
-
-                                            % set hyperparameter values for this component
-                                            HPs = M(m).HP(r,d);
-                                            HP_fittable = HPs.fit;
-                                            HPs.HP(HP_fittable) = HP(this_HPidx); % fittable values
-
-                                            % posterior mean and covariance for associated weights
-                                            reg_idx = (1:ss(r,d)) + sum(ss(:,1:d-1),'all') + sum(ss(1:r-1,d)) + midx; % index of regressors in design matrix
-
-                                            this_cov =  obj.score.FreeCovariance(reg_idx,reg_idx) ; % free posterior covariance for corresponding regressor
-
-                                            % if project on a
-                                            % hyperparameter-dependent
-                                            % basis, move back to original
-                                            % space
-                                            W = obj.regressor(m).Weights(d); % corresponding set of weight
-
-                                            this_mean =  W.PosteriorMean(r,:);
-                                            this_scale = W.scale;
-                                            this_P = PP{m}{r,d};
-                                            this_Prior = obj.regressor(m).Prior(r,d);
-                                            this_PriorMean = this_Prior.PriorMean;
-                                            B = W.basis; % here we're still in projected mode
-
-                                            if ~isempty(B)
-                                                if ~B.fixed
-                                                    % working in original
-                                                    % space (otherwise working
-                                                    % in projected space)
-                                                    this_mean = this_mean*B.B;
-                                                    this_PriorMean = this_PriorMean*B.B;
-                                                    this_cov = B.B' * this_cov *B.B;
-
-                                                    assert(W.constraint=="free", 'EM not coded for non-free basis');
-                                                else
-                                                    2;
-                                                end
-                                                this_P = eye(length(this_cov));
-
-                                            end
-                                            this_cov = force_definite_positive(this_cov);
-                                            %this_cov_chol = chol(this_cov);
-
-                                            [~, gg] = this_Prior.CovFun(this_scale, HPs.HP, B);
-                                            if isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && (isempty(B)||B.fixed) % function provided to optimize hyperparameters
-                                                %  work on this to also take into account constraints (marginalize in the free base domain)
-
-                                                HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
-                                            else % find HP to maximize cross-entropy between prior and posterior
-
-                                                optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
-                                                    'CheckGradients',check_grad,'display','off','MaxIterations',1000);
-
-                                                % find HPs that minimize negative
-                                                % cross-entropy
-                                                mstep_fun = @(hp) mvn_negxent(this_Prior.CovFun, this_PriorMean, this_scale, this_mean, this_cov,this_P, hp, HPs, B);
-
-                                                % if isinf(mstep_fun(HP(this_HPidx)))
-                                                %     2;
-                                                % end
-
-                                                ini_val = mstep_fun(HP(this_HPidx));
-
-                                                assert(~isinf(ini_val) && ~isnan(ini_val), ...
-                                                    'M step cannot be completed, probably because covariance prior is not full rank');
-
-                                                % compute new set of
-                                                % hyperparameters that
-                                                % minimize
-                                                HPnew = fmincon(mstep_fun,...
-                                                    HP(this_HPidx),[],[],[],[],M(m).HP(r,d).LB(HP_fittable),M(m).HP(r,d).UB(HP_fittable),[],optimopt);
-                                            end
-                                            HP(this_HPidx) = HPnew;  % select values corresponding to fittable HPs
-
-                                        else
-                                            error('not coded: cannot optimize over various components at same time');
-                                        end
-                                    end
-                                    ee = ee+1;
-                                end
-
-                            end
-                            midx = midx + sum(ss(1,:)) * rank(m); % jump index by number of components in module
-                        end
-
-                        % for decomposition in basis functions, convert weights back to
-                        % original domain
-                        obj.regressor = project_from_basis( obj.regressor);
-
-                        % has converged if improvement in LLH is smaller than epsilon
-                        iter = iter + 1; % update iteration counter;
-                        LogEvidence = obj.score.LogEvidence;
-                        fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
-                        % HP
-                        converged = abs(old_logjoint-LogEvidence)<HP_TolFun;
-                        old_logjoint = LogEvidence;
-                        logjoint_iter(iter) = LogEvidence;
-
-                        still = (iter<maxiter) && ~converged;
-
-                    end
-                    %  obj = obj;
-                    % obj.regressor = M2;
-                    obj.param = param_tmp;
-
-                    % allocate fitted hyperparameters to each module
-                    obj.regressor = obj.regressor.set_hyperparameters(HP);
-
+                    obj = em(obj, HPini,HPidx, use_gradient, maxiter, HP_TolFun);
+                 
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
 
                     % clear persisitent value for best-fitting parameters
@@ -947,20 +768,201 @@ classdef gum
                     obj =  cv_score(obj, HP, HPidx, 1);
             end
 
-
-            %   % allocate fitted hyperparameters to each module
-            %   M = M.set_hyperparameters(HP);
-            %             for m=1:obj.nMod
-            %                 for d=1:M(m).nDim
-            %                     for r=1:size(M(m).HP,1)
-            %                         this_HP_fittable = M(m).HP(r,d).fit;
-            %                         M(m).HP(r,d).HP(this_HP_fittable) = HP(HPidx{m}{r,d}); % associate each parameter to corresponding module
-            %                     end
-            %                 end
-            %             end
-
         end
 
+        %%% EM ALGORITHM
+        function obj = em(obj, HPini,HPidx, use_gradient,maxiter, HP_TolFun)
+            % M = em(M, HPini,HPidx, use_gradient,maxiter) runs the EM algorithm for
+            % fitting. Call it through M = M.fit();
+
+            if any([obj.regressor.rank]>1)
+                error('EM not coded yet for rank larger than one');
+            end
+
+            old_logjoint = -Inf;
+            logjoint_iter = zeros(1,maxiter);
+            keepIterating = true;
+            iter = 0;
+            HP = HPini; % initial values for hyperparameters
+
+            prm = obj.param;
+            prm.HPfit = 'none';
+            prm.crossvalidation = [];
+            prm.originalspace = false;
+            if ~isfield(prm,'initialpoints')
+                prm.initialpoints = 10;
+            end
+
+            param_tmp = obj.param;
+
+            obj.param = prm;
+
+
+            objective_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
+            check_grad = strcmpi(use_gradient,'check'); % whether to use gradient
+
+
+            while keepIterating % EM iteration
+                %% E-step (running inference with current hyperparameters)
+
+                %  M = set_hyperparameters(M, HP, HPidx);
+
+                obj.regressor = set_hyperparameters(obj.regressor, HP, HPidx);
+
+                % evaluate covariances at for given hyperparameters
+                % obj.regressor = compute_prior_covariance(M);
+                obj.regressor = compute_prior_covariance(obj.regressor);
+
+
+                % make sure that all weigths have real-valued priors (not infinite)
+                if iter==0
+
+                    if is_infinite_covariance(obj)
+                        error('infinite covariance (probably some regressor have no prior), cannot use the ''em'' algorithm for fitting');
+                        %% instead we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
+                    end
+                    
+                    fprintf('Initial weight inference (%d starting points):', prm.initialpoints);
+                    prm.verbose = 'little';
+                else
+                    prm.verbose = 'off';
+                end
+
+                if iter==1
+                    prm.initialpoints = 1;
+                end
+
+                % inference
+                obj = obj.infer(prm);
+
+                PP = projection_matrix(obj.regressor); % projection matrix for each dimension
+
+                %% M-step (adjusting hyperparameters)
+                regressorCounter = 0;
+                HPidx_cat = [HPidx{:}]; % concatenate over components
+                HPcounter = 1;
+                for m=1:obj.nMod % for each regressor object
+                    ss = obj.regressor(m).nFreeParameters; % size of each dimension
+
+                    for d=1:obj.regressor(m).nDim % for each dimension
+                        for r=1:size(HPidx{m},1)
+                            this_HPidx = HPidx{m}{r,d}; % indices of hyperparameters for this set of weight
+                            if ~isempty(this_HPidx)
+                                if ~any(ismember(this_HPidx, [HPidx_cat{setdiff(1:obj.nMod,HPcounter)}])) %
+                                    % if hyperparameters are not used in any other module
+
+                                    % set hyperparameter values for this component
+                                    HPs = obj.regressor(m).HP(r,d);
+                                    HP_fittable = HPs.fit;
+                                    HPs.HP(HP_fittable) = HP(this_HPidx); % fittable values
+
+                                    % posterior mean and covariance for associated weights
+                                    regressorIndex = (1:ss(r,d)) + sum(ss(:,1:d-1),'all') + sum(ss(1:r-1,d)) + regressorCounter; % index of regressors in design matrix
+
+                                    this_cov =  obj.score.FreeCovariance(regressorIndex,regressorIndex) ; % free posterior covariance for corresponding regressor
+
+                                    % if project on a
+                                    % hyperparameter-dependent
+                                    % basis, move back to original
+                                    % space
+                                    W = obj.regressor(m).Weights(d); % corresponding set of weight
+
+                                    this_mean =  W.PosteriorMean(r,:);
+                                    this_scale = W.scale;
+                                    this_P = PP{m}{r,d};
+                                    this_Prior = obj.regressor(m).Prior(r,d);
+                                    this_PriorMean = this_Prior.PriorMean;
+                                    if iscell(this_Prior.CovFun)
+                                         error('not coded yet for regressor with basis functions concatenated with another regressor');
+                                    elseif ~isa(this_Prior.CovFun, 'function_handle') % function handle
+                                        error('hyperparameters with no function');
+                                    end
+
+                                    B = W.basis; % here we're still in projected mode
+
+                                    if ~isempty(B)
+                                        if iscell(B)
+                                            error('not coded yet for regressor with basis functions concatenated with another regressor');
+                                        end
+                                        if ~B.fixed
+                                            % working in original
+                                            % space (otherwise working
+                                            % in projected space)
+                                            this_mean = this_mean*B.B;
+                                            this_PriorMean = this_PriorMean*B.B;
+                                            this_cov = B.B' * this_cov *B.B;
+
+                                            assert(W.constraint=="free", 'EM not coded for non-free basis');
+
+                                        end
+                                        this_P = eye(length(this_cov));
+
+                                    end
+                                    this_cov = force_definite_positive(this_cov);
+
+                                    [~, gg] = this_Prior.CovFun(this_scale, HPs.HP, B);
+                                    if isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && (isempty(B)||B.fixed) % function provided to optimize hyperparameters
+                                        %  work on this to also take into account constraints (marginalize in the free base domain)
+
+                                        HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
+                                    else % find HP to maximize cross-entropy between prior and posterior
+
+                                        optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
+                                            'CheckGradients',check_grad,'display','off','MaxIterations',1000);
+
+                                        % find HPs that minimize negative
+                                        % cross-entropy
+                                        mstep_fun = @(hp) mvn_negxent(this_Prior.CovFun, this_PriorMean, this_scale, this_mean, this_cov,this_P, hp, HPs, B);
+
+
+                                        ini_val = mstep_fun(HP(this_HPidx));
+
+                                        assert(~isinf(ini_val) && ~isnan(ini_val), ...
+                                            'M step cannot be completed, probably because covariance prior is not full rank');
+
+                                        % compute new set of
+                                        % hyperparameters that
+                                        % minimize
+                                        HPnew = fmincon(mstep_fun,...
+                                            HP(this_HPidx),[],[],[],[],HPs.LB(HP_fittable),HPs.UB(HP_fittable),[],optimopt);
+                                    end
+                                    HP(this_HPidx) = HPnew;  % select values corresponding to fittable HPs
+
+                                else
+                                    error('not coded: cannot optimize over various components at same time');
+                                end
+                            end
+                            HPcounter = HPcounter+1;
+                        end
+
+                    end
+                    regressorCounter = regressorCounter + sum(ss(1,:)) * rank(m); % jump index by number of components in module
+                end
+
+                % for decomposition in basis functions, convert weights back to
+                % original domain
+                obj.regressor = project_from_basis( obj.regressor);
+
+                % has converged if improvement in LLH is smaller than epsilon
+                iter = iter + 1; % update iteration counter;
+                LogEvidence = obj.score.LogEvidence;
+                fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
+                % HP
+                converged = abs(old_logjoint-LogEvidence)<HP_TolFun;
+                old_logjoint = LogEvidence;
+                logjoint_iter(iter) = LogEvidence;
+
+                keepIterating = (iter<maxiter) && ~converged;
+
+            end
+            %  obj = obj;
+            % obj.regressor = M2;
+            obj.param = param_tmp;
+
+            % allocate fitted hyperparameters to each module
+            obj.regressor = obj.regressor.set_hyperparameters(HP);
+
+        end
 
 
         %% %%%%% INFERENCE (ESTIMATE WEIGHTS) %%%%%%%
@@ -1116,19 +1118,9 @@ classdef gum
                 nSet = CV.NumTestSets;
                 variance = cell(1,nM);
                 for m=1:nM
-                    %  obj.regressor(m).U_CV = cell(rank(m),M(m).nDim); % fitted parameters for each permutation
-                    %                     for d=1:M(m).nDim
-                    %                         obj.regressor(m).Weights(d).U_CV = cell(1,M(m).nDim); % fitted parameters for each permutation
-                    %                         for r=1:rank(m)
-                    %                          %   obj.regressor(m).U_CV{r,d} = zeros(nSet,obj.regressor(m).nWeight(d));
-                    %                                                         obj.regressor(m).Weights(d).U_CV{r} = zeros(nSet,M(m).Weights(d).nWeight);
-                    %
-                    %                         end
-                    %                     end
                     variance{m} = zeros(nSet,M(m).rank); % variance across observations for each component
 
                 end
-                % U_CV{1,D+1} = zeros(nperm,m(D+1));
                 validationscore = zeros(1,nSet); % score for each (LLH per observation)
                 accuracy = zeros(1,nSet); % proportion correct
                 exitflag_CV = zeros(1,nSet); % exit flag (converged or not)
@@ -1253,8 +1245,6 @@ classdef gum
 
                 allU = concatenate_weights(M);
 
-                % [~,H] = PosteriorCov(obj); % Hessian w.r.t weights
-                %Hinv = Hessian(obj); % Hessian w.r.t weights
                 PCov = PosteriorCov(obj); % posterior covariance computed from train data
                 grd = zeros(size(CovJacob,3),1);
                 for q=1:size(CovJacob,3) % for each hyperparameter
@@ -1303,13 +1293,19 @@ classdef gum
             midx = 0;
             for m=1:obj.nMod
                 rr = rank(m);
-                ss = [M(m).Weights.nWeight];
-                dd = M(m).nDim;
 
-                for d=1:dd
+                for d=1:M(m).nDim
                     W = M(m).Weights(d);
+                    nW = sum(W.nWeight);
+                    W.PosteriorStd = zeros(M(m).rank, nW);
+                    W.T = zeros(M(m).rank,nW);
+                    W.p = zeros(M(m).rank, nW);
+                    W.PosteriorCov =  zeros(nW, nW, M(m).rank);
+                    if any(strcmp(W.type, {'continuous','periodic'}))
+                        W.invHinvK =  zeros(nW, nW, M(m).rank);
+                    end
                     for r=1:M(m).rank
-                        idx = (1:ss(d)) + (r-1)*ss(d) + rr*sum(ss(1:d-1)) + midx; % index of regressors in design matrix
+                        idx = (1:nW) + (r-1)*nW + rr*sum([M(m).Weights(1:d-1).nWeight]) + midx; % index of regressors in design matrix
                         W.PosteriorStd(r,:) = all_se(idx);
                         W.T(r,:) = all_T(idx);
                         W.p(r,:) = all_p(idx);
@@ -1321,14 +1317,7 @@ classdef gum
                     M(m).Weights(d) = W;
                 end
 
-
-                %                 idx = midx + (1:rr*sum(ss)); % index of regressors for this module
-                %                 % convert to cells
-                %                 M(m).se = num2dimcell(all_se(idx),ss,rr);
-                %                 M(m).T = num2dimcell(all_T(idx),ss,rr);
-                %                 M(m).p = num2dimcell(all_p(idx),ss,rr);
-                %
-                midx = midx + sum(ss) * rr; % jump index by number of components in module
+                midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
 
             end
 
@@ -1435,7 +1424,7 @@ classdef gum
 
             verbose = true;
             alpha = 0.05;
-            type = 'norm';
+            type = 'per';
 
             assert(mod(length(varargin),2)==0, 'Name-Value arguments should be provided in pairs');
             for v=1:2:length(varargin)
@@ -1446,19 +1435,20 @@ classdef gum
                             'alpha must be a scalar between 0 and 1');
                     case 'type'
                         type = varargin{v+1};
-                        assert(isstring(type) && (strcmp(type,'norm')||strcmp(type,'per')),...
+                        assert(ischar(type) && (ismember(type,{'norm','per'})),...
                             'value for type is either ''per'' or ''norm''');
                     case 'verbose'
                         verbose = varargin{v+1};
                 end
+            end
 
                 n = obj(1).nObs;
                 if length(obj)>1
                     assert([obj.nObs]==n, 'all models must have the same number of observations');
                 end
 
-                if verbose
-                    fprintf('Computing %d boostraps for %d models: ',nBootstrap, length(obj));
+                if strcmp(verbose,'on')
+                    fprintf('Computing %d boostraps for %d model(s): ',nBootstrap, length(obj));
                 end
 
                 if nargout>1
@@ -1468,7 +1458,7 @@ classdef gum
                 % pre-allocate boostrap weights
                 U_bt = cell(1,numel(obj));
                 for i=1:numel(obj)
-                    U_bt{i} = zeros(n,obj(i).score.nParameters);
+                    U_bt{i} = zeros(obj(i).score.nParameters,nBootstrap);
                 end
 
                 for p=1:nBootstrap % for each permutation
@@ -1479,15 +1469,17 @@ classdef gum
                     end
 
                     %fit on bootstrap data set
+                    vbs = obj(i).param.verbose;
+                    obj(i).param.verbose = 'off';
                     for i=1:numel(obj)
                         obj_bt = IRLS(extract_observations(obj(i),bt_set));
 
                         Ucat = concatenate_weights(obj_bt);
                         U_bt{i}(:,p) = Ucat;
                     end
+                    obj(i).param.verbose = vbs;
 
-
-                    if verbose
+                    if strcmp(verbose,'on')
                         fprintf('*');
                     end
 
@@ -1514,11 +1506,10 @@ classdef gum
 
                 end
 
-                if verbose
+                if strcmp(verbose,'on')
                     fprintf('\n done!\n');
                 end
 
-            end
         end
 
         %%  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1617,7 +1608,7 @@ classdef gum
                 nFree(d) = size(P{cc,d},1); % number of free parameters for this set of weight
                 this_d = UpdOrder(:,d)'; %min(d,nDim); % over which dimension we work for each model
                 for m=1:nM
-                    size_mod(m,d) = M(m).Weights(this_d(m)).nWeight;
+                    size_mod(m,d) = sum([M(m).Weights(this_d(m)).nWeight]);
                     nReg(d) = nReg(d) + rank(m)*size_mod(m,d); % add number of regressors for this module
                 end
 
@@ -1735,6 +1726,7 @@ classdef gum
                 obj.score.scaling = s;
 
                 FullHessianUpdate = false(1,nC);
+                logFullHessianStep = 0; % determine size of full Hessian step (https://en.wikipedia.org/wiki/Backtracking_line_search)
 
                 %% loop weight update until convergence
                 while not_converged
@@ -1854,10 +1846,11 @@ classdef gum
                                     logprior{m}(:,d2) = LogPrior(obj.regressor(m),d2); % log-prior for this weight
                                 end
 
-                                if ~FixedDispersion
-                                    s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  scaling parameter: unbiased mse
-                                    obj.score.scaling = s;
-                                end
+                                [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
+                                % if ~FixedDispersion
+                                %     s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  scaling parameter: unbiased mse
+                                %     obj.score.scaling = s;
+                                % end
 
                                 % compute log-joint
                                 interim_logjoint = logjoint;
@@ -1897,10 +1890,7 @@ classdef gum
                                         logprior{m}(:,d2) = LogPrior(obj.regressor(m),d2); % log-prior for this weight
                                     end
 
-                                    if ~FixedDispersion
-                                        s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  scaling parameter: unbiased mse
-                                        obj.score.scaling = s;
-                                    end
+                                    [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
 
                                     % compute log-joint
                                     [obj,logjoint] = LogJoint(obj,logprior, true);
@@ -1947,37 +1937,54 @@ classdef gum
 
                             % compute hessian matrix of log-joint on the unconstrained basis
                             if ~inf_cov %finite covariance matrix
-                                B = B + Kall*(Hess*(Pall*UU'));  %% !!! check if projections are well done!!!
-
+                                B = B + Kall*(Hess*(Pall*UU'));
                                 H = Kall* Hess + s*eye(nFree_all(cc)); % K * Hessian matrix on the free basis
 
                             else % any infinite covariance matrix (e.g. no prior on a weight)
-                                B = B + Hess*(Pall*UU');  %% !!! check if projections are well done!!!
-                                %!!!!%%
+                                B = B + Hess*(Pall*UU');
                                 H = Hess + s*precision_all; % Hessian matrix on the free basis
                             end
 
                             xi = (H\B)' * Pall; % new set of weights (projected back to full basis)
 
-                            obj.regressor(idxC) = set_weights(M(idxC),xi+UconstU);
-                            obj = Predictor(obj); % compute rho
-                            if ~FixedDispersion
-                                s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  update scaling parameter: unbiased mse
-                                obj.score.scaling = s;
+                            Unoconst = UU-UconstU;
+                            if logFullHessianStep~=0
+                                % if not doing full Newton update but only
+                                % fraction in the direction
+                                xi = Unoconst + exp(logFullHessianStep)*(xi-Unoconst);
                             end
-                            [obj,logprior] = LogPrior(obj); % compute log-prior
-                            [obj,logjoint] = LogJoint(obj,[],true);
 
+                            compute_logjoint = -1;
 
-                            if (logjoint<old_logjoint-1e-3) % full step didn't work: go back to previous weights and run
+                            % check that we did improve log-joint
+                            while compute_logjoint ~=0
+
+                                if compute_logjoint>0 % first loop: do not enter
+                                    % run smaller step (pseudo Armijo rule)
+                                    logFullHessianStep = logFullHessianStep-1;
+
+                                    xi = Unoconst + exp(-1)*(xi-Unoconst);
+                                end
+
+                                obj.regressor(idxC) = set_weights(M(idxC),xi+UconstU);
+                                obj = Predictor(obj); % compute rho
+                                [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
+                                [obj,logprior] = LogPrior(obj); % compute log-prior
+                                [obj,logjoint] = LogJoint(obj,[],true);
+
+                                % compute again with smaller step if failed
+                                % to improve log-joint and step is larger
+                                % in norm than previous step (probably
+                                % without full Hessian)
+                                compute_logjoint = (logjoint<old_logjoint) && norm(xi-Unoconst)>norm(dU)/10;
+                            end
+
+                            if (logjoint<old_logjoint-1e-6) % full step didn't work: go back to previous weights and run
                                 FullHessianUpdate = 0;
                                 obj.regressor(idxC) = M(idxC);
                                 obj = Predictor(obj); % compute rho
-                                %!! change to function for updating dispersion parameter
-                                if ~FixedDispersion
-                                    s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(cc)); %  update scaling parameter: unbiased mse
-                                    obj.score.scaling = s;
-                                end
+
+                                [obj,s] = compute_dispersion_parameter(obj, c, FixedDispersion);
                                 [obj,logprior] = LogPrior(obj); % compute log-prior
                                 [obj,logjoint] = LogJoint(obj,[],true);
 
@@ -1992,8 +1999,11 @@ classdef gum
                                     c_fpd = 1e3*eps;
                                 end
 
-                            else
+                            else % full Hessian step did work
                                 M(idxC) = obj.regressor(idxC);
+
+                                % try larger step for next iteration (pseudo Armijo rule)
+                                logFullHessianStep = min(logFullHessianStep+1,0);
                             end
                         end
 
@@ -2026,10 +2036,11 @@ classdef gum
                         %% compute predictor
                         if recompute
                             obj = Predictor(obj,cc);
-                            if ~FixedDispersion
-                                s = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  update scaling parameter: unbiased mse
-                                obj.score.scaling = s;
-                            end
+                            [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
+                            % if ~FixedDispersion
+                            %     s = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  update scaling parameter: unbiased mse
+                            %     obj.score.scaling = s;
+                            % end
 
                             % compute log-joint
                             [obj,logjoint] = LogJoint(obj,logprior);
@@ -2065,7 +2076,7 @@ classdef gum
 
                             FullHessianUpdate(c) = true;
                         end
-                        FHU(:,iter) = FullHessianUpdate(c);
+                        FHU(c,iter) = FullHessianUpdate(c);
                     end
 
                     if strcmp(obj.param.verbose, 'on')
@@ -2085,21 +2096,8 @@ classdef gum
 
                 %% compute variance of each order components and sort
                 obj = predictor_variance(obj);
-                % var_c = cell(1,nM);
                 for m=1:nM
-                    %                     var_c{m} = zeros(1,rank(m));
-                    %                     if all(M(m).nWeight>0)
-                    %                         for r=1:rank(m)
-                    %                             %    var_c{mm}(r) = var(projdim(X,U,r,spd,zeros(1,0))); % variance of overall activation for each component
-                    %                             var_c{m}(r) = var(ProjectDimension(M(m),r,zeros(1,0))); % variance of overall activation for each component
-                    %                         end
-                    %                         if M(m).ordercomponent && rank(m)>1
-                    %                             [var_c{m},order] = sort(var_c{m},'descend'); % sort variances by descending order
-                    %                             M(m).U = M(m).U(order,:); % reorder
-                    %                         end
-                    %                     end
-
-
+                 
                     if all([M(m).Weights.nWeight]>0) && M(m).ordercomponent && rank(m)>1
                         [~,order] = sort(obj.score.PredictorVariance(:,m),'descend'); % sort variances by descending order
                         for d=1:M(m).nDim
@@ -2249,7 +2247,7 @@ classdef gum
             nReg = 0;
 
             for m=1:obj.nMod
-                nReg = nReg + M(m).rank*M(m).Weights(D(m)).nWeight; % add number of regressors for this module
+                nReg = nReg + M(m).rank* sum(M(m).Weights(D(m)).nWeight); % add number of regressors for this module
             end
         end
 
@@ -2288,12 +2286,11 @@ classdef gum
                 return;
             end
 
-
             bool = all([obj.regressor.nFreeDimensions]<=1);
             if bool
                 W = [obj.regressor.Weights];
                 Wtype = {W.type};
-                bool = bool & all(strcmp(Wtype,'linear') | strcmp(Wtype,'categorical') | strcmp(Wtype,'constant'));
+                bool = all(strcmp(Wtype,'linear') | strcmp(Wtype,'categorical') | strcmp(Wtype,'constant'));
             end
         end
 
@@ -2304,7 +2301,8 @@ classdef gum
 
             bool = false(size(obj));
             for m=1:numel(obj)
-                bool(m) = ~isempty(obj(m).concatenate_weights());
+                W = [obj(m).regressor.Weights];
+                bool(m) = ~any(cellfun(@isempty,{W.PosteriorMean}));
             end
         end
 
@@ -2422,6 +2420,18 @@ classdef gum
             end
 
             obj.Predictions.Expected = Y;
+        end
+
+        %% UPDATE DISPERSION PARAMETER
+        function [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion)
+            s = obj.score.scaling;
+
+            if FixedDispersion
+                return;
+            end
+
+            s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(cc)); %  update scaling parameter: unbiased mse
+            obj.score.scaling = s;
         end
 
         %% GENERATE SAMPLE FROM MODEL
@@ -2579,7 +2589,7 @@ classdef gum
                     for d=1:M(m).nDim % for each dimension
                         for r=1:M(m).rank
                             Phi =  ProjectDimension(M(m),r,d);
-                            if M(m).Weights(d).nWeight==1 % correct a bug in ProjectDimension that outputs row vector instead of column
+                            if sum(M(m).Weights(d).nWeight)==1 % correct a bug in ProjectDimension that outputs row vector instead of column
                                 Phi = Phi';
                             end
                             this_gd = err*Phi; % gradient of LLH w.r.t each weight in U{r,d}
@@ -2603,9 +2613,7 @@ classdef gum
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
 
                 case 'poisson' % poisson
-                    %  Y = exp(obj.Predictions.rho);
-                    %  LLH = sum(obj.ObservationWeight .* (obj.T.*log(Y)-Y-logfact(obj.T)));
-                    correct = (obj.T==Y);
+                                  correct = (obj.T==Y);
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
                 case 'normal'
                     accuracy = nan;
@@ -2698,7 +2706,6 @@ classdef gum
 
             W = [M.Weights];
 
-            %if all( cellfun(@(x) all(x>0),{M.nWeight})>0) % unless there is an empty model
             if all([W.nWeight]>0) % unless there is an empty model
 
                 Rmat = spdiags(R, 0, n, n);
@@ -2906,13 +2913,7 @@ classdef gum
                 if ~all(rank==rank(1))
                     error('rank of module %d differs between models', m);
                 end
-                %                 nReg = cellfun(@(x) x(m).nWeight, {obj.regressor},'unif',0);
-                %                 nReg = cat(1,nReg{:});
-                %                 if ~all(nReg==nReg(1,:),'all')
-                %                     error('number of regressors in module %d differs between models', m);
-                %                 end
-
-
+               
                 W = cellfun(@(x) x(m).Weights, {obj.regressor},'unif',0); % set of weights for this module, for all models
                 W = cat(1,W{:}); % weights structure array, nObj x nDim
                 fnames = fieldnames(W);
@@ -2934,8 +2935,16 @@ classdef gum
                 % appropriate
                 for d=1:nD(1)
 
-                    if ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d))) || ...
-                            ~all(cellfun(@(x) all(abs(x-scale{1,d})<1e-15) ,scale(2:end,d))) % just in case of numerical imprecisions
+                    % check if different scales used across models
+                    DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
+                    if DifferentScale && isnumeric(scale{1,d}) 
+
+                         % just in case same scale with some numerical imprecisions
+                        DifferentScale = ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
+                            ~all(cellfun(@(x) all(abs(x(:)-scale{1,d}(:))<1e-15) ,scale(2:end,d))); 
+                    end
+                    if  DifferentScale
+                           
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
@@ -3451,58 +3460,13 @@ classdef gum
             %
             % h = plot_design_matrix(...) provide graphic handles
 
-
             h.Axes = [];
             h.Objects = {};
 
+            % compute design matrix
             [Phi, nReg, dims] = design_matrix(obj.regressor, varargin{:});
 
             M = obj.regressor;
-
-            %             if nargin>1 % only plot for subset of trials
-            %                 obj = extract_observations(obj,subset);
-            %             end
-            %
-            %             M = obj.regressor;
-            %
-            %             if nargin<3 % by default, project on dimension 1
-            %                 D = ones(1,obj.nMod);
-            %             end
-            %
-            %
-            %             %  rank = ones(1,obj.nMod); % all rank one
-            %             nReg = zeros(1,obj.nMod);
-            %
-            %             for m=1:obj.nMod
-            %                 nReg(m) = M(m).rank*M(m).nWeight(D(m)); % add number of regressors for this module
-            %
-            %                 if isempty(M(m).U)
-            %                     for d=1:M(m).nDim
-            %                         M(m).U{d} = zeros(M(m).rank,M(m).nWeight(d));
-            %                     end
-            %                 end
-            %
-            %                 %M(m).Data = tocell(M(m).Data);
-            %
-            %                 % initialize weight to default value
-            %                 M(m) = M(m).initialize_weights();
-            %
-            %             end
-            %
-            %             n = obj.nObs;
-            %
-            %             ii = 0; % index for regressors in design matrix
-            %             Phi = zeros(n,sum(nReg));
-            %             for m=1:obj.nMod
-            %
-            %                 % project on all dimensions except the dimension to optimize
-            %
-            %                 for r=1:rank(m)
-            %                     idx = ii + (1:M(m).nWeight(D(m))); % index of regressors
-            %                     Phi(:,idx) = ProjectDimension(M(m),r,D(m)); % tensor product, and squeeze into observation x covariate matrix
-            %                     ii = idx(end); %
-            %                 end
-            %             end
 
             hold on;
             colormap(gray);
@@ -3667,7 +3631,6 @@ classdef gum
             % plot_hyperparameters(M) plots values of hyperparameters in model
             % M.
 
-
             M = obj.regressor;
 
             i = 1; % subplot counter
@@ -3685,7 +3648,6 @@ classdef gum
 
             %% plot hyperparmeters
             for m=find(ndim)
-
 
                 for d=1:ndim(m)
                     h.Axes(end+1) = subplot2(nDim_tot,i);
@@ -4416,7 +4378,6 @@ while ~isempty(fmla)
 
         %% process regressor options
 
-
         % check for split variable first
         [opts, fmla] = process_split_variable(fmla, opts, VarNames);
 
@@ -4622,7 +4583,7 @@ while ~isempty(fmla)
     end
 
     %% Now let's look for operations
-    if ~any(fmla(1)=='+*-:;')
+    if ~any(fmla(1)=='+*-:^;')
         error('Was expecting an operator in formula at point ''%s''', fmla);
     end
 
@@ -4728,15 +4689,16 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
 
     if ~isempty(OpenBracketPos)
         % select which parenthesis to process first
-        i = 1;
-        while length(OpenBracketPos)>i && OpenBracketPos(i+1)<CloseBracketPos(i)
-            i = i+1; % if another bracket is opened before this one is closed, then process the inner bracket first
+        iBracket = 1;
+        while length(OpenBracketPos)>iBracket && OpenBracketPos(iBracket+1)<CloseBracketPos(iBracket)
+            iBracket = iBracket+1; % if another bracket is opened before this one is closed, then process the inner bracket first
         end
+        iReg = OpenBracketPos(iBracket)+1;
 
         % make sure there's no lag operator within this bracket
         if ~isempty(LagStruct)
             LSini = cellfun(@(x) x.ini,LagStruct);
-            i_lag = find(LSini>OpenBracketPos(i) & LSini<=OpenBracketPos(i),1);
+            i_lag = find(LSini>OpenBracketPos(iBracket) & LSini<=OpenBracketPos(iBracket),1);
             process_lag = ~isempty(i_lag);
         else
             process_lag = false;
@@ -4751,23 +4713,23 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         %process lag
         LS = LagStruct{i_lag};
         idx = LS.ini+1 : LS.end; % indices of regressors into the bracket
-        i = i_lag;
+        iBracket = i_lag;
     else
         % process brackets
-        idx = OpenBracketPos(i)+1:CloseBracketPos(i); % indices of regressors into the bracket
+        idx = OpenBracketPos(iBracket)+1:CloseBracketPos(iBracket)+1; % indices of regressors into the bracket
     end
 
 
     % recursive call: compose regressors within brackets
-    [V{i}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], [],[]);
+    [V{iReg}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], [],[]);
     assert( all(this_idxC==1), 'incorrect formula: cannot use mixture break within brackets');
 
 
     % if possible, concatenate regressors within parenthesis into single
     % regressor (useful e.g. for later multiplying with other term)
-    if cat_regressor(V{i}, 1, 1)
-        V{i} = cat_regressor(V{i}, 1);
-        this_idxC(length(V{i})+1:end) = [];
+    if cat_regressor(V{iReg}, 1, 1)
+        V{iReg} = cat_regressor(V{iReg}, 1);
+        this_idxC(length(V{iReg})+1:end) = [];
     end
 
     if process_lag
@@ -4782,14 +4744,14 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         opts_fields = fieldnames(LS);
         opts_values = struct2cell(LS);
         opts_combined = [opts_fields opts_values]';
-        V{i} = laggedregressor(V{i},Lags, opts_combined{:});
+        V{iReg} = laggedregressor(V{iReg},Lags, opts_combined{:});
 
-        LagStruct(i) = [];
+        LagStruct(iBracket) = [];
     else
 
         % remove elements already processed
-        OpenBracketPos(i) = [];
-        CloseBracketPos(i) = [];
+        OpenBracketPos(iBracket) = [];
+        CloseBracketPos(iBracket) = [];
     end
 
     V(idx(2:end)) = []; % regressors
@@ -4802,11 +4764,15 @@ idxC = [];
 
 while length(V)>1
 
-    if any(O==':') % first process interaction interactions
+    if any(O==':^') % first process interaction interactions
 
-        v = find(O==':',1);
+        v = find(O==':' || O=='^',1);
 
-        V{v} = V{v} : V{v+1}; % compose product
+        if O(v) == ':'
+        V{v} = V{v} : V{v+1}; % compose interaction
+        else
+V{v} = V{v} ^ V{v+1}; % compose interaction (with main effects)
+        end
 
         % remove regressor and operation
         V(v+1) = [];
@@ -4958,6 +4924,7 @@ if ~isempty(fmla) && fmla(1)=='|'
 
     opts.split = v_split;
 end
+fmla = trimspace(fmla);
 end
 
 %% trim space at the beginning and end of a character string
@@ -5008,5 +4975,11 @@ metrics = {'nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','A
     'accuracy','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','FittingTime'};
 end
 
-
+ function c = char_type(X)
+ if isnumeric(X)
+     c = 'f';
+ else
+     c = 's';
+ end
+ end
 

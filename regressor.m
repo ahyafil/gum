@@ -89,6 +89,7 @@ classdef regressor
     % character values are:
     % - 'free': free, unconstrained (one and only one dimension)
     % - 'nullsum': sum of weights is set to 0
+    % - 'first0': first weight set to 0
     % - 'mean1': mean over weights in dimension d is set to 1
     % - 'sum1': sum over weights in dimension d is set to 1
     % - 'first1': first element in weight vector is set to 1
@@ -114,7 +115,7 @@ classdef regressor
         nObs
         Weights
         Prior
-        HP = HPstruct
+        HP = HPstruct()
         rank = 1
         ordercomponent = false
     end
@@ -391,7 +392,6 @@ classdef regressor
                     obj.Data = X;
                     obj.nDim = 1;
                     obj.Weights(1).constraint = 'fixed';
-                    % obj.U = {}; %{ones(1,obj.nWeight)};
                     obj.formula = label{1};
                     obj.Prior(1).type = 'none';
 
@@ -400,15 +400,6 @@ classdef regressor
 
                     obj.Data = X;
                     obj.Data(isnan(obj.Data)) = 0; % convert nans to 0: missing regressor with no influence on model
-                    % if any(strcmp(summing,{'split','separate'}))
-                    %     nWeight = nWeight * prod(siz(3:end));
-                    %     obj.Data = reshape(X, siz(1), nWeights); % vector set replicated along dimension 3 and beyond
-                    %     obj.nDim = 1;
-                    % else
-                    %obj.nDim = nD;
-                    %  nD = obj.nDim;
-
-                    % end
 
                     % process hyperparameters
                     HP = tocell(HP,nD);
@@ -555,15 +546,22 @@ classdef regressor
                     obj.Weights(d).constraint = "sum1"; % sum-one constraint
                 end
                 obj.Weights(FreeDim).constraint = "free";
+                if strcmpi(type, 'categorical') % categorical variable: we fix the first weight to reference value
+                    if nD==1
+                        obj.Weights.constraint = "first0";
+                    elseif nD~=FreeDim
+                        obj.Weights.constraint = "first1";
+                    end
+                end
             end
 
             % whether components should be reordered according to variance, default: reorder if all components have same constraints
             if obj.rank>1
                 obj.ordercomponent = true;
                 for d=1:nD
-                   % cc_rank1 = constraint(1,d);
-                  %  if ~all( cellfun(@(cc) isequal(cc,cc_rank1), constraint(:,d)) )
-                   if ~all(  constraint(:,d) == constraint(1,d))
+                    % cc_rank1 = constraint(1,d);
+                    %  if ~all( cellfun(@(cc) isequal(cc,cc_rank1), constraint(:,d)) )
+                    if ~all(  constraint(:,d) == constraint(1,d))
                         obj.ordercomponent = false;
                     end
                 end
@@ -572,127 +570,8 @@ classdef regressor
 
             obj = obj.split_or_separate(summing);
 
-            %             %% if splitting along one dimension (or separate into different observations)
-            %             SplitDims = fliplr(find(SplitOrSeparate));
-            %
-            %             if length(SplitDims)==1 && SplitDims==obj.nDim && obj.nDim==2 && strcmpi(summing{obj.nDim}, 'split') && ~(isa(obj.Data,'sparsearray') && subcoding(obj.Data,3))
-            %                 %% exactly the same as below but should be way faster for this special case
-            %
-            %                 % reshape regressors as matrices
-            %                 nWeightCombination = prod([obj.Weights.nWeight]);
-            %                 obj.Data = reshape(obj.Data,[obj.nObs nWeightCombination]);
-            %
-            %                 if isa(obj.Data, 'sparsearray') && ismatrix(obj.Data)
-            %                     obj.Data = matrix(obj.Data); % convert to basic sparse matrix if it is 2d now
-            %                 end
-            %
-            %                 % how many times we need to replicate covariance function
-            %                 %nRep = obj.Weights(2).nWeight;
-            %                 obj.Prior(1).replicate = obj.Weights(2).nWeight * obj.Prior(1).replicate;
-            %
-            %                 % build covariance function as block diagonal
-            %                 %obj.Prior(1).CovFun = @(P)  replicate_covariance(obj.Prior(1).CovFun, P, nRep);
-            %
-            %                 obj.Weights(1).nWeight = obj.Weights(1).nWeight*obj.Weights(2).nWeight; % one set of weights in dim 1 for each level of dim 2
-            %             else
-            %
-            %                 for d=SplitDims
-            %                     nRep = obj.Weights(d).nWeight;
-            %
-            %                     % replicate design matrix along other dimensions
-            %                     for dd = setdiff(1:obj.nDim,d)
-            %
-            %                         if isa(obj.Data,'sparsearray') && subcoding(obj.Data,dd+1) && strcmpi(summing{d}, 'split')
-            %                             % if splitting dimension is encoding with
-            %                             % OneHotEncoding, faster way
-            %                             shift_value = obj.Data.siz(dd+1) * (0:nRep-1); % shift in each dimension (make sure we use a different set of indices for each value along dimension d
-            %                             shift_size = ones(1,1+obj.nDim);
-            %                             shift_size(d) = nRep;
-            %                             shift = reshape(shift_value,shift_size);
-            %
-            %
-            %                             obj.Data.sub{dd+1} = obj.Data.sub{dd+1} +  shift;
-            %                         else % general case
-            %                             X = obj.Data;
-            %
-            %                             % size of new array
-            %                             new_size = size(X);
-            %                             new_size(dd+1) = new_size(dd+1)*nRep; % each regressor is duplicated for each value along dimension d
-            %                             if strcmpi(summing{d}, 'separate')
-            %                                 new_size(1) = new_size(1)*nRep; % if seperate observation for each value along dimension d
-            %                             end
-            %
-            %                             % preallocate memory for new data array
-            %                             if ~issparse(X)
-            %                                 obj.Data = zeros(new_size);
-            %                             elseif length(new_size)<2
-            %                                 obj.Data = spalloc(new_size(1),new_size(2), nnz(X));
-            %                             else
-            %                                 obj.Data = sparsearray('empty',new_size, nnz(X));
-            %                             end
-            %
-            %                             % indices of array positions when filling up
-            %                             % array
-            %                             idx = cell(1,ndims(X));
-            %                             for ee = 1:ndims(X)
-            %                                 idx{ee} = 1:size(X,ee);
-            %                             end
-            %
-            %                             for r=1:nRep % loop through all levels of splitting dimension
-            %                                 idx{d+1} = r; % focus on r-th value along dimension d
-            %                                 idx2 = idx;
-            %                                 idx2{d+1} = 1;
-            %                                 idx2{dd+1} = (r-1)*size(X,dd+1) + idx{dd+1};
-            %                                 if strcmpi(summing{d}, 'separate')
-            %                                     idx2{1} = (r-1)*size(X,1) + idx{1};
-            %                                 end
-            %                                 obj.Data(idx2{:}) = X(idx{:}); % copy content
-            %                             end
-            %                         end
-            %
-            %                         obj.Weights(dd).scale = interaction_levels(obj.Weights(dd).scale, obj.Weights(d).scale);
-            %
-            %                         % build covariance function as block diagonal
-            %                         obj.Prior(dd).replicate = nRep * obj.Prior(dd).replicate;
-            %                         %  obj.Prior(dd).CovFun = @(P)  replicate_covariance(obj.Prior(dd).CovFun, P, nRep);
-            %
-            %                         obj.Weights(dd).nWeight = obj.Weights(dd).nWeight*nRep; % one set of weights in dim dd for each level of splitting dimension
-            %                     end
-            %
-            %                     % remove last dimension
-            %                     idx = repmat({':'},1,ndims(obj.Data));
-            %                     idx{d+1} = 2:size(obj.Data,d+1); % keep this dimension as singleton
-            %                     Str = struct('type','()','subs',{idx});
-            %                     obj.Data = subsasgn(obj.Data, Str, []);
-            %
-            %                     if isa(obj.Data, 'sparsearray') && ismatrix(obj.Data)
-            %                         obj.Data = matrix(obj.Data); % convert to standard sparse matrix if it is two-D now
-            %                     end
-            %
-            %                 end
-            %
-            %                 if ~isempty(SplitDims)
-            %                     % reshape data array
-            %                     NonSplitDims = setdiff(1:obj.nDim, SplitDims); % non-splitting dimensions
-            %                     obj.Data = reshape(obj.Data, [size(obj.Data,1)  obj.Weights(NonSplitDims).nWeight]);
-            %                 end
-            %             end
-            %
-            %             % if separate: update number of observations (multiply by
-            %             % number of levels along each splitting dimension)
-            %             SeparateDims = strcmpi(summing, 'separate');
-            %             obj.nObs = obj.nObs*prod([obj.Weights(SeparateDims).nWeight]);
-            %
-            %             % remove corresponding Weights and Prior and HP for splitting
-            %             % dimensions, and update dimensionality
-            %             obj.Weights(SplitDims) = [];
-            %             obj.Prior(SplitDims) = [];
-            %             obj.HP(SplitDims) = [];
-            %             obj.nDim = obj.nDim - length(SplitDims);
-
             if ~isempty(constraint)
                 assert(length(constraint)==nD, 'length of constraint C should match the number of dimensions in the regressor');
-                % assert(all(ismember(constraint, 'fbsm1n')), 'possible characters in constraint C are: ''fbsm1n''');
                 for d=1:nD
                     obj.Weights(d).constraint = constraint(d);
                 end
@@ -715,40 +594,36 @@ classdef regressor
             if length(obj)>1
                 error('this method is only defined for single object');
             end
-            ss = [obj.Weights.nWeight]; % number of weights for each component
-            np = repelem(ss,obj.rank); % replicate by rank
+            nWeight = cellfun(@sum, {obj.Weights.nWeight}); % number of weights for each component
+            np = repelem(nWeight,obj.rank); % replicate by rank
         end
 
         %% GET NUMBER OF FREE PARAMETERS
-        function nFreeWeights = get.nFreeParameters(obj) % !! change to nFreeWeights?
+        function nFreeWeights = get.nFreeParameters(obj)
 
             % number of total weights
             W = [obj.Weights];
-            nWeight = [W.nWeight]; 
+            nWeight = cellfun(@sum, {W.nWeight});
 
             % reduce free weights for constraints
-                        nConstraint = zeros(size(W));
+            nConstraint = zeros(size(W));
             for c=1:numel(W)
                 cc = constraint_structure(W(c));
                 nConstraint(c) = cc.nConstraint;
             end
-            nFreeWeights = nWeight-nConstraint;
-            % ss = ss - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
+            nFreeWeights = nWeight - nConstraint;
 
             % when using basis, use number of basis functions instead
             Bcell = {obj.Weights.basis};
             B = [Bcell{:}];
             withBasis = ~cellfun(@isempty, Bcell);
-            if ~isempty(B)
+            if ~iscell(B) && ~isempty(B)
                 projectedBasis = [B.projected];
-                %ss(cellfun(@(x) ~isempty(x) && ~x.projected,Bcell)) = [B.nWeight];
                 nFreeWeights(withBasis) = [B.nWeight].*(1-projectedBasis) + [obj.Weights(withBasis).nWeight].*projectedBasis;
             end
 
             % number of free parameters per set weight
             nFreeWeights = repmat(nFreeWeights,obj.rank,1);
-            %               nf = repmat(ss,obj.rank,1) - (cc~='f') - (ss-1).*(cc=='n' | ~cc);
-
         end
 
         %% GET NUMBER OF FREE DIMENSIONS
@@ -835,6 +710,35 @@ classdef regressor
             end
         end
 
+        %% SELECT REGRESSOR BY INDEX OF LABEL
+        function W = select_weights(obj, idx)
+            %% select regressors by index or label  (e.g. for plotting)
+            % W = select_regressors(R, idx);
+            % W = select_regressors(R, label);
+            if isstring(idx)
+                idx = {idx};
+            end
+
+            AllWeights = [obj.Weights];
+            AllLabel = {AllWeights.label};
+
+            % if regressor labels are provided, convert to labels
+            jdx = cell(1,length(idx));
+            if iscell(idx)
+                for m=1:length(idx)
+                    ii = find(strcmp(idx{m},AllLabel));
+                    if isempty(ii)
+                        error('label ''%s'' does not match any regressor label', idx{m});
+                    end
+                    jdx{m} = ii;
+                end
+                idx = jdx;
+            end
+
+            % select set of regressors;
+            W = obj(idx);
+        end
+
         %% CONCATENATE ALL WEIGHTS
         function U = concatenate_weights(obj, dims, fild)
             % U = concatenate_weights(M) concatenate all weights posterior
@@ -869,7 +773,7 @@ classdef regressor
                 nRegTot = 0;
                 nR = zeros(1,length(obj));
                 for m=1:length(obj)
-                    nR(m)  = obj(m).Weights(dims(m)).nWeight;
+                    nR(m)  = sum(obj(m).Weights(dims(m)).nWeight);
                     nRegTot = nRegTot + nR(m);
                 end
 
@@ -907,9 +811,9 @@ classdef regressor
             % set(s) of weights with label lbl (lbl is a string or cell array
             % of string)
 
-if nargin<4
-    bool = true;
-end
+            if nargin<4
+                bool = [true true];
+            end
 
             if isa(obj2,'gum')
                 obj2 = obj2.regressor;
@@ -938,7 +842,7 @@ end
                     W = obj(ind1(1)).Weights(ind1(2));
                     W2 = obj2(ind2(1)).Weights(ind2(2));
 
-                    assert(W.nWeight==W2.nWeight, 'the number of weights do not match for at least one set of weights with same label');
+                    assert(all(W.nWeight==W2.nWeight), 'the number of weights do not match for at least one set of weights with same label');
 
                     % assign value
                     obj(ind1(1)).Weights(ind1(2)).PosteriorMean = W2.PosteriorMean;
@@ -1032,7 +936,7 @@ end
                     dim_list = 1:obj(m).nDim;
                 end
                 for d = dim_list
-                    nR = obj(m).Weights(d).nWeight; % number of regressors
+                    nR = sum(obj(m).Weights(d).nWeight); % number of regressors
                     switch fild
                         case 'PosteriorMean'
                             this_constraint = constraint_type(obj(m).Weights(d));
@@ -1043,7 +947,9 @@ end
                                     obj(m).Weights(d).PosteriorMean(r,:) = U(idx); % weight for corresponding adim and component
                                     if this_constraint=="first1" % enforce this
                                         obj(m).Weights(d).PosteriorMean(r,1)=1;
-                                        warning('check if I should change idx to idx+1');
+                                        %  warning('check if I should change idx to idx+1');
+                                    elseif this_constraint=="first0" % enforce this
+                                        obj(m).Weights(d).PosteriorMean(r,1)=0;
                                     end
                                 end
                             end
@@ -1218,9 +1124,10 @@ end
             for m=1:nM % for each module
                 W(m) = obj(m).Weights(dims(m)); % select weight structures for specified dimensions
             end
-            nR = [W.nWeight]; % corresponding number of weights
+            %  nW = [W.nWeight]; % corresponding number of weights
+            nW = cellfun(@sum, {W.nWeight}); % corresponding number of weights
 
-            nRegTotal = sum(nR); % total number of regressors
+            nRegTotal = sum(nW); % total number of regressors
 
             %% first process fixed set of weights
             ii=0;
@@ -1231,7 +1138,7 @@ end
                 %  if any(constraint == "fixed") % if weight is fixed, remove entire projection
                 %      for r = find(constraint == "fixed") % for each set fo fixed weight
                 for r=1:obj(m).rank
-                    idx  = ii + (nR(m)*(r-1)+1:nR(m)*r); % index of regressors
+                    idx  = ii + (nW(m)*(r-1)+1:nW(m)*r); % index of regressors
                     FixedWeight(idx) = constrained_weight(W(m)); % fixed weights (either whole set or just subset of weights)
                 end
                 %          FixedWeight(idx) = true;
@@ -1239,7 +1146,7 @@ end
 
                 %      end
                 %   end
-                ii = ii + obj(m).rank*nR(m);
+                ii = ii + obj(m).rank*nW(m);
             end
 
             if any(FixedWeight) % compute the projection without fixed weights (if any)
@@ -1256,7 +1163,7 @@ end
 
                 for r=1:obj(m).rank
 
-                    idx = ii + (1:nR(m)); % index of regressors
+                    idx = ii + (1:nW(m)); % index of regressors
 
                     % removing portion of rho due to projections of weights perpendicular to constraints
                     ct = constraint_structure(W(m));
@@ -1298,10 +1205,10 @@ end
             Uc2 = [Uc{:}]; % concatenate over modules
 
             % fixed part of the weights
-            Uconst = repelem(Uc2,repelem(nR',[obj.rank]))';
+            Uconst = repelem(Uc2,repelem(nW',[obj.rank]))';
 
             % we treated fixed weights apart, let's add them here
-            Uconst(FixedWeight) = Uconst(FixedWeight) + UU(FixedWeight);
+            Uconst(FixedWeight) = Uconst(FixedWeight) + UU(FixedWeight)';
         end
 
         %% DEFINE PRIOR FOR ARRAY DIMENSIONS
@@ -1319,7 +1226,7 @@ end
             single_tau(end+1:max(all_dims)) = true;
 
             for d= all_dims % for all specified dimensions
-                if isempty(summing{d}) % by default: linear set of weights for each dimension
+                if isempty(summing{d}) || strcmp(summing{d},'weighted') % by default: linear set of weights for each dimension
                     summing{d} = 'linear';
                 end
                 obj.Weights(d).type = summing{d};
@@ -1519,11 +1426,15 @@ end
                     if strcmpi(type,'periodic')
                         tau = period/4; % initial time scale: period/4
                     else
-                        dt =  mean(diff(scale,[],2),2)'; % data point resolution (mean difference between two points)
+                        % data point resolution (mean difference between two points)
+                        dt = zeros(1,size(scale,1));
+                        for ss=1:size(scale,1)
+                            dt(ss) = mean(diff(unique(scale(ss,:))));
+                        end
                         % tau = dt; % initial time scale: mean different between two points
                         span = max(scale,[],2)' - min(scale,[],2)'; % total span in each dimension
                         tau =  sqrt(dt.*span); % geometric mean between the two
-                        if single_tau
+                        if single_tau(d)
                             tau = mean(tau);
                         end
                     end
@@ -1652,51 +1563,18 @@ end
 
             D = obj.nDim;
             rr = obj.rank;
-         %   nWeights = [obj.Weights.nWeight];
-         %   cc = {obj.Weights.constraint};
             PP = cell(rr,D);
             for d=1:D % for each dimension
                 for r=1:rr % for each component
-
                     this_constraint = constraint_structure(obj.Weights(d));
                     PP{r,d} = compute_orthonormal_basis_project(this_constraint.V);
-
-
-                    %                     switch cc(r,d)
-                    %
-                    %                         case 'f' % free dimension
-                    %                             PP{r,d} = speye(nWeights(d)); % no projection for first set of weight
-                    %                         case {'b','m','s'} % sum to zero, average weight or sum set to one
-                    %
-                    %                             PP{r,d} = zeros(nWeights(d)-1,nWeights(d)); % rows: free, col:complete
-                    %                             for i=1:nWeights(d)-1
-                    %                                 PP{r,d}(i,:) = [ones(1,i) -i zeros(1,nWeights(d)-i-1)]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
-                    %                             end
-                    %
-                    %                             %                             %PP{r,d} = sparse(ss(d)-1,ss(d)); % rows: free, col:complete
-                    %                             %                             I = []; % rows: free parameters
-                    %                             %                             J = []; % columns: complete parameter set
-                    %                             %                             VV = []; % value
-                    %                             %                             for i=1:ss(d)-1
-                    %                             %                                 vv = [ones(1,i) -i]/sqrt(i*(i+1)); % coordinates for i-th basis vector of free space
-                    %                             %                                 I = [I i*ones(1,length(vv))];
-                    %                             %                                 J = [J 1:i+1];
-                    %                             %                                 VV = [VV vv];
-                    %                             %
-                    %                             %                             end
-                    %                             %                             PP{r,d} = sparse(I,J,VV,ss(d)-1,ss(d));
-                    %                         case '1' % first weight set to 1
-                    %                             PP{r,d} = [sparse(nWeights(d)-1,1) speye(nWeights(d)-1)]; % first col is just 0, then identity matrix
-                    %                         case 'n' % fixed set of weights (no free parameter)
-                    %                             PP{r,d} = sparse(0,nWeights(d));
-                    %                     end
                 end
             end
 
         end
 
         %% COMPUTE DESIGN MATRIX
-        function [Phi,nReg, dims] = design_matrix(obj,subset, dims, init_weight)
+        function [Phi,nWeight, dims] = design_matrix(obj,subset, dims, init_weight)
             % Phi = design_matrix(R);
             % computes the design matrix associated with regressors R
             %
@@ -1745,11 +1623,11 @@ end
 
             %  computes the number of columns corresponding to each
             %  regressor
-            nReg = zeros(1,nF);
+            nWeight = zeros(1,nF);
             ii = 1;
             for m=1:nM
                 for d=dims{m}
-                    nReg(ii) = obj(m).rank*obj(m).Weights(d).nWeight; % add number of regressors for this module
+                    nWeight(ii) = sum(obj(m).rank*obj(m).Weights(d).nWeight); % add number of regressors for this module
                     ii = ii+1;
                 end
             end
@@ -1759,14 +1637,14 @@ end
                 for m=1:nM
                     % if empty weight, pre-allocate
                     for d=1:obj(m).nDim
-                        if isempty(obj(m).Weights(d).PosteriorMean)
-                            obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank,obj(m).Weights(d).nWeight);
+                        W = obj(m).Weights(d);
+                        if isempty(W.PosteriorMean)
+                            obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank, sum(W.nWeight));
                         end
                     end
 
                     % initialize weight to default value
                     obj(m) = obj(m).initialize_weights();
-
                 end
             end
 
@@ -1775,16 +1653,16 @@ end
             % use sparse coding if any data array is sparse
             SpCode = any(cellfun(@issparse, {obj.Data}));
             if SpCode
-                Phi = sparse(obj(1).nObs,sum(nReg));
+                Phi = sparse(obj(1).nObs,sum(nWeight));
             else
-                Phi = zeros(obj(1).nObs,sum(nReg));
+                Phi = zeros(obj(1).nObs,sum(nWeight));
             end
             for m=1:nM % for each module
 
                 % project on all dimensions except the dimension to optimize
                 for d=dims{m}
                     for r=1:obj(m).rank
-                        idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
+                        idx = ii + (1:sum(obj(m).Weights(d).nWeight)); % index of regressors
                         Phi(:,idx) = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
                         ii = idx(end); %
                     end
@@ -1806,12 +1684,13 @@ end
             end
 
             nD = obj.nDim; % dimension in this module
-            ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            cc = constraint_type([obj.Weights]); % constraint for this module
             rk = obj.rank;
 
             for r=1:rk % for each rank
                 for d=1:nD % for each dimension
+                    W = obj.Weights(d);
+                    nW = sum(W.nWeight);
+
                     % if more than one rank and only defined for first, use
                     % same as first
                     if r>1 && ((size(obj.Prior,1)<r) || isempty(obj.Prior(r,d).PriorCovariance))
@@ -1819,14 +1698,15 @@ end
                     end
 
                     if isempty(obj.Prior(r,d).PriorCovariance) % by default:
-                        if d<=nD && cc(r,d) =="first1" % no covariance for first weight (set to one), unit for the others
-                            obj.Prior(r,d).PriorCovariance = diag([0 ones(1,ss(d)-1)]);
+                        ct = constraint_type(W);
+                        if d<=nD && ismember(ct,["first0","first1"]) % no covariance for first weight (set to zero/one), unit for the others
+                            obj.Prior(r,d).PriorCovariance = diag([0 ones(1,nW-1)]);
                         else % otherwise diagonal unit covariance
-                            obj.Prior(r,d).PriorCovariance = speye(ss(d));
+                            obj.Prior(r,d).PriorCovariance = speye(nW);
                         end
                     end
-                    if ~isequal(size(obj.Prior(r,d).PriorCovariance),[ss(d) ss(d)])
-                        error('Prior covariance for dimension %d should be a square matrix of size %d', d, ss(d));
+                    if ~isequal(size(obj.Prior(r,d).PriorCovariance),[nW nW])
+                        error('Prior covariance for dimension %d should be a square matrix of size %d', d, nW);
                     end
                 end
             end
@@ -1840,7 +1720,10 @@ end
 
                 for d=1:obj(m).nDim % each dimension
                     B = obj(m).Weights(d).basis;
-                    if ~isempty(B) && ~B.projected % if we're using a set of basis functions
+                    if iscell(B) && ~all(cellfun(@isempty,B))
+                        error('regressor with basis functions concatenated with other regressor is not coded yet');
+                    end
+                    if ~iscell(B) && ~isempty(B) && ~B.projected % if we're using a set of basis functions
 
                         % hyperparameter values for this component
                         this_HP = obj(m).HP(d).HP; %fixed values
@@ -1894,12 +1777,6 @@ end
                                     B2 = B2 / cc(1).u;
                                     cc(1).u = 1;
                                 end
-
-
-                                %
-                                % if cc=='m' % rescale
-                                %     B2 = B2/obj(m).Weights(d).nWeight;
-                                % end
 
                                 invB = diag(1./B2);
                                 B.B = invB * B.B; % change projection matrix so that constraint is sum of weight equal to one
@@ -1973,7 +1850,7 @@ end
 
                 for d=1:obj(m).nDim
                     B = obj(m).Weights(d).basis;
-                    if ~isempty(B) && B.projected
+                    if ~iscell(B) && ~isempty(B) && B.projected
 
                         tmp_nWeight = B.nWeight;
                         tmp_scale = B.scale;
@@ -2120,107 +1997,104 @@ end
             %% project to basis functions
             obj = project_to_basis(obj);
 
+            %% evaluate prior covariance
             for m=1:length(obj)
-                with_grad = (nargout>1); % compute gradient
+
                 nD = obj(m).nDim; % number of dimensions for this module
                 rk = obj(m).rank; % rank
-                ss = [obj(m).Weights.nWeight]; % size of each dimension
-
-                %% evaluate prior covariance
-                P = obj(m).Prior; % prior structure
-
                 gsf = cell(rk,nD);
                 for d=1:nD
-                    if size(P,1)==1 || isempty(P(2,d).CovFun)
+                    if size(obj(m).Prior,1)==1 || isempty(obj(m).Prior(2,d).CovFun)
                         % if more than rank 1 but same covariance prior for
                         % all
                         rrr = 1;
                     else
                         rrr = rk;
                     end
-                    % r=1;
                     for r=1:rrr
-                        if ~recompute && ~isempty(P(r,d).PriorCovariance)
+                        P = obj(m).Prior(r,d); % prior structure
+                        W = obj(m).Weights(d);
+                        nW = sum(W.nWeight);
+                        if ~recompute && ~isempty(P.PriorCovariance)
                             % do nothing we already have the covariance
                             % prior
-                            Sigma = P(r,d).PriorCovariance;
+                            Sigma = P.PriorCovariance;
                         else
-                            if isa(P(r,d).CovFun, 'function_handle') % function handle
+                            if isa(P.CovFun, 'function_handle') || iscell(P.CovFun) % function handle(s)
 
-
-                                % hyperparameter values for this component
-                                this_HP = obj(m).HP(r,d).HP; %hyperparameter values
-                                this_nHP = length(this_HP); % number of hyperparameters
-                                this_scale = obj(m).Weights(d).scale;
-                                nRep = P(r,d).replicate;
-                                if  ~isempty(nRep) && nRep>1 % if we replicate the covariance matrix, we need to remove splitting dimensions are repetitions
-                                    % we don't know which of the last
-                                    % rows(s) in scale code for the
-                                    % splitting variable, so let's find out
-                                    nRep_check = 1;
-                                    iRow = size(this_scale,1)+1; % let's start from no row at all
-
-                                    while nRep_check<nRep && iRow>1
-                                        iRow=iRow-1; % move one row up
-                                        [id_list,~,split_id] = unique(this_scale(iRow:end,:)','rows'); % get id using last rows
-
-                                        nRep_check = size(id_list,1); % number of unique sets
-                                    end
-                                    assert(nRep_check==nRep, 'weird error, could not find out splitting rows in scale');
-
-                                    this_scale(iRow:end,:) =[]; % remove these rows for computing prior covariance
-                                    this_scale = this_scale(:,split_id==1); % to avoid repetitions of value
-
-                                end
-                                this_basis = obj(m).Weights(d).basis;
-
-                                % compute associated covariance matrix
-                                CovFun = P(r,d).CovFun;
-                                % [Sigma, gg]= CovFun(this_scale,this_HP, this_params);
-                                if with_grad % need gradient
-                                    [Sigma, gg]= CovFun(this_scale,this_HP, this_basis);
-
-                                    % replicate covariance matrix if needed
-                                    [Sigma, gg]= replicate_covariance(nRep, Sigma,gg);
-                                    if isstruct(gg)
-                                        gg = gg.grad;
-                                    end
-                                    if size(gg,3) ~= this_nHP
-                                        error('For component %d and rank %d, size of covariance matrix gradient along dimension 3 (%d) does not match corresponding number of hyperparameters (%d)',...
-                                            d,r, size(gg,3),this_nHP);
-                                    end
-
-                                    %% compute gradient now
-                                    gsf{r,d} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
-                                    for l=1:this_nHP
-                                        freeW = ~constrained_weight(obj(m).Weights(d)); % exclude fixed weights
-                                        gsf{r,d}(freeW,freeW,l) = - (Sigma(freeW,freeW) \ gg(freeW,freeW,l)) / Sigma(freeW,freeW);
-                                        %  if obj(m).Weights(d).constraint(r)=='1' % if first weight fixed to 1, invert only the rest
-                                        %      gsf{r,d}(:,:,l) = - blkdiag(0, (Sigma(2:end,2:end) \ gg(2:end,2:end,l)) / Sigma(2:end,2:end));% gradient of precision matrix
-                                        %  else
-                                        %
-                                        %     gsf{r,d}(:,:,l) = - (Sigma \ gg(:,:,l)) / Sigma;% gradient of precision matrix
-                                        % end
-                                    end
-
-                                    % select gradient only for fittable HPs
-                                    HP_fittable = logical(obj(m).HP(r,d).fit);
-                                    gsf{r,d} = gsf{r,d}(:,:,HP_fittable);
+                                if with_grad % gradient
+                                    [Sigma, gsf{r,d}] = evaluate_prior_covariance_function(P, obj(m).HP(r,d), W);
                                 else
-                                    Sigma= CovFun(this_scale,this_HP, this_basis);
+                                    Sigma = evaluate_prior_covariance_function(P, obj(m).HP(r,d), W);
 
-                                    % replicate covariance matrix if needed
-                                    Sigma= replicate_covariance(nRep, Sigma);
                                 end
-                            elseif isempty(P(r,d).CovFun) % default (fix covariance)
+
+                                %                                 % hyperparameter values for this component
+                                %                                 this_HP = obj(m).HP(r,d).HP; %hyperparameter values
+                                %                                 this_nHP = length(this_HP); % number of hyperparameters
+                                %                                 this_scale = W.scale;
+                                %                                 nRep = P.replicate;
+                                %                                 if  ~isempty(nRep) && nRep>1 % if we replicate the covariance matrix, we need to remove splitting dimensions are repetitions
+                                %                                     % we don't know which of the last
+                                %                                     % rows(s) in scale code for the
+                                %                                     % splitting variable, so let's find out
+                                %                                     nRep_check = 1;
+                                %                                     iRow = size(this_scale,1)+1; % let's start from no row at all
+                                %
+                                %                                     while nRep_check<nRep && iRow>1
+                                %                                         iRow=iRow-1; % move one row up
+                                %                                         [id_list,~,split_id] = unique(this_scale(iRow:end,:)','rows'); % get id using last rows
+                                %
+                                %                                         nRep_check = size(id_list,1); % number of unique sets
+                                %                                     end
+                                %                                     assert(nRep_check==nRep, 'weird error, could not find out splitting rows in scale');
+                                %
+                                %                                     this_scale(iRow:end,:) =[]; % remove these rows for computing prior covariance
+                                %                                     this_scale = this_scale(:,split_id==1); % to avoid repetitions of value
+                                %
+                                %                                 end
+                                %
+                                %                                 % compute associated covariance matrix
+                                %                                 CovFun = P.CovFun;
+                                %
+                                %                                 if with_grad % need gradient
+                                %                                     [Sigma, gg]= CovFun(this_scale,this_HP, W.basis);
+                                %
+                                %                                     % replicate covariance matrix if needed
+                                %                                     [Sigma, gg]= replicate_covariance(nRep, Sigma,gg);
+                                %                                     if isstruct(gg)
+                                %                                         gg = gg.grad;
+                                %                                     end
+                                %                                     if size(gg,3) ~= this_nHP
+                                %                                         error('For component %d and rank %d, size of covariance matrix gradient along dimension 3 (%d) does not match corresponding number of hyperparameters (%d)',...
+                                %                                             d,r, size(gg,3),this_nHP);
+                                %                                     end
+                                %
+                                %                                     %% compute gradient now
+                                %                                     gsf{r,d} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
+                                %                                     for l=1:this_nHP
+                                %                                         freeW = ~constrained_weight(obj(m).Weights(d)); % exclude fixed weights
+                                %                                         gsf{r,d}(freeW,freeW,l) = - (Sigma(freeW,freeW) \ gg(freeW,freeW,l)) / Sigma(freeW,freeW);
+                                %
+                                %                                     end
+                                %
+                                %                                     % select gradient only for fittable HPs
+                                %                                     HP_fittable = logical(obj(m).HP(r,d).fit);
+                                %                                     gsf{r,d} = gsf{r,d}(:,:,HP_fittable);
+                                %                                 else
+                                %                                     Sigma= CovFun(this_scale, this_HP, W.basis);
+                                %
+                                %                                     % replicate covariance matrix if needed
+                                %                                     Sigma= replicate_covariance(nRep, Sigma);
+                                %                                 end
+                            elseif isempty(P.CovFun) % default (fix covariance)
                                 Sigma = [];
-                                gsf{r,d} = zeros(ss(d),ss(d),0);
+                                gsf{r,d} = zeros(nW,nW,0);
                             else % fixed custom covariance
-                                Sigma = P(r,d).CovFun;
-                                gsf{r,d} = zeros(ss(r,d),ss(d),0);
+                                Sigma = P.CovFun;
+                                gsf{r,d} = zeros(nW,nW,0);
                             end
                         end
-                        nW = obj(m).Weights(d).nWeight; % corresponding number of weights
                         if ((size(Sigma,1)~=nW) || (size(Sigma,2)~=nW)) && ~isempty(Sigma)
                             error('covariance prior, dimension %d and rank %d should be square of size %d',d,r,nW);
                         end
@@ -2237,15 +2111,13 @@ end
 
                         % extend gradient
                         if with_grad
-                            % for d=1:DD
-                            % this_nHP = length(obj(m).HP(d).HP);
-                            gsf_new = zeros(ss(d)*rk,ss(d)*rk,this_nHP);
+
+                            gsf_new = zeros(nW*rk,nW*rk,this_nHP);
                             for l=1:this_nHP
                                 gg = repmat({gsf{1,d}(:,:,l)},rk,1);
                                 gsf_new(:,:,l) = blkdiag( gg{:});
                             end
                             gsf{1,d} = gsf_new;
-                            % end
                         end
                     end
 
@@ -2288,40 +2160,28 @@ end
 
             nD = obj.nDim; % dimension in this module
             ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            %cc = [obj.Weights.constraint]; % constraint for this module
             rk = obj.rank;
 
             for d=1:nD % for each dimension
                 for r=1:rk
+                    W = obj.Weights(d);
+                    nW = sum(W.nWeight);
                     if  ~isempty(obj.Prior(r,d).PriorMean)
                         mu = obj.Prior(r,d).PriorMean;
-                        assert( size(mu,2) == ss(d), 'incorrect length for prior mean');
+                        assert( size(mu,2) ==nW, 'incorrect length for prior mean');
                         %if isvector(Mu) && rk>1
                         %    Mu = repmat(Mu,rk,1);
                         %end
                     else
-                        W = obj.Weights(d);
                         S = constraint_structure(W);
-                        if S.nConstraint>0 && S.nConstraint<W.nWeight % if there is a constraint (but not a full fixed weight set)
+                        if S.nConstraint>0 && S.nConstraint<nW % if there is a constraint (but not a full fixed weight set)
                             obj.Prior(r,d).PriorMean = S.u*pinv(full(S.V));
                         else
-                            obj.Prior(r,d).PriorMean = zeros(1,W.nWeight);
+                            obj.Prior(r,d).PriorMean = zeros(1,nW);
                         end
-                        %                         switch cc(r,d) % what constraint on set of weights
-                        %                             case {'f','n','b'} % mean 0
-                        %                                 mu = zeros(1,ss(d));
-                        %                             case '1' % first weight 1, then 0
-                        %                                 mu = [1 zeros(1,ss(d)-1)];
-                        %                             case 's' % sum-one constraint
-                        %                                 mu = ones(1,ss(d))/ss(d);
-                        %                             case 'm' % mean-one
-                        %                                 mu = ones(1,ss(d));
-                        %                         end
-                        %                        obj.Prior(r,d).PriorMean = mu;
                     end
                 end
             end
-
         end
 
         %% GLOBAL PRIOR COVARIANCE
@@ -2344,16 +2204,13 @@ end
                 for d=1:numel(obj(i).Prior)
                     C{i}{d} = obj(i).Prior(d).PriorCovariance;
                 end
-
             end
 
             % group prior covariance from all modules
             if nargin>1 && do_group
                 C = cellfun(@(x) x(:)', C, 'unif',0);
                 C = [C{:}];
-
             end
-
         end
 
         %% PRIOR MEAN CELL
@@ -2379,13 +2236,11 @@ end
                 return;
             end
 
-            % ss = [obj.Weights.nWeight]; % size along each dimension in this module
-            % cc = [obj.Weights.constraint]; % constraint for this module
             for r=1:obj.rank
                 for d=1: obj.nDim
                     W = obj.Weights(d); %weight structure
                     UU = W.PosteriorMean;
-                    nW = W.nWeight;
+                    nW = sum(W.nWeight);
                     constraint = constraint_structure(W);
                     if isempty(UU) || size(UU,1)<r
                         if first_update_dimension(obj)==d && constraint.type~="fixed" && ~strcmp(obs, 'normal')
@@ -2393,6 +2248,12 @@ end
                             % initialize by predictor and not by weights (for
                             % stability of IRLS)
                             UU = nan(1,nW);
+
+                            % except constrained weights, set to their
+                            % values
+                            [ct_weight, ct_u] = constrained_weight(W);
+                            UU(ct_weight) = ct_u;
+
                         elseif constraint.type=="fixed"
                             % fixed weights (if not provided by user, ones)
                             % warning('Fixed set of weights for component %d and rank %r not provided, will use zeros',d,r);
@@ -2417,34 +2278,6 @@ end
                                 UU = mvnrnd(P.PriorMean,P.PriorCovariance);
                             end
                         end
-
-                        %                             switch cc(r,d)
-                        %                                 case 'f' %free basis
-                        %                                     if any(cc(r,1:d-1)=='f')
-                        %                                         % sample from prior (multivariate
-                        %                                         % gaussian)
-                        %                                         P = obj.Prior(r,d);
-                        %                                         UU = mvnrnd(P.PriorMean,P.PriorCovariance);
-                        %                                     else % only the first free basis is set to 0 (otherwise just stays at 0)
-                        %                                         UU = zeros(1,ss(d));
-                        %                                     end
-                        %                                 case 'b' % sum equal to zero
-                        %                                     UU = zeros(1,ss(d));
-                        %                                 case 'm' % mean equal to one
-                        %                                     UU = ones(1,ss(d)); % all weight set to one
-                        %                                     % Uini{r,d} = rand(1,m(d)); %random intial weights
-                        %                                     % Uini{r,d} = Uini{r,d}/mean(Uini{r,d}); % enforce mean equal to one
-                        %                                 case 's' % sun of weights equal to one
-                        %                                     UU = ones(1,ss(d))/ss(d); % all weights equal summing to one
-                        %                                     %Uini{r,d} = rand(1,m(d)); %random intial weights
-                        %                                     %Uini{r,d} = Uini{r,d}/sum(Uini{r,d}); % enforce mean equal to one
-                        %                                 case '1' % first weight set to one
-                        %                                     UU = [1 zeros(1,ss(d)-1)];
-                        %                                 case 'n' % fixed weights (if not provided by user, ones)
-                        %                                     % warning('Fixed set of weights for component %d and rank %r not provided, will use zeros',d,r);
-                        %                                     UU = ones(1,ss(d));
-                        %                             end
-                        %                        end
                         obj.Weights(d).PosteriorMean(r,:) = UU;
                     elseif size(UU,2) ~= W.nWeight
                         error('number of weights for component %d (%d) does not match number of corresponding covariates (%d)',d, size(UU,2),ss(d));
@@ -2454,7 +2287,6 @@ end
                 end
             end
         end
-
 
         %% SAMPLE WEIGHTS FROM PRIOR
         function obj = sample_weights_from_prior(obj)
@@ -2496,17 +2328,6 @@ end
                                 UU = UU + (C.u - UU*C.V)*pinv(full(C.V));
                             end
 
-                            %                             switch cc
-                            %                                 case 'b' %mean zero
-                            %                                     UU = UU - mean(UU);
-                            %                                 case 'm' % mean equal to one
-                            %                                     UU = UU/mean(UU); % all weight set to one
-                            %                                 case 's' % sun of weights equal to one
-                            %                                     UU = UU/sum(UU); % all weights equal summing to one
-                            %                                 case '1' % first weight set to one
-                            %                                     UU(1) = 1;
-                            %
-                            %                             end
                             obj(i).Weights(d).PosteriorMean(r,:) = UU;
 
                         end
@@ -2530,33 +2351,12 @@ end
                     for d=1:obj(i).nDim
                         %  P = obj(i).Prior(r,d);
                         W = obj(i).Weights(d);
-                        if isempty(W.PosteriorCov) && W.nWeights>0
+                        if isempty(W.PosteriorCov) && sum(W.nWeight)>0
                             error('Posterior has not been computed. Infer model first');
                         end
                         if constraint_type(W)~="fixed" % except for fixed weights
-
-                            % sampled for mvn distribution with linear constraint
-                            %                                 pp = PP{r,d};
-                            %                                 Sigma = pp*P.PriorCovariance*pp';
-                            %                                 if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
-                            %                                     Sigma = (Sigma+Sigma')/2;
-                            %                                 end
-                            %                                 UU =  P.PriorMean + mvnrnd(zeros(1,size(pp,1)), Sigma)*pp;
-                            %
-                            %                             switch ct
-                            %                                 case 'b' %mean zero
-                            %                                     UU = UU - mean(UU);
-                            %                                 case 'm' % mean equal to one
-                            %                                     UU = UU/mean(UU); % all weight set to one
-                            %                                 case 's' % sun of weights equal to one
-                            %                                     UU = UU/sum(UU); % all weights equal summing to one
-                            %                                 case '1' % first weight set to one
-                            %                                     UU(1) = 1;
-                            %
-                            %                            end
                             UU = mvnrnd(W.PosteriorMean, W.PosteriorCov);
                             obj(i).Weights(d).PosteriorMean(r,:) = UU;
-
                         end
                     end
                 end
@@ -2574,63 +2374,21 @@ end
             % for values scale of transformation of regressor M.
             %
             %  posterior_test_data(M, scale, d) to specify over which dimension of transformation (default:1).
-
+            %
+            % Use scale = {x1values, x2values...} to use meshgrid scales
             if nargin<3
                 d=1;
             end
 
             assert(length(obj)==1);
             assert(isscalar(d) && d<=obj.nDim, 'd must be a scalar integer no larger than the dimensionality of M');
-            nW = size(scale,2); % number of prediction data points
 
             obj = obj.project_from_basis;
 
             W = obj.Weights(d);
-            assert(  any(strcmp(W.type, {'continuous','periodic'})), 'test data only for continuous or periodic regressors');
             P = obj.Prior(d);
-            this_HP = obj.HP(d).HP;
-            assert(size(scale,1)==size(W.scale,1), 'scale must has the same number of rows as the fitting scale data');
 
-            B = W.basis;
-
-            if isempty(B) % no basis functions: use equation 15
-                % evaluate prior covariance between train and test set
-                KK = P.CovFun({W.scale,scale},this_HP, []);
-
-                mu = (W.PosteriorMean / P.PriorCovariance)*KK;
-
-                if nargout>1
-                    Kin = P.CovFun(scale,this_HP, []);
-                    K = zeros(nW, nW,obj.rank);
-                    S = zeros(obj.rank, nW);
-                    for r=1:obj.rank
-                        K(:,:,r) = Kin - KK'*W.invHinvK(:,:,r)*KK;
-                        S(r,:) = sqrt(diag(K))';
-                    end
-                end
-
-            else
-                %% if using basis functions
-                this_HP = obj.HP(d).HP; %fixed values
-
-                % compute projection matrix
-                BB = B.fun(scale, this_HP, B.params);
-
-                % project mean and covariance in original domain
-                mu = B.PosteriorMean * BB;
-
-                if nargout>1
-                    % compute posterior covariance and standard error
-                    K = zeros(nW, nW,obj.rank);
-                    S = zeros(obj.rank, nW);
-                    for r=1:obj.rank
-                        PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
-                        K(:,:,r) = PCov;
-                        S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
-                    end
-                end
-
-            end
+            [mu,S,K] = computes_posterior_test_data(W,P,obj.HP(d).HP,scale);
         end
 
         %% COMPUTE LOG-PRIOR (unnormalized)
@@ -2666,7 +2424,7 @@ end
 
         %% first dimension to be updated in IRLS
         function d = first_update_dimension(obj)
-             % start update with first free dimension
+            % start update with first free dimension
             d = find(any(isFreeWeightSet(obj),1),1);
 
             % if no one then start with first dim
@@ -2684,7 +2442,8 @@ end
                 error('cannot compute predictor, data has been cleared');
             end
             rho = zeros(obj.nObs,1);
-            if any([obj.Weights.nWeight]==0) %
+            nW = cellfun(@sum, {obj.Weights.nWeight});
+            if any(nW==0) % empty regressor
                 return;
             end
             if nargin<2 % default: use all ranks
@@ -2727,11 +2486,6 @@ end
             VV = [{Uobs} VV];
 
             P = tensorprod(X,VV);
-            %  if isa(X, 'sparsearray')
-            %      P = tensorprod(X,V);
-            %  else
-            %      P = tprod(X,V);
-            %  end
 
             if do_squeeze
                 P = squeeze(P);
@@ -2742,7 +2496,7 @@ end
                 % if singleton tensor matrix along non-projected dimension
                 % (not too sure where this is useful)
                 dd=1;
-                while dd<=length(d) && obj.Weights(d(dd)).nWeight==1
+                while dd<=length(d) && sum(obj.Weights(d(dd)).nWeight)==1
                     P =  shiftdim(P,-1);
                     dd= dd+1;
                 end
@@ -2785,34 +2539,36 @@ end
 
         %% PRODUCT OF REGRESSORS
         function obj = times(obj1,obj2, varargin)
-            %M = regressor_multiplier( M1, M2,... )
+            % R = R1 * R2 or R = times(R1,R2);
             %   multiplies regressors for GUM
             %
-            % M = regressor_multiplier( M1, M2, 'SharedDim') if M1 and M2
+            % R = times( R1, R2, 'SharedDim') if R1 and R2
             % share all dimensions. Weights, priors and hyperparameters for
             % new object are inherited from M1.
             %
-            % M = regressor_multiplier( M1, M2, 'SharedDim', D)
+            % R = times( R1, R2, 'SharedDim', D)
             %to specify dimensions shared by M1 and M2 (D is a vector of integers)
             %
             % See also gum, regressor
 
             SharedDim = [];
             if not(isempty(varargin))
-                if isequal(varargin{1}, 'ShareDim')
+                if isequal(varargin{1}, 'SharedDim')
                     if length(varargin)==1
                         assert(obj1.nDim==obj2.nDim, 'number of dimensions of both regressors should be equal');
                         SharedDim = 1:obj1.nDim;
                     elseif length(varargin)==2
                         SharedDim = varargin{2};
                     end
-                    SharedDimOk = isnumeric(SharedDim) && isvector(SharedDim) && all(isinteger(SharedDim))...
-                        && all(SharedDim>0) && all(SharedDim<obj1.nDim) && all(SharedDim<obj2.nDim);
+                    SharedDimOk = isnumeric(SharedDim) && isvector(SharedDim) && ...
+                        all(SharedDim>0) && all(SharedDim<obj1.nDim) && all(SharedDim<obj2.nDim);
                     assert(SharedDimOk, 'SharedDim must be a vector of dimensions');
-                    assert(all([obj1.Weights(SharedDim).nWeight]== [obj2.Weights(SharedDim).nWeight]),...
+                    nWeight1 = cellfun(@sum, {obj1.Weights(SharedDim).nWeight});
+                    nWeight2 = cellfun(@sum, {obj2.Weights(SharedDim).nWeight});
+                    assert(all(nWeight1== nWeight2),...
                         'the number of weights in both regressors are different along shared dimensions');
                     assert(length(varargin)<3, 'too many inputs');
-                else % M1 * M2 * M3...
+                else % R1 * R2 * R3...
                     obj = times(times(obj1,obj2), varargin{:}); % recursive call, compute as (M1*M2)*M3...
                     return;
                 end
@@ -2848,19 +2604,18 @@ end
 
             NotSharedDim = setdiff(1:obj2.nDim, SharedDim); % we keep all weights, priors, HP from M2 except for shared dimensions
 
-
             % permute second object to use different dimensions for each
             % object (except first dim = observations & other shared dimensions)
             P = 1:obj1.nDim+1; % original dimensions
-            OldDims = find(NotSharedDim)+1;
-            NewDims = obj1.nDim+1+(1:sum(NotSharedDim));
+            OldDims = NotSharedDim+1;
+            NewDims = obj1.nDim+1+(1:length(NotSharedDim));
             P(OldDims) = NewDims; % send non-shared dimensions at the end
             P(NewDims) = OldDims; % and use singletons
             %  P = [1 obj2.nDim+1+(1:obj1.nDim) 2:obj2.nDim+1];
             obj2.Data = permute(obj2.Data, P);
 
             % pairwise multiplication
-            if isa(obj2.Data, 'double') && ~isdouble(obj1.Data, 'double')
+            if isa(obj2.Data, 'double') && ~isa(obj1.Data, 'double')
                 % make sure we don't run into problems if multiplying
                 % integers with doubles
                 obj1.Data = double(obj1.Data);
@@ -2871,26 +2626,32 @@ end
             obj.Weights = [obj1.Weights obj2.Weights(NotSharedDim)];
             obj.Prior = [obj1.Prior obj2.Prior(NotSharedDim)];
             obj.HP = [obj1.HP obj2.HP(NotSharedDim)];
-            %             if ~isempty(obj2.spectral)
-            %                 spk = obj2.spectral(1); % create empty structure
-            %                 spk.fun = [];
-            %                 obj2.spectral = [repmat(spk,1, obj1.nDim) obj2.spectral];
-            %                 if isempty(obj1.spectral)
-            %                     obj.spectral = obj2.spectral;
-            %                 else
-            %                     obj.spectral = [obj1.spectral obj2.spectral];
-            %                 end
-            %             else
-            %                 obj.spectral = obj1.spectral;
-            %             end
-            %             obj.spectral = [obj1.spectral obj2.spectral];
-            % obj.label = [obj1.label obj2.label];
+
+            % formula (add parentheses if needed)
+            if any(obj1.formula=='+')
+                obj1.formula = ['(' obj1.formula ' )'];
+            end
+            if any(obj2.formula=='+')
+                obj2.formula = ['(' obj2.formula ' )'];
+            end
             obj.formula = [obj1.formula ' * ' obj2.formula];
+
+            % for categorical regressors: turn "first0" into "free" or "first1", i.e.
+            % the reference weight is 1
+            isFirst0 =  constraint_type(obj.Weights)=="first0";
+            for w = find(isFirst0)
+                if w==find(isFirst0,1) % first becomes free
+                    obj.Weights(w).constraint = "free";
+                elseif isstruct(obj.Weights(w).constraint) % others become "first1"
+                    obj.Weights(w).constraint.u(:) = 1;
+                    obj.Weights(w).constraint.type = "first1";
+                else
+                    obj.Weights(w).constraint = "first1";
+                end
+            end
 
             FreeRegressorSet = isFreeWeightSet(obj);
             if sum(FreeRegressorSet)>1
-                % fprintf('multiplying free regressors ... now only first will be free\n');
-
                 % turning free regressors in second object to one-mean regressor
                 for d=find(FreeRegressorSet(obj1.nDim+1:end))
                     obj.Weights(obj1.nDim+d).constraint = "mean1";
@@ -2986,47 +2747,98 @@ end
 
         %% INTERACTIONS (FOR CATEGORICAL REGRESSORS)--> x1:x2
         function obj = colon(obj1, obj2)
-            if ~isa(obj2,'gum')
+
+            if ~isa(obj2,'regressor')
                 obj2 = regressor(obj2, 'categorical');
             end
-
+            assert(isscalar(obj1) && isscalar(obj2), 'interaction should be between scalar regressor objects');
             assert(obj2.nObs==obj1.nObs, 'number of observations do not match');
-            assert(obj1.nDim ==1 && obj2.nDim ==1 && strcmp(obj1.weights.type,'categorical') && strcmp(obj2.weights.type,'categorical')...
-                , 'regressors must be one-dimensional categorical');
+            assert(obj1.nDim ==1 && obj2.nDim ==1 && strcmp(obj1.Weights.type,'categorical') && strcmp(obj2.Weights.type,'categorical'),...
+                'regressors must be one-dimensional categorical');
 
             obj = obj1;
 
-            nLevel1 = obj1.weights.nWeight; % number of levels for each regressor
-            nLevel2 = obj2.weights.nWeight;
+            nLevel1 = obj1.Weights.nWeight; % number of levels for each regressor
+            nLevel2 = obj2.Weights.nWeight;
             nLevel = nLevel1 * nLevel2; % number of interaction inf_terms
 
             % build design matrix
             X = zeros(obj1.nObs, nLevel);
-            for i=1:nLevel1
-                idx = (i-1)*nLevel2 + (1:nLevel1);
-                X(:,idx) = obj1.Data(:,i) .* obj2.Data; % multiply covariates
+            if isa(obj1.Data, 'sparsearray')
+                obj1.Data = matrix(obj1.Data);
             end
-            obj1.Data = X;
+            if isa(obj2.Data, 'sparsearray')
+                obj2.Data = matrix(obj2.Data);
+            end
+            for i=1:nLevel2
+                idx = (i-1)*nLevel1 + (1:nLevel1);
+                X(:,idx) = obj1.Data .* obj2.Data(:,i); % multiply covariates
+            end
+            obj.Data = X;
 
             % scale
-            scale = interaction_levels(obj1.weights.scale, obj2.weights.scale);
+            scale = interaction_levels(obj1.Weights.scale, obj2.Weights.scale);
 
-            % constraint (zeros for all default)
-            warning('constraint for interactions not coded yet');
+            obj.Weights  = empty_weight_structure(1, [obj1.nObs nLevel], scale, []);
 
-            obj.weights.nWeight  = empty_weight_structure(1, [obj1.nObs nLevel], ...
-                scale, obj1.weights.color);
+            %% constraint (zeros for all default)
+            if isFreeWeightSet(obj1)
+                obj1.Weights.constraint = "first0";
+            end
+            if isFreeWeightSet(obj2)
+                obj2.Weights.constraint = "first0";
+            end
+            S1 = constraint_structure(obj1.Weights); % extract structure for each constraint
+            S2 = constraint_structure(obj2.Weights);
+
+            if S1.type==S2.type
+                S.type = S1.type;
+            else
+                S.type = "mixed";
+            end
+
+            % replicate projection vectors
+            V1 = kron(eye(nLevel2),S1.V);
+            u1 = repmat(S1.u,1,nLevel2);
+
+            % we don't replicate all combinations for constraint 2 to avoid
+            % duplicating with previous matrix
+            repmatrix2 = full(compute_orthonormal_basis_project(S1.V))';
+            V2 = kron(S2.V, repmatrix2);
+            u2 = repmat(S2.u,1,size(repmatrix2,2));
+            S.V = [V1 V2];
+            S.u =  [u1 u2];
+
+            S.nConstraint = size(S.V,2);
+
+            obj.Weights.constraint = S;
+
+        end
+
+        %% MAIN EFFECTS AND INTERACTION (FOR CATEGORICAL REGRESSORS) --> x1^x2 (in R-formula: x1*x2)
+        function obj = mpower(obj1, obj2)
+
+            if ~isa(obj2,'regressor')
+                obj2 = regressor(obj2, 'categorical');
+            end
+
+            % main effects plus interaction terms
+            obj = obj1 + obj2 + (obj1:obj2);
 
         end
 
         %% SPLIT/CONDITION ON REGRESSORS
         function obj = split(obj,X, scale, label)
-            % obj = split(obj,X, scale, label)
-
-            %  if nargin<3
-            %      subindex_coding = false;
-            %  end
-
+            % R = split(R, X)
+            % splits regressor R for each value for categorical variable X.
+            % X should be a column vector with as many observations as in
+            % R.
+            %
+            % split(R, X, scale) to include only the values of X in
+            % vector scale
+            %
+            % split(R, X, [], label) or split(R, X, scale, label) to provide labels for levels of
+            % X
             if nargin<3
                 scale = [];
             end
@@ -3043,7 +2855,9 @@ end
 
             % unique values of X
             unq = unique(X); % unique values
-            unq(isnan(unq)) = []; % remove nan values
+            if isnumeric(unq)
+                unq(isnan(unq)) = []; % remove nan values
+            end
             if ~isempty(scale)
                 if any(~ismember(scale,unq))
                     warning('exclude scale values not present in data');
@@ -3074,9 +2888,9 @@ end
 
                 if isa(obj.Data,'sparsearray') && subcoding(obj.Data,dd+1) %obj.sparse(dd)
 
-                    shift = (X-1)*obj.Weights(dd).nWeight;  % shift in each dimension (make sure we use a different set of indices for each value along dimension d
+                    shift = (X-1)*sum(obj.Weights(dd).nWeight);  % shift in each dimension (make sure we use a different set of indices for each value along dimension d
 
-                    obj.Data.sub{dd+1} = obj.Data.sub{dd+1} +  shift;
+                    obj.Data.sub{dd+1} = obj.Data.sub{dd+1} +  uint8(shift);
                     obj.Data.siz(dd+1) = obj.Data.siz(dd+1)*nVal;
                 else
                     VV = obj.Data;
@@ -3098,32 +2912,26 @@ end
                 end
 
                 %% update scale
-                obj.Weights(dd).scale = interaction_levels(obj.Weights(dd).scale, label);
+                W = obj.Weights(dd);
+                W.scale = interaction_levels(W.scale, label);
+
+                %% update constraint
+                if ~any(constraint_type(W)==["free","fixed"])
+                    S = constraint_structure(W);
+                    S.V = kron(eye(nVal),S.V); % replicate for each set of weights
+                    S.u = repmat(S.u, 1,nVal);
+                    S.nConstraint = S.nConstraint * nVal;
+                    W.constraint = S;
+                end
+
+                W.nWeight = W.nWeight * nVal; % one set of weights for each level of splitting variable
+                obj.Weights(dd) = W;
 
                 %% build covariance function as block diagonal
                 if ~isempty(obj.Prior(dd).CovFun)
                     obj.Prior(dd).replicate = nVal * obj.Prior(dd).replicate;
-                    %  obj.Prior(dd).CovFun = @(P)  replicate_covariance(obj.Prior(dd).CovFun, P, nVal);
                 end
-
-                obj.Weights(dd).nWeight = obj.Weights(dd).nWeight * nVal; % one set of weights for each level of splitting variable
             end
-
-
-            %             % set this dimension as constant
-            %             %  obj.nWeight(d) = 1;
-            %             obj.HP(d) = HPstruct;
-            %             obj.covfun{d} = {};
-            %             obj.constraint(d) = 'n';
-
-            %  % add label if required
-            %  if nargin>=4
-            %      if length(label) ~= length(scale)
-            %          error('length of label does not match number of values');
-            %      end
-            %      obj.Weights(d).scale = label;
-            %
-            %            end
         end
 
         %% SPLIT DIMENSION
@@ -3336,7 +3144,7 @@ end
             Gunq = unique(Group); % group unique values
             nGroup = length(Gunq); % number of group
 
-            single_regressor = obj.nDim==1 && obj.Weights(1).nWeight ==1;
+            single_regressor = obj.nDim==1 && sum(obj.Weights(1).nWeight) ==1;
             if  single_regressor % just one single regressor, no way to split it
                 SplitValue = [];
             elseif isscalar(SplitValue)
@@ -3458,32 +3266,6 @@ end
             end
         end
 
-        %% SELECT REGRESSOR BY INDEX OF LABEL
-        function obj = select_regressors(obj, idx)
-            %% select regressors by index or label  (e.g. for plotting)
-            if isstring(idx)
-                idx = {idx};
-            end
-
-            AllWeights = [obj.Weights];
-            AllLabel = {AllWeights.label};
-
-            % if regressor labels are provided, convert to labels
-            jdx = cell(1,length(idx));
-            if iscell(idx)
-                for m=1:length(idx)
-                    ii = find(strcmp(idx{m},AllLabel));
-                    if isempty(ii)
-                        error('label ''%s'' does not match any regressor label', idx{m});
-                    end
-                    jdx{m} = ii;
-                end
-                idx = jdx;
-            end
-
-            % select set of regressors;
-            obj = obj(idx);
-        end
 
         %% CONCATENATE REGRESSORS
         function obj = cat_regressor(obj, D, check_dims_only)
@@ -3523,34 +3305,33 @@ end
 
             % make sure that dimensionality matches along all other
             % dimensions
-            S = ones(n,nD);
+            nWeight = ones(n,nD);
             for i=1:n
-                S(i,1:obj(i).nDim) = [obj(i).Weights.nWeight];
+                nWeight(i,1:obj(i).nDim) = [obj(i).Weights.nWeight];
             end
             otherdims = setdiff(1:nD,D);
-            check_dims = all(S(:,otherdims)==S(1,otherdims),'all'); % check that dimensions allow for concatenation
+            check_dims = all(nWeight(:,otherdims)==nWeight(1,otherdims),'all'); % check that dimensions allow for concatenation
             if check_dims_only % return only boolean telling whether regressors can be concatenated
                 obj = check_dims;
                 return;
             end
 
             assert(check_dims, 'number of elements in regressor does not match along non-concatenating dimensions');
-            S(1,D) = sum(S(:,D)); % number of elements along dimension D are summed
-            S = S(1,:); % select from first regressor
+            % nWeight(1,D) = sum(nWeight(:,D)); % number of elements along dimension D are summed
+            nWeight_cat = nWeight(:,D)';  % number of elements along dimension D are concatenated
+            nWeight = nWeight(1,:); % select from first regressor
 
             % update properties of first element
-            for d=1:nD
-                obj(1).Weights(d).nWeight = S(d);
-            end
+
             obj(1).nDim = nD;
             if nD>2 && ~isa(obj(1).val, 'sparsearray')
                 obj(1).Data = sparsearray(obj(1).Data);
             end
             obj(1).Data = cat(D+1, obj.Data); % concatenate all regressors
 
-            if D==nD && isempty(obj(1).Weights(D).constraint)
-                obj(1).Weights(D).constraint = "free";
-            end
+         %   if D==nD && isempty(obj(1).Weights(D).constraint)
+         %       obj(1).Weights(D).constraint = "free";
+         %   end
 
             %% deal with prior
             PP = obj(1).Prior(D);
@@ -3570,10 +3351,11 @@ end
             end
 
             % deal with covariance prior function
-            F = cellfun(@(x) x(D).CovFun ,allPrior, 'unif',0);
-            F = cellfun(@(x) x{D}, F, 'unif',0); % select D-th element for each regressor
-            PP.CovFun = @(s,x) concatenate_covariance(S(:,D), F{:}, s, nHP, x);
-            PP.label = 'mix';
+            %      F = cellfun(@(x) x(D).CovFun ,allPrior, 'unif',0);
+            %   %   F = cellfun(@(x) x{D}, F, 'unif',0); % select D-th element for each regressor
+            %      PP.CovFun = @(s,x) concatenate_covariance(S(:,D), F{:}, s, nHP, x);
+            PP.CovFun = cellfun(@(x) x(D).CovFun ,allPrior, 'unif',0);
+            PP.type = cellfun(@(x) x(D).type ,allPrior, 'unif',0); %'mix';
 
             % deal with prior covariance
             F = cellfun(@(x) x(D).PriorCovariance ,allPrior, 'unif',0);
@@ -3582,60 +3364,102 @@ end
             else % otherwise build block diagonal matrix
                 PP.PriorCovariance = blkdiag(F{:});
             end
-            obj(1).Prior(D) =    PP;
+            obj(1).Prior(D) = PP;
 
             %% merge fields of weight structure
-            obj(1).Weights = rmfield(obj(1).Weights, {'U_allstarting','U_CV'});
+            W = obj(1).Weights(D);
+            W.U_allstarting = [];
+            %    RemovedFields = {'U_allstarting','U_CV'};
+            %    RemovedFields = RemovedFields(isfield(obj(1).Weights, RemovedFields));
+            %    W = rmfield(W, RemovedFields );
 
             fild = { 'PosteriorMean','PosteriorStd','T','p', 'scale'};
-            WW = obj1.Weights(D);
             allWeights = {obj.Weights};
+            allWeights = cellfun(@(x) x(D), allWeights);
+            W.label = {allWeights.label};
             for f = 1:length(fild)
                 fn = fild{f};
-                F = cellfun(@(x) x(D).(fn) , allWeights,'unif',0);
-                %    F = {obj.(fn)};
+                %  F = cellfun(@(x) x(D).(fn) , allWeights,'unif',0);
+                F = {allWeights.(fn)};
                 if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
-                    WW.(fn) = [];
-                    %  else
-                    %      F = cellfun(@(x) x{D}, F, 'unif',0);
-                    %      if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
-                    %          obj(1).(fn){D} = {};
+                    W.(fn) = [];
                 else % otherwise concatenate
-                    WW.(fn) = cat(2,F{:});
+                    W.(fn) = cat(2,F{:});
                 end
             end
 
             % deal with scale
-            F = cellfun(@(x) x(D).scale, allWeights,'unif',0);
-            F = cellfun(@(x) x{D}, F, 'unif',0); % select D-th element for each regressor
-            if any(cellfun(@isempty,F))
-                idx = 0;
-                iEmpty = find(cellfun(@isempty,F));
-                for i=iEmpty
-                    F{i} = idx + (1:obj(i).nWeight(D));
-                    idx = idx + obj(i).nWeight(D);
+            %  F = cellfun(@(x) x(D).scale, allWeights,'unif',0);
+            %  F = cellfun(@(x) x{D}, F, 'unif',0); % select D-th element for each regressor
+            F = {allWeights.scale};
+            scale_dim = max(cellfun(@(x) size(x,1),F));
+            for i=1:n
+                if isempty(F{i})
+                    F{i} = 1:obj(i).nWeight(D);
                 end
-                WW.scale = cat(2,F{:});
+                F{i}(end+1:scale_dim,:) = nan; % fill extra dimensions with nan if needed
             end
+            %if any(cellfun(@isempty,F))
+            %    idx = 0;
+            %    iEmpty = find(cellfun(@isempty,F));
+            %    for i=iEmpty
+            %        F{i} = idx + (1:obj(i).nWeight(D));
+            %        idx = idx + obj(i).nWeight(D);
+            %    end
+            %end
+            W.scale = cat(2,F{:});
 
             % deal with posterior covariance
-            F = cellfun(@(x) x(D).PosteriorCov , allWeights,'unif',0);
+            %F = cellfun(@(x) x(D).PosteriorCov , allWeights,'unif',0);
+            F = {allWeights.PosteriorCov};
             if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
-                WW.PosteriorCov = {};
+                W.PosteriorCov = {};
             else % otherwise build block diagonal matrix
-                WW.PosteriorCov = blkdiag(F{:});
+                W.PosteriorCov = blkdiag(F{:});
             end
 
+            % deal with constraint
+            if ~all(constraint_type(allWeights)=="free") && ~all(constraint_type(allWeights)=="fixed")
+                S_ct = constraint_structure(allWeights);
 
-            obj(1).Weights(D) = WW;
+                % convert first0 to first1 (assuming we're going this is a
+                % categorical regressor and we're going to multiply it)
+            for w = find( [S_ct.type]=="first0")               
+                    S_ct(w).u(:) = 1;
+                    S_ct(w).constraint.type = "first1";
+            end
+
+                ctype = "mixed";
+                V = blkdiag(S_ct.V);
+                u = [S_ct.u];
+                nConstraint = sum([S_ct.nConstraint]);
+                W.constraint = struct('type',ctype, 'V',V,'u',u, 'nConstraint',nConstraint);
+            end
+
+            W.basis = {allWeights.basis};
+            W.nWeight = nWeight_cat;
+
+            for d=1:nD
+                obj(1).Weights(d).nWeight = nWeight(d);
+            end
+            obj(1).Weights(D) = W;
 
             %% deal with hyperparameters
             F = {obj.HP};
             F = cellfun(@(x) x(D), F); % select D-th element for each regressor
+            obj(1).HP(D).index = [];
             obj(1).HP(D) = cat_hyperparameters(F);
+
+            %% deal with formula ( x1 + x2...)
+            fmla = string({obj.formula});
+            fmla(2,:) = "+";
+            fmla = cellstr(fmla(1:end-1));
+            obj(1).formula = [fmla{:}];
 
             % keep only first object
             obj = obj(1);
+
+
 
         end
 
@@ -3732,9 +3556,8 @@ end
                 U2 = 1:numel(obj);
             end
 
-
             % select corresponding regressors to be plotted
-            obj = select_regressors(obj, U2);
+            obj = select_weights(obj, U2);
 
             only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
             cols = defcolor;
@@ -3742,7 +3565,8 @@ end
 
             NoFixedWeights = cell(1,numel(obj));
             for m=1:numel(obj)
-                NoFixedWeights{m} = ~isFixedWeightSet(obj(m)); % regressors with constant
+                NoFixedWeights{m} = ~isFixedWeightSet(obj(m)) .*...
+                    cellfun(@length, {obj(m).Weights.nWeight}); % regressors with constant (count also concatenated regs)
             end
             nNoFixedWeights  = cellfun(@sum,NoFixedWeights); % number of non-fixedd dimensions in each module
             nSubplots = sum(nNoFixedWeights); % number of subplots
@@ -3768,24 +3592,31 @@ end
             % h.Axes = [];
             h.Objects = {};
 
-            for m=1:numel(obj)%obj.nMod
+            for m=1:numel(obj)
 
                 for d = find(NoFixedWeights{m}) % loop between subplots
 
-                    axes(h.Axes(i)); % set as active subplot
-
                     W = obj(m).Weights(d); % set of weights
+                    P = obj(m).Prior(d);
+                    this_HP = obj(m).HP(d);
 
                     % add label
                     if isempty(W.label)
                         W.label = sprintf('U%d_%d',m,d); % default label
                     end
 
+                    % split concatenated structures
+                     [W, this_HP, P] = split_concatenated_weights_HP_prior(W, this_HP,P);
+
                     % plot weights
-                    [h_nu, c, cm] = plot_single_weights(W, obj(m).rank, c, cm, cols, colmaps);
+                    for s=1:length(W)
+                        axes(h.Axes(i)); % set as active subplot
+
+                    [h_nu, c, cm] = plot_single_weights(W(s), P(s), this_HP(s).HP, obj(m).rank, c, cm, cols, colmaps);
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
+                    end
                 end
             end
         end
@@ -3797,11 +3628,12 @@ end
             % creates a table with metrics for all weights (scale, PosteriorMean, PosteriorStd, T-statistics, etc.)
             W = [obj.Weights]; % concatenate weights over regressors
 
-            nWeight = [W.nWeight]; % number of weights for each set
+            nWeight = cellfun(@sum,{W.nWeight}); % number of weights for each set
             reg_idx = repelem(1:length(W), nWeight)'; % regressor index
             label = repelem({W.label},nWeight)'; % weight labels
 
             T = table(reg_idx, label, 'VariableNames',{'regressor','label'});
+
 
 
             filds = {'scale','PosteriorMean','PosteriorStd','T','p'};
@@ -3809,6 +3641,27 @@ end
                 ff =  concatenate_weights(obj,0,filds{f}); % concatenate values over all regressors
                 if length(ff) == height(T)
                     T.(filds{f}) = ff';
+                elseif f==1 % scale
+                    all_scale_string = [];
+                    for i=1:length(W)
+                        sc = W(i).scale;
+                        if size(sc,1)>1
+                            scale_string = "(";
+                            for d=1:size(sc,1)
+                                scale_string = scale_string + string(sc(d,:));
+                                if d==size(sc,1)
+                                    scale_string = scale_string + ")";
+                                else
+                                    scale_string = scale_string + ",";
+                                end
+                            end
+                        else
+                            scale_string = string(sc);
+                        end
+                        all_scale_string = [all_scale_string; scale_string'];
+
+                    end
+                    T.scale = all_scale_string;
                 end
             end
 
@@ -3881,7 +3734,7 @@ end
 
 
 %% PLOT SINGLE WEIGHTS
-function [h_nu, c, cm] = plot_single_weights(W, rk, c, cm, cols, colmaps)
+function [h_nu, c, cm] = plot_single_weights(W, P, HP, rk, c, cm, cols, colmaps)
 if isa(W.plot, 'function_handle')
     %% custom-defined plot
     h_nu = W.plot(W);
@@ -3947,8 +3800,38 @@ end
 
 %% plot
 if twodmap
-    % color plot
-    h_nu = colorplot(scale{1}(:,1),scale{1}(:,2), real(U));
+    sc  = scale{1};
+    ColorPlot = 0;
+    if ColorPlot
+        % color plot
+        h_nu = colorplot(sc(:,1),sc(:,2), real(U));
+
+    else % plot all values in a grid
+
+        % get posterior from values in a grid
+        xValue = linspace(min(sc(:,1)),max(sc(:,1)), 50);
+        yValue = linspace(min(sc(:,2)),max(sc(:,2)), 50);
+        % [U,se, ~,scale] = computes_posterior_test_data(W,P,HP,{xValue,yValue});
+
+        U = computes_posterior_test_data(W,P,HP,{xValue,yValue});
+
+        U = reshape(U, length(xValue), length(yValue));
+
+        %     se = reshape(se, length(xValue), length(yValue));
+
+        % convert to RGB with whiter where more uncertainty
+        %    cmap = colormap;
+        %    Unorm = (U-min(U,[],'all'))/(max(U,[],'all')-min(U,[],'all'));
+
+        hold on;
+
+        % plot image
+        h_nu(1) = imagesc(xValue, yValue, U');
+
+        % add black dots representing data points in trained dataset
+        h_nu(2) =plot(sc(:,1),sc(:,2),'k.', 'MarkerSize',2);
+    end
+
 elseif imageplot
     % image plot
     h_nu = imagescnan(scale{2},scale{1}, U);
@@ -3958,7 +3841,7 @@ else
 end
 
 % add horizontal line for reference value
-if ~imageplot && W.nWeight >= 8
+if ~twodmap && ~imageplot && W.nWeight >= 8
     hold on;
     switch constraint_type(W)
         case "mean1"
@@ -3985,8 +3868,16 @@ if nargin<4
 end
 
 % reconstruct weights as matrix
+S1 = S(:,1);
+S2 = S(:,2);
 x_unq = unique(S(:,1));
-y_unq = unique(S(:,2));
+if isstring(x_unq) && all(~isnan(double(x_unq)) | strcmpi(x_unq,'nan'))
+    % in case string of numeric values, convert to numeric values to have
+    % numeric sorting
+    S1 = double(S1);
+    x_unq = unique(S1);
+end
+y_unq = unique(S2);
 nX = length(x_unq);
 nY = length(y_unq);
 
@@ -4003,12 +3894,7 @@ U2 = nan(nX,nY);
 se2 = nan(nX,nY);
 for iX=1:nX
     for iY=1:nY
-        if isnumeric(S)
-            bool = (S(:,1) == x_unq(iX)) & (S(:,2)==y_unq(iY));
-        else
-            bool = strcmp(S(:,1),x_unq{iX}) & strcmp(S(:,2),x_unq{iY});
-
-        end
+        bool = equal_numeric_or_cell(S1,x_unq(iX)) & equal_numeric_or_cell(S2,y_unq(iY));
         if any(bool)
             U2(iX,iY) = U(find(bool,1));
             se2(iX,iY) = se(find(bool,1));
@@ -4018,6 +3904,16 @@ end
 U = U2;
 se = se2;
 S = {x_unq y_unq};
+end
+
+% compare cell or numeric arrays
+function bool = equal_numeric_or_cell(X,Y)
+if isnumeric(X)
+    bool = X==Y;
+else
+    bool = strcmp(X,Y{1});
+end
+
 end
 
 %% CREATES A DESIGN MATRIX (OR ARRAY) WITH ONE-HOT ENCODING - ONE COLUMN PER VALUE OF X
@@ -4061,344 +3957,157 @@ else % non-sparse
 end
 end
 
+%% compute posterior over test data
+function [mu,S,K,scale] = computes_posterior_test_data(W,P,HP,scale)
 
-%% L2-regression covariance function
-%function [K, grad] = L2_covfun(nreg, loglambda,HPdefault, which_par)
-function [K, grad] = L2_covfun(scale, loglambda, B)
-if nargin<2
-    K = 1; % number of hyperparameters
-    return;
+assert(  any(strcmp(W.type, {'continuous','periodic'})), 'test data only for continuous or periodic regressors');
+
+
+if iscell(scale) % define meshgrid
+
+    % compose along n-dimensional grid
+    GridCoords = cell(1,length(scale));
+    [GridCoords{:}] = ndgrid(scale{:});
+
+    % stores as matrix
+    GridCoords = cellfun(@(x) x(:)', GridCoords, 'UniformOutput',0);
+    scale = cat(1,GridCoords{:});
+
 end
 
-nReg = length(scale);
-lambda2 = exp(2*loglambda);
-if isinf(lambda2)
-    K = diag(lambda2 * ones(1,nReg));
-else
-    K = lambda2 * eye(nReg); % diagonal covariance
-end
+assert(size(scale,1)==size(W.scale,1), 'scale must has the same number of rows as the fitting scale data');
+nW = size(scale,2); % number of prediction data points
 
-grad.grad = 2*K; %eye(nreg);
-grad.EM = @(m,Sigma) log(mean(m(:).^2 + diag(Sigma)))/2; % M-step of EM to optimize L2-parameter given posterior on weights
-end
+B = W.basis;
 
-%% L2 covariance function when using basis (L2 on last hyperparameter)
-function varargout = L2basis_covfun(scale, HP, B)
-if nargin<2
-    varargout = {1}; % number of hyperparameters
-else
-    varargout = cell(1,nargout);
-    loglambda = HP(end);
-    [varargout{:}] = L2_covfun(scale,loglambda, B);
+if isempty(B) % no basis functions: use equation 15
+    % evaluate prior covariance between train and test set
+    KK = P.CovFun({W.scale,scale},HP, []);
+
+    mu = (W.PosteriorMean / P.PriorCovariance)*KK;
+
     if nargout>1
-        % place gradient over variance HP as last matrix in 3-D array
-        nR = size(varargout{1},1);
-        grad = varargout{2}.grad;
-        varargout{2} = cat(3,zeros(nR,nR,length(HP)-1),grad);
-    end
-end
-end
-
-%% infinite covariance
-function [K, grad] = infinite_cov(scale, HP, B)
-if nargin<2
-    K = 0; % number of hyperparameters
-    return;
-end
-
-nReg = length(scale);
-K = diag(inf(1,nReg));
-
-grad = zeros(nReg,nReg,0);
-end
-
-%% Automatic Relevance Discrimination (ARD) covariance function
-function [K, grad] = ard_covfun(scale, loglambda, B)
-nReg = length(scale);
-
-if nargin<2
-    K = nReg; % number of hyperparameters
-    return;
-end
-
-lambda2 = exp(2*loglambda); % variance for each regressor
-K = diag(lambda2);
-
-% Jacobian
-G = zeros(nReg,nReg,nReg);
-for i=1:nReg
-    G(i,i,i) = 2*lambda2(i);
-end
-grad.grad = G;
-
-% M-step of EM to optimize hyperparameters given posterior on weights
-grad.EM = @(m,V) log(m(:).^2 + diag(V))/2;
-
-end
-
-%% Squared Exponential covariance
-function [K, grad] = covSquaredExp(X, HP, B)
-% radial basis function covariance matrix:
-%  K = covSquaredExp(X, [log(tau), log(rho)])
-% K(i,j) = rho^2*exp(- [(x(i,1)-x(j,1))^2 + ...
-% (x(i,d)-x(j,d))^2]/(2*tau^2))
-%
-% tau can be scalar (same scale for each dimension) or a vector of length D
-%
-% [K, grad] = covSquaredExp(...) get gradient over
-% hyperparameters, incl is a vector of two booleans indicating which
-% hyperparameter to optimize
-
-if nargin<2
-    K = 2; % number of hyperparameters
-    return;
-end
-
-within = ~iscell(X); % distance within set of points
-if  within
-    X = {X,X};
-end
-X{1} = X{1}';
-X{2} = X{2}';
-
-tau = exp(HP(1:end-1));
-rho2 = exp(2*HP(end));
-
-n_tau = length(tau);
-if n_tau ~=1 && n_tau ~= size(X{1},2)
-    error('tau should be scalar or a vector whose length matches the number of column in X');
-end
-tau = tau(:)';
-if length(tau)==1
-    tau = repmat(tau,1,size(X{1},2));
-end
-
-m = size(X{1},1); % number of data points
-n = size(X{2},1); % number of data points
-
-Xnorm = X{1}./tau; % normalize by scale
-Ynorm = X{2}./tau;
-
-% exclude scale-0 dimensions
-nulltau = tau==0;
-xx = Xnorm(:,~nulltau);
-yy = Ynorm(:,~nulltau);
-
-D = zeros(size(xx,1), size(yy,1));  % cartesian distance matrix between each column vectors of X
-for i=1:size(xx,1)
-    for j=1:size(yy,1)
-        D(i,j) = sqrt(sum((xx(i,:)-yy(j,:)).^2));
-        %  D(j,i) = D(i,j);
-    end
-end
-if all(nulltau)
-    D = zeros(m,n);
-end
-
-% treat separately for null scale
-for tt=1:find(nulltau)
-    Dinf = inf(m,n); % distance is infinite for all pairs
-    Dinf( dist(X(:,tt)')==0) = 0; % unless values coincide
-    D = D + Dinf;
-end
-
-K = rho2* exp(-D.^2/2);
-if within
-    K = force_definite_positive(K);
-end
-
-% compute gradient
-if nargout>1
-    grad = zeros(m,n,n_tau+1); % pre-allocate
-    if n_tau == 1
-        grad(:,:,1) = rho2* D.^2 .* exp(-D.^2/2); % derivative w.r.t GP scale
-    else
-        for t=1:n_tau % gradient w.r.t scale for each dimension
-            dd = bsxfun(@minus, X{1}(:,t),X{2}(:,t)').^2; % distance along dimension
-            grad(:,:,t) = log(rho2) * dd .* exp(-D.^2/2)/tau(t)^2; % derivative w.r.t GP scale
+        Kin = P.CovFun(scale,HP, []);
+        rk = size(W.invHinvK,3); % rank
+        K = zeros(nW, nW, rk);
+        S = zeros(rk, nW);
+        for r=1:rk
+            K(:,:,r) = Kin - KK'*W.invHinvK(:,:,r)*KK;
+            S(r,:) = sqrt(diag(K))';
         end
     end
-    grad(:,:,n_tau+1) = 2*K; % derivative w.r.t GP log-variance (log-rho)
-    % grad(:,:,n_tau+1) = exp(-D.^2/2); % derivative w.r.t GP variance (rho)
-    % grad(:,:,n_tau+2) = eye(n); % derivative w.r.t. innovation noise
-    % grad = grad(:,:,which_par);
-end
-end
 
-%% SQUARED EXPONENTIAL KERNEL COVARIANCE IN FOURIER DOMAIN
-function [K, grad] = covSquaredExp_Fourier(scale, HP, B)
-%
-% [K, grad] = covSquaredExp_Fourier(HP, scale, params)
-%
-% Squared Exponential RBF covariance matrix, in the Fourier domain:
-%  K = RBF(X, tau, rho, sigma)
-% K(i,j) = rho*exp(- [(x(i,1)-x(j,1))^2 + ...
-% (x(i,d)-x(j,d))^2]/(2*tau^2)) + sigma*delta(i,j)
-%
-% tau can be scalar (same scale for each dimension) or a fecor or length D
-%omit sigma if there is no innovation noise
-%
-% [K, grad] = RBF_Fourier(X, tau, rho, sigma, incl) get gradient over
-% hyperparameters, incl is a vector of three booleans indicating which
-% hyperparameter to optimize
+else
+    %% if using basis functions
+    HP = obj.HP(d).HP; %fixed values
 
+    % compute projection matrix
+    BB = B.fun(scale, HP, B.params);
 
-tau = exp(HP(1:end-1));
-rho = exp(HP(end));
+    % project mean and covariance in original domain
+    mu = B.PosteriorMean * BB;
 
-Tcirc = B.params.Tcirc;
-
-% covariance matrix is diagonal in fourier domain
-% !! check the formula !!
-eexp = exp(-(2*pi^2/Tcirc^2)*tau^2*scale.^2);
-kfdiag = sqrt(2*pi)*rho*tau*eexp;
-K = diag(kfdiag);
-
-% n_tau = length(tau);
-% if n_tau ~=1 && n_tau ~= size(X,2)
-%     error('tau should be scalar or a vector whose length matches the number of column in X');
-% end
-% tau = tau(:);
-n = size(scale,2); % number of data points
-
-% compute gradient
-if nargout>1
-    grad = zeros(n,n,2); % pre-allocate
-    % if n_tau == 1
-    grad_scale = sqrt(2*pi)*rho*  (1 - 4*pi^2/Tcirc^2*tau^2*scale.^2) .* eexp; % derivative w.r.t GP scale (tau)
-    grad(:,:,1) = diag(grad_scale);
-    % else
-    %     for t=1:n_tau % gradient w.r.t scale for each dimension
-    %             grad(:,:,t) = rho * dist(X(:,t)').^2 .* exp(-D.^2/2)/tau(t)^3; % derivative w.r.t GP scale
-    %     end
-    % end
-    grad(:,:,2) = K/rho; % derivative w.r.t GP weight (rho)
-    %    grad = grad(:,:,incl);
-end
-
-end
-
-
-
-%% Periodic covariance function
-function [K, grad] = cov_periodic(x, HP, period) %, nrep)
-if nargin<2
-    K = 2; % number of hyperparameters
-    return;
-end
-%HPfull = [period 1]; % default values
-%HPfull(which_par) = HP; % active hyperparameters
-
-ell = exp(HP(1));
-sf = exp(2*HP(2));
-
-% use function from GPML
-%[cov, dK] = covPeriodic([log(ell) log(period) log(sf)], x);
-
-%adapted from GPML (see 4.31 from Rasmussen & Williams)
-within = ~iscell(x);
-if within
-    x = {x,x};
-end
-T = pi/period*bsxfun(@plus,x{1},-x{2}');
-S2 = (sin(T)/ell).^2;
-
-K = sf*exp( -2*S2 );
-K = force_definite_positive(K);
-
-% if separate functions for each column, full covariance matrix is block
-% diagonal
-% if nrep>1
-%     K = repmat({K}, 1, nrep);
-%     K = blkdiag(K{:});
-% end
-
-if nargout>1
-    % turn dK into gradient tensor (weight x weight x HP)
-    %gradK = gradient(dK, size(cov,1), 3);
-
-    %  P = sin(2*T).*cov;
-
-    grad(:,:,1) = 4*S2.*K; % / ell; % grad w.r.t ell ( covPeriodic provides grad w.r.t log(ell))
-    %  gradK2(:,:,2) = 2/ell^2*P.*T; % grad w.r.t sf ( covPeriodic provides grad w.r.t log(sf))
-    grad(:,:,2) = 2*K; % / sf;
-
-    % dhyp = [4*(S2(:)'*Q(:)); 2/ell^2*(P(:)'*T(:)); 2*sum(Q(:))];
-
-    %grad(:,:,1) = gradK(:,:,1) / ell;
-    %grad(:,:,2) = gradK(:,:,3) / sf;
-
-    %grad = grad(:,:,which_par); % select hyperparameters to be fitted
-
-    %     if nrep>1
-    %         GG = grad;
-    %         for hp=1:size(GG,3)
-    %             gc = repmat({grad(:,:,hp)}, 1, nrep);
-    %             GG(:,:,hp) = blkdiag(gc{:});
-    %         end
-    %         grad = GG;
-    %
-    %     end
-end
-
-end
-
-
-%% CONCATENATE COVARIANCE MATRIX (AND GRADIENT)
-function [cov, grad] = concatenate_covariance(S, varargin)
-% concatenate_covariance(S, CovFun1, CovFun2, ... CovFunn, scale, nHP,HP)
-
-
-n = length(varargin)-3;
-P = varargin{end}-1;
-nHP = varargin{end}-2;
-scale = varargin{end-3};
-C = cell(n,nargout);
-
-Scum = cumsum([0 S]); % to get indices of levels for each prior function
-
-cnt_hp = 0;
-for i=1:n
-    % nHP = varargin{i}; % number of hps for this covariance matrix
-    this_level = scale(Scum(i)+1:Scum(i+1));  % cirresponding levels
-    this_HP = P(cnt_hp+(1:nHP(i))); % corresponding HPs
-    [C{i,:}] = varargin{i}(this_level, this_HP);
-    cnt_hp = cnt_hp + nHP(i);
-end
-
-% full covariance matrix is block
-% diagonal
-cov = blkdiag(C{:,1});
-
-% compute gradient
-if nargout>1
-    siz = zeros(3,n);
-    for i=1:n
-        if isstruct( C{i,2})
-            C{i,2} = C{i,2}.grad;
-        end
-        for dd=1:3
-            siz(dd,i) = size(C{i,2}, dd);
+    if nargout>1
+        % compute posterior covariance and standard error
+        K = zeros(nW, nW,obj.rank);
+        S = zeros(obj.rank, nW);
+        for r=1:obj.rank
+            PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
+            K(:,:,r) = PCov;
+            S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
         end
     end
-    siz_tot = sum(siz,2); % sum over regressors
 
-    grad = zeros(siz_tot);
-
-    cnt_hp = 0; % hyperparameter count
-    cnt_w = 0; % parameter count
-
-    for i=1:n
-        for hp=1:nHP(i)
-            idx = cnt_w + (1:siz(1,i));
-            grad(idx,idx,cnt_hp+hp) = C{i,2}(:,:,hp);
-        end
-        cnt_hp = cnt_hp + nHP(i);
-        cnt_w = cnt_w + siz(1,i);
-
-
-    end
 end
+
+end
+
+%% evaluate prior covariance function
+function [Sigma, grad] = evaluate_prior_covariance_function(P, HP, W)
+
+% hyperparameter values for this component
+nRep = P.replicate;
+if  ~isempty(nRep) && nRep>1 % if we replicate the covariance matrix, we need to remove splitting dimensions are repetitions
+    % we don't know which of the last
+    % rows(s) in scale code for the
+    % splitting variable, so let's find out
+    nRep_check = 1;
+    iRow = size(W.scale,1)+1; % let's start from no row at all
+
+    while nRep_check<nRep && iRow>1
+        iRow=iRow-1; % move one row up
+        [id_list,~,split_id] = unique(W.scale(iRow:end,:)','rows'); % get id using last rows
+
+        nRep_check = size(id_list,1); % number of unique sets
+    end
+    assert(nRep_check==nRep, 'weird error, could not find out splitting rows in scale');
+
+    W.scale(iRow:end,:) =[]; % remove these rows for computing prior covariance
+    W.scale = W.scale(:,split_id==1); % to avoid repetitions of value
+
+end
+
+% compute associated covariance matrix
+%CovFun = P.CovFun;
+
+
+nSet = length(W.nWeight); % number of weights sets (more than one if uses regressor concatenation)
+iWeight = cumsum([0 W.nWeight]);
+if nSet ==1
+    HP.index = ones(1,length(HP.HP));
+    P.CovFun = {P.CovFun};
+    W.basis = {W.basis};
+end
+Sigma = cell(1,nSet);
+grad = cell(1,nSet);
+
+for s=1:nSet 
+    index_weight = iWeight(s)+1:iWeight(s+1); 
+    this_scale = W.scale(:, index_weight); % scale for this set of weights
+    iHP = HP.index ==s; % hyperparameter for this set of weight
+
+    CovFun = P.CovFun{s}; % corresponding prior covariance function
+
+if nargout>1 % need gradient
+    [Sigma{s}, gg]= CovFun(this_scale,HP.HP(iHP), W.basis{s});
+
+    % replicate covariance matrix if needed
+    [Sigma{s}, gg]= replicate_covariance(nRep, Sigma{s},gg);
+    if isstruct(gg)
+        gg = gg.grad;
+    end
+
+   % nHP = length(HP.HP); % number of hyperparameters
+    nHP = sum(iHP);% number of hyperparameters
+    if size(gg,3) ~= nHP
+        error('For component %d and rank %d, size of covariance matrix gradient along dimension 3 (%d) does not match corresponding number of hyperparameters (%d)',...
+            d,r, size(gg,3),nHP);
+    end
+
+    %% compute gradient now
+    grad{s} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
+    for l=1:nHP
+        freeW = ~constrained_weight(W); % exclude fixed weights
+        freeW = freeW(index_weight);
+        freeSigma = Sigma{s}(freeW,freeW);
+        grad{s}(freeW,freeW,l) = - (freeSigma \ gg(freeW,freeW,l)) / freeSigma;
+    end
+
+    % select gradient only for fittable HPs
+    HP_fittable = logical(HP.fit(iHP));
+    grad{s} = grad{s}(:,:,HP_fittable);
+else
+    Sigma{s}= CovFun(this_scale, HP.HP(iHP), W.basis{s});
+
+    % replicate covariance matrix if needed
+    Sigma{s} = replicate_covariance(nRep, Sigma{s});
+end
+end
+
+% merge over sets of weights
+Sigma = blkdiag(Sigma{:});
+grad = blkdiag3(grad{:});
+
 end
 
 %% REPLICATE COVARIANCE MATRIX (AND GRADIENT) WHEN SPLITTING REGRESSOR
@@ -4435,137 +4144,13 @@ if nargout>1
 end
 end
 
-%% compute basis functions as polynomial
-function [B, scale, params] = basis_poly(X,HP, params)
-order = params.order;
-B = zeros(order, length(X));
-X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
-
-for p=1:order+1
-    B(p,:) = X.^(p-1);
-end
-scale = 0:order;
-end
-
-%% compute basis functions as polynomial
-function [B, scale, params, gradB] = basis_exp(X,HP, params)
-nExp = length(HP)-1;
-B = zeros(nExp,length(X));
-X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
-for p=1:nExp
-    tau = exp(HP(p));
-    B(p,:) = exp(-X/tau);
-end
-scale = 1:nExp;
-
-if nargout>3
-    % gradient of matrix w.r.t hyperparameters
-    gradB = zeros(nExp, length(X),length(HP));
-    for p=1:nExp
-        tau = exp(HP(p));
-        gradB(p,:,p) = B(p,:) .* X/tau;
-    end
-
-end
-end
-
-%% compute basis functions as raised cosine
-function [B, scale, params, gradB] = basis_raisedcos(X,HP, params)
-nCos = params.nFunctions;
-a = HP(1);
-c = HP(2);
-Phi_1 = HP(3);
-X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
-
-B = zeros(nCos,length(X));
-Phi = Phi_1 + pi/2*(0:nCos-1); % Pi/2 spacing between each function
-for p=1:nCos
-    alog = a*log(X+c)-Phi(p);
-    nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
-    B(p,nz) = cos(alog(nz))/2 + 1/2;
-end
-scale = 1:nCos;
-
-if nargout>3
-    gradB = zeros(nCos, length(X),length(HP));
-    for p=1:nCos
-        alog = a*log(X+c)-Phi(p);
-        nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
-        sin_alog = sin(alog(nz)) / 2;
-        gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
-        gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
-        gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
-    end
-end
-end
-
-%% compute basis functions as gamma distribution
-function [B, scale, params, gradB] = basis_gamma(X,HP, params)
-nFun = params.nFunctions;
-theta = HP(1:nFun); % scale parameter
-k = HP(nFun+1:2*nFun); % shape parameter
-X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
-
-B = zeros(nFun,length(X));
-nz = (X>=0); % time domain with non-null value
-for p=1:nFun
-    B(p,nz) = X(nz).^(k(p)-1) .* exp(-X(nz)/theta(p)) / gamma(k(p)) / theta(p).^k(p);
-    if k(p)==1
-        B(p,X==0) = 0;
-    end
-end
-scale = 1:nFun;
-
-if nargout>3
-    % compute gradient over each hyperparameter
-    gradB = zeros(nFun, length(X),length(HP));
-    for p=1:nFun
-
-        % gradient over scale parameter
-        gradB(p,nz,p) = B(p,nz).* (X(nz) - k(p)*theta(p)) / theta(p)^2;
-
-        % gradient over shape parameter
-        gradB(p,nz,p+nFun) = B(p,nz).* ( log(X(nz)) - psi(k(p)) - log(theta(p))   );
-
-        if k(p)>=1
-            gradB(p,X==0,p+[0 nFun])=0;
-        end
-    end
-end
-end
-
-
-% %% turn dK function from GPML into matrix gradient
-% function gradK = gradient(dK, n, p)
-% gradK = zeros(n,n,p);
-% for i=1:n
-%     for j=1:n
-%         Q = zeros(n);
-%         Q(i,j) = 1;
-%         gradK(i,j,:) = dK(Q);
-%     end
-% end
-% end
-
-% %% selection HP parameters
-% function V = selectHP(V, d, which_par)
-% V.HP{d} = V.HP{d}(which_par);
-% if isfield(V, 'HP_LB')
-%     V.HP_LB{d} = V.HP_LB{d}(which_par);
-% end
-% if isfield(V, 'HP_UB')
-%     V.HP_UB{d} = V.HP_UB{d}(which_par);
-% end
-% V.HP_labels{d} = V.HP_labels{d}(which_par);
-% end
-
 %% CREATE EMPTY WEIGHT STRUCTURE
 function W = empty_weight_structure(nD, DataSize, scale, color)
 W = struct('type','','label', '', 'nWeight',0, 'nFreeWeight',0,...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
-    'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[]);
-% other possible fields: U_CV, U_allstarting
+    'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[],'U_allstarting',[]);
+% other possible fields: U_CV
 
 % make it size nD
 W = repmat(W, 1, nD);
@@ -4575,7 +4160,6 @@ if nargin>1
     for d=1:nD
         W(d).nWeight = DataSize(d+1); % number of weights/regressors in each dimension
         W(d).nFreeWeight = DataSize(d+1); % number of weights/regressors in each dimension
-
 
         % define plotting color
         if ~isempty(color)
@@ -4590,9 +4174,6 @@ if nargin>1
         W(d).scale = scale{d};
     end
 end
-
-
-
 end
 
 %% empty prior structure
@@ -4602,81 +4183,84 @@ P = struct('type', '', 'CovFun',[], 'PriorCovariance',[],...
 
 % make it size nD
 P = repmat(P, 1, nD);
-
 end
-
-%% combine default and specified HP values
-function   HP = HPwithdefault(HPspecified, HPdefault)
-HP = HPdefault;
-HP(~isnan(HPspecified)) = HPspecified(~isnan(HPspecified)); % use specified values
-end
-
-%% void HP structure
-function S = HPstruct()
-S.HP = []; % value of hyperparameter
-S.label = {}; % labels
-S.fit = []; % which ones are fittable
-S.LB = []; % lower bound
-S.UB = []; % upper bound
-end
-
-%% HP structure for L2 regularization
-function S = HPstruct_L2(d, HP, HPfit)
-
-% value of hyperparameter
-if nargin>1
-    S.HP = HPwithdefault(HP, 0); % default value if not specified
-else
-    S.HP = 0;
-end
-S.label = {['log \lambda' num2str(d)]};  % HP labels
-if nargin>2
-    S.fit = HPfit; % if HP is fittable
-else
-    S.fit = true;
-end
-S.LB = -max_log_var; % lower bound: to avoid exp(HP) = 0
-S.UB = max_log_var;  % upper bound: to avoid exp(HP) = Inf
-end
-
-%% HP structure for ARD regularization
-function S = HPstruct_ard(nReg,d, HP, HPfit)
-
-% value of hyperparameter
-if nargin>1
-    S.HP = HPwithdefault(HP, 0); % default value if not specified
-else
-    S.HP = zeros(1,nReg);
-end
-for i=1:nReg
-    S.label = {['log \lambda' num2str(d) '_' num2str(i)]};  % HP labels
-end
-if nargin>2
-    S.fit = HPfit; % if HP is fittable
-else
-    S.fit = true(1,nReg);
-end
-S.LB = -max_log_var*ones(1,nReg); % lower bound: to avoid exp(HP) = 0
-S.UB = max_log_var*ones(1,nReg);  % upper bound: to avoid exp(HP) = Inf
-end
-
 
 %% concatenate hyperparameter structure
 function S = cat_hyperparameters(Sall)
 S=struct;
+
+nHP = cellfun(@length, {Sall.HP}); % number of hyperparameters for each set of weights
 S.HP = cat(2, Sall.HP);
 S.label = cat(2, Sall.label);
 S.fit = cat(2, Sall.fit);
 S.LB = cat(2, Sall.LB);
 S.UB = cat(2, Sall.UB);
-
+S.index = repelem(1:length(Sall), nHP); % index matching each hyperparameter to set of weights
 end
 
-%% maximum log variance (to avoid non-invertible covariance matrices)
-function mlv = max_log_var()  %
-mlv = 12;
+%% split concatenated HP and prior structure
+function [W, HP, P] = split_concatenated_weights_HP_prior(W, HP,P)
+  if isscalar(W.nWeight)
+        return;
+  end
+
+[W,iWeight] = split_concatenated_weights(W);
+
+    nSet = length(W);
+
+Pc = P; % copy values
+HPc = HP;
+
+P = repmat(P,1,nSet);
+HP = repmat(HP,1,nSet);
+
+
+for i=1:nSet
+    % prior structure
+    P(i).CovFun = Pc.CovFun{i};
+             index_weight = iWeight(i)+1:iWeight(i+1); % indices of weights for this set
+    P(i).PriorCovariance = Pc.PriorCovariance(index_weight,index_weight);
+
+    % HP structure
+    index_HP = HPc.index==i;
+    HP(i).HP = HPc.HP(index_HP);
+    HP(i).LB = HPc.LB(index_HP);
+    HP(i).UB = HPc.UB(index_HP);
+    HP(i).label = HPc.label(index_HP);
+    HP(i).fit = HPc.fit(index_HP);
+end
+HP = rmfield(HP, 'index');
 end
 
+%% split concatenated weight structure (for plotting)
+function [W,iWeight] = split_concatenated_weights(W)
+    if isscalar(W.nWeight)
+        return;
+    end
+
+    nSet = length(W.nWeight);
+    Wc = W; % copy
+    W = repmat(W, 1, nSet);
+
+    iWeight = cumsum([0 W.nWeight]);
+
+    for s=1:nSet
+         W(s).label = Wc.label{s};
+         W(s).nWeight = Wc.nWeight(s);
+
+         index_weight = iWeight(s)+1:iWeight(s+1); % indices of weights for this set
+         W(s).PosteriorMean = Wc.PosteriorMean(:,index_weight);
+         W(s).PosteriorStd = Wc.PosteriorStd(:,index_weight);
+         W(s).PosteriorCov = Wc.PosteriorCov(index_weight,index_weight,:);
+         W(s).T = Wc.T(:,index_weight);
+         W(s).p = Wc.p(:,index_weight);
+         W(s).scale = Wc.scale(:,index_weight);
+         dummy_scale_dim = all(isnan(W(s).scale),2); % dimensions for scale that are not used for this set
+         W(s).scale(dummy_scale_dim,:) = [];
+         W(s).basis = Wc.basis{s};
+         W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
+    end
+end
 
 %% converts to cell if not already a cell
 function x= tocell(x,d)
@@ -4689,16 +4273,6 @@ if nargin>1 && length(x)<d
     x = [x cell(1,d-length(x))];
 end
 end
-
-%% new covariance prior function from change of coordinates
-function [K, grad] = covfun_transfo(scale, HP, M,covfun, B)
-[K,grad] = covfun(scale,HP, B);
-K = M*K*M';
-for i=1:size(grad,3)
-    grad(:,:,i) = M*grad(:,:,i)*M';
-end
-end
-
 
 %% replace value by index
 function [I,siz] = replace(X, scale) % replace X values by indices
@@ -4808,53 +4382,59 @@ end
 
 %% constraint structure
 function S = constraint_structure(W)
-C = W.constraint;
-nWeight = W.nWeight;
-if isstruct(C)
-    assert(isfield(C,{'V','u'}), 'incorrect constraint structure');
-    if ~isfield(C, 'type')
-        C.type = "custom";
+for i=1:numel(W)
+    C = W(i).constraint;
+    nWeight = W(i).nWeight;
+    if isstruct(C)
+        assert(all(isfield(C,{'V','u'})), 'incorrect constraint structure');
+        if ~isfield(C, 'type')
+            C.type = "custom";
+        end
+        if ~isfield(C, 'nConstraint')
+            C.nConstraint = length(C.v);
+        end
+        S(i) = C;
+    else
+
+        assert(ischar(C) || isstring(C), 'incorrect constraint field');
+
+        opt_list = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"];
+        old_optlist = 'fnmsb1';
+        if length(char(C))==1
+            %old format
+            C = opt_list(char(C)==old_optlist);
+        end
+
+
+        switch string(C)
+            case "free"
+                V = spalloc(nWeight,0,0);
+                u = [];
+            case "fixed"
+                V = speye(nWeight);
+                u = [];
+            case "mean1"
+                V = ones(nWeight,1);
+                u = nWeight;
+            case "sum1"
+                V = ones(nWeight,1);
+                u = 1;
+            case "first0"
+                V = [1; zeros(nWeight-1,1)];
+                u = 0;
+            case "first1"
+                V = [1; zeros(nWeight-1,1)];
+                u = 1;
+            case "nullsum"
+                V = ones(nWeight,1);
+                u = 0;
+            otherwise
+                error('incorrect constraint type: %s',C);
+        end
+        nConstraint = size(V,2);
+        S(i) = struct('type',string(C),'V',V, 'u',u,'nConstraint',nConstraint);
     end
-    if ~isfield(C, 'nConstraint')
-        C.nConstraint = length(C.v);
-    end
-    S = C;
-    return;
 end
-assert(ischar(C) || isstring(C), 'incorrect constraint field');
-
-opt_list = ["free";"fixed";"mean1";"sum1";"nullsum";"first1"];
-old_optlist = 'fnmsb1';
-if length(char(C))==1
-    %old format
-    C = opt_list(char(C)==old_optlist);
-end
-
-
-switch string(C)
-    case "free"
-        V = spalloc(nWeight,0,0);
-        u = [];
-    case "fixed"
-        V = speye(nWeight);
-        u = [];
-    case "mean1"
-        V = ones(nWeight,1);
-        u = nWeight;
-    case "sum1"
-        V = ones(nWeight,1);
-        u = 1;
-    case "first1"
-        V = [1; zeros(nWeight-1,1)];
-        u = 1;
-    case "nullsum"
-        V = ones(nWeight,1);
-        u = 0;
-    otherwise
-        error('incorrect constraint type: %s',C);
-end
-nConstraint = size(V,2);
-S = struct('type',string(C),'V',V, 'u',u,'nConstraint',nConstraint);
 end
 
 %% constraint type
@@ -4867,10 +4447,14 @@ end
 end
 
 %% constrained weight
-function bool = constrained_weight(W)
+function [bool,u] = constrained_weight(W)
 % boolean array: for each weight, whether it is constrained to a fixed
 % value
 S = constraint_structure(W);
 one_constrained_weight = (sum(S.V~=0,1)==1); % for each constraint,whether it affects only one weight (i.e.fully constrains it)
 bool = any(S.V(:,one_constrained_weight),2);
+
+if nargout>1
+    u = S.V(bool, one_constrained_weight) * S.u(one_constrained_weight)';
+end
 end

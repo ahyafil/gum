@@ -627,41 +627,12 @@ if VerticalLabel && ~((strcmp(plottype, 'curve')&&nVar~=1) ||  (strcmp(plottype,
     error('vertical labels only for single series bar/curve type');
 end
 
-% %% permute if required
-% if ~isempty(permut)
-%     M = permute(M, permut);
-%     E = permute(E, permut);
-%     varnames(2:end) = varnames(1+permut);
-%     levels = levels(permut);
-%     siz = siz(permut);
-% end
-
-%% use values for xtick if set 'normal'
-if strcmp(xtick, 'normal') && ~isempty(levels{1}) && isempty(X)
-    
-    if ~any(cellfun(@iscell, levels{1}))
-    % try to convert all labels into X value
-    X = cellfun(@str2double, levels{1}(:)');
-    if any(isnan(X)) || isempty(X) % if its fails, simply take first integers
-        X = 1:nPar;
-    end
-    else
-         X = 1:nPar;
-    end
-
-
-elseif isempty(X)
-    X = 1:nPar;
-end
-
-
+% use values for xtick from xticklabels, if relevant
+X = get_xtick(X, levels{1}, nPar, xtick);
 
 %% process p-values
 if isempty(pval)
     pval = nan(size(M));
-    % pval = 1;
-    % if dimm == 3, pval = nan(1, siz(3)); end
-    % if dimm == 4, pval = ones(siz(3), siz(4)); end
 elseif ischar(pval) && strcmp(pval,'on') % compute p-value from t-test applied to Y
     assert(exist('Yraw','var'),'to compute p-value, syntax must be with raw array Y');
     if ~rawinput % if numerical array, convert to cell array with one column
@@ -717,43 +688,6 @@ if ~isempty(linecolor)
     linecolor = color2mat(linecolor,nVar);
     errorbarpars(end+1:end+2) = {'LineColor',linecolor};
 end
-% if ischar(cor),
-%     switch lower(cor),
-%         case  {'jet', 'gray', 'pink', 'hsv', 'hot', 'cool', 'copper', 'flag', 'prism'},
-%             cor = eval(cor);
-%             if nbv>1
-%                 corvec = 1 + (size(cor,1)-1) * (0:nbv-1)/(nbv-1);
-%             else
-%                 corvec = 1;
-%             end
-%             cor = cor(floor(corvec),:);
-%         case {'flat','colormap'}, %interpolate colors from colormap
-%             cor = colormap;  %current colormap
-%             if nbv>1
-%                 corvec = 1 + (size(cor,1)-1) * (0:nbv-1)/(nbv-1);
-%             else
-%                 corvec = 1;
-%             end
-%             cor = cor(floor(corvec),:);
-%         otherwise  %just one colour symbol (e.g. 'k')
-%             cor = {cor};
-%     end
-% end
-%
-% % if cell array, convert to matrix of RGB values
-% if iscell(cor),
-%     cor_mat = zeros(length(cor),3);
-%     for c=1:length(cor),
-%         if isnumeric(cor{c}), % RGB value
-%             cor_mat(c,:) = cor{c};
-%         elseif ischar(cor{c}), % letter (e.g. 'k', 'b', etc.)
-%             cor_mat(c,:) = rem(floor((strfind('kbgcrmyw', cor{c}) - 1) * [0.25 0.5 1]), 2);
-%         else
-%             error('incorrect value for colour: should be vector of RGB value or single character');
-%         end
-%     end
-%     cor = cor_mat;
-% end
 
 % if not enough colours compared to number of variables,
 % cycle through them
@@ -939,29 +873,12 @@ end
 %% plotting subfunction
     function phandle = pcurve(X, MM, LL, UU, PP, vnames, labelz)
         
-        %         %abscissa values !! deleted because it's already taken care of
-        %         above
-        %         if isempty(X),
-        %             % if isvector(Ymean),
-        %             %     X = 1:length(Ymean);
-        %             % else
-        %             try %!!!! should not be here, and seems this is already aounrd line 380
-        %                 X = cellfun(@str2double, labelz{1});  %convert from llevels (if numeric)
-        %                 if any(isnan(X)) || isempty(X),
-        %
-        %                     X = 1:size(MM,1);
-        %                 end
-        %             catch%(otherwise simply integers starting from one)
-        %                 X = 1:size(MM,1);
-        %             end
-        %
-        %
-        %             % end
-        %         end
         X = X(:)';
         
         hold on;
+
         
+
         %% compute probability values to display
         %         if isnumeric(PP),
         %             if length(PP)==1,
@@ -1316,7 +1233,7 @@ end
                 %% labels as ticklabels
                 
                 [xtickval,xorder] = unique(X);
-                set(gca, [faxis 'Tick'], unique(xtickval));
+                set(gca, [faxis 'Tick'], unique(xtickval(~isnan(xtickval))));
                 if ~isempty(labelz{1})
                     set(gca, [faxis 'TickLabel'], labelz{1}(xorder));
                 end
@@ -1411,7 +1328,7 @@ end
 
 % replacement functions if does not have stats toolbox
 function m = nmean(x,d)
-if exist('nanmean')==2
+if exist('nanmean','file')
     m = nanmean(x,d);
 else
     m = nan_mean(x,d);
@@ -1420,21 +1337,39 @@ end
 
 
 function s = nstd(x,d)
-if exist('nanstd')==2
+if exist('nanstd','file')
     s = nanstd(x,0,d);
 else
     s = nan_std(x,d);
 end
 end
 
-function b = isrow(x)
-b = isvector(x) && size(x,2) >1;
-end
-
+% list of all colormapstrings
 function C = colormapstrings()
 C =  {'parula','jet', 'gray', 'pink', 'hsv', 'hot', 'cool', 'copper', 'flag', 'prism',...
     'spring','autumn','summer','winter', 'bone','lines','flag'};
-
-
 end
+
+% get values for xticks from xticlabels, if relevant
+function X = get_xtick(X, Lvl,nPar, xtick)
+
+if strcmp(xtick, 'normal') && ~isempty(Lvl) && isempty(X)
+    
+    if ~any(cellfun(@iscell, Lvl))
+    % try to convert all labels into X value
+    X = cellfun(@str2double, Lvl(:)');
+    nanValues = isnan(X) & ~strcmpi(Lvl(:)','nan');
+    if any(nanValues) || isempty(X) % if its fails, simply use first integers
+        X = 1:nPar;
+    end
+    else % if cell array
+         X = 1:nPar;
+    end
+
+elseif isempty(X)
+    X = 1:nPar;
+end
+    end
+
+
 
