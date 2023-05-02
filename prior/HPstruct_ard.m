@@ -6,14 +6,12 @@ S = HPstruct();
 
 % value of hyperparameter
 if nargin>1
-    S.HP = HPwithdefault(HP, 0); % default value if not specified
+    S.HP = HPwithdefault(HP, zeros(1,nReg)); % default value if not specified
 else
     S.HP = zeros(1,nReg);
 end
-for i=1:nReg
-    S.label = {['log \lambda' num2str(d) '_' num2str(i)]};  % HP labels
-end
-if nargin>2
+    S.label = "log \lambda" +d+"_"+ (1:nReg);  % HP labels
+if nargin>3
     S.fit = HPfit; % if HP is fittable
 else
     S.fit = true(1,nReg);

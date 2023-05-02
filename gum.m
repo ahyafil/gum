@@ -142,7 +142,7 @@ classdef gum
     %
 
     % TODO:
-    % - no prior, ARD (TEST) - Matern prior
+    % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
@@ -404,8 +404,11 @@ classdef gum
                 return;
             end
 
+            fprintf([repmat('=',1,80) '\n']);
             fprintf('Generalized Unrestricted Model (GUM) object\n');
             fprintf('%s\n', obj.formula);
+                        fprintf([repmat('-',1,80) '\n']);
+
             if isglm(obj)
                 typestr = 'GLM';
             elseif isgam(obj)
@@ -449,6 +452,9 @@ classdef gum
             end
             fprintf(ScoreString,ScoreValues{:});
 
+                        fprintf([repmat('=',1,80) '\n']);
+
+
             % add weights to summary
             if obj.isestimated()
                 print_weights(obj);
@@ -477,7 +483,7 @@ classdef gum
                 else
                     fprintf('%10s %12s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
-                        fprintf(['%10s %12s %8' char_type(W.scale) ' %8f %8f %8f %8f\n'], W.regressor(r), label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                        fprintf(['%10s %12s %8' char_type(W.scale) ' %8f %8f %8f %8f\n'], string(W.regressor(r)), label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
                     end
                 end
 
@@ -493,6 +499,10 @@ classdef gum
 
             H = export_hyperparameters_to_table(obj);
             nHP = height(H);
+            if nHP==0
+                fprintf('The model has no hyperparameter.\n');
+                return;
+            end
             if isgam(obj)
 
                 fprintf('%20s %12s %8s %8s %8s %8s\n', 'Regressor','Level','value','fittable','LowerBnd','UpperBnd');
@@ -1248,8 +1258,6 @@ classdef gum
                 PCov = PosteriorCov(obj); % posterior covariance computed from train data
                 grd = zeros(size(CovJacob,3),1);
                 for q=1:size(CovJacob,3) % for each hyperparameter
-                    % Ucat = cellfun(@(x) x.U, M, 'uniformoutput',0);
-                    % Ucat = [Ucat{:}];
                     warning('looks like should be derivative for inverse of GHP here');
                     gradgrad = PP*CovJacob(:,:,q)'*allU'; % LLH derived w.r.t to U (free basis) and hyperparameter
                     gradU = - PP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
@@ -1282,7 +1290,8 @@ classdef gum
 
             % T-statistic for the weights
             allU = concatenate_weights(M);
-            all_T = allU ./ all_se;
+            allPriorMean = concatenate_weights(M,0,'PriorMean');
+            all_T = (allU-allPriorMean) ./ all_se;
 
             % p-value for significance of each coefficient
             %all_p = 1-chi2cdf(all_T.^2,1);
@@ -2430,6 +2439,21 @@ classdef gum
                 return;
             end
 
+ % weighting by observations weights
+                if isempty(obj.ObservationWeight) && nC==1
+                    weighted_fun = @(x,cc) x;
+                elseif nC ==1
+                    weighted_fun = @(x,cc) x.*obj.ObservationWeight;
+                elseif isempty(obj.ObservationWeight)
+                    weighted_fun = @(x,cc) x.*obj.mixture.Posterior(:,cc);
+                    warning('move down??');
+                else
+                    weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
+                end
+
+                weighted_sum = @(x,cc) sum(weighted_fun(x,cc));
+                unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
+
             s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(cc)); %  update scaling parameter: unbiased mse
             obj.score.scaling = s;
         end
@@ -2786,6 +2810,13 @@ classdef gum
 
             K = blkdiag(K{:}); % prior is block-diagonal
             Kfree = P*K*P'; % project on free basis
+
+            % matrix multiplication messes up with infinite cov, so let's
+            % correct that
+            inf_prior_weights = isinf(diag(K));
+            inf_prior_free_weights = any(P(:,inf_prior_weights),1); % free weights with infinite prior cov
+            Kfree(inf_prior_free_weights,inf_prior_free_weights) = diag(inf(1,sum(inf_prior_free_weights)));
+
             K_noinf = blkdiag(K_noinf{:});
             K_noinf_free = P*K_noinf*P'; % prior covariance in free basis
 
@@ -4282,7 +4313,7 @@ O = ''; % list of operators
 OpenBracketPos = []; % position of opening brackets
 CloseBracketPos = []; % position of closing brackets
 
-option_list = {'sum','mean','tau','variance','binning','constraint', 'type', 'period','fit'}; % possible option types
+option_list = {'sum','mean','tau','variance','binning','constraint', 'type', 'period','fit','prior'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
 basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)('}; % regular expressions for 'basis' options
@@ -4449,6 +4480,13 @@ while ~isempty(fmla)
                     % i = 1;
                     opts.constraint = fmla(1);
                     fmla = trimspace(fmla(2:end));
+                case 'prior'
+                    i = find(fmla==')' | fmla==separator,1); % find next coma or parenthesis
+                    if isempty(i)
+                        error('incorrect formula, could not parse the value of prior');
+                    end
+                    opts.prior = fmla(1:i-1);
+                    fmla(1:i-1) = [];
             end
         end
         fmla = trimspace(fmla(2:end));
@@ -4620,13 +4658,16 @@ for v=1:length(V)
     end
     if isstring(w) % for f(x) or f(x,y,...)
         label = char(w(1));
-        x = zeros(nObs,length(w));
+      %  x = zeros(nObs,length(w));
+      x = cell(1,length(w));
         for idxV = 1:length(w)
-            x(:,idxV) = Tbl.(w(idxV));
+            x{idxV} = Tbl.(w(idxV));
+           % x(:,idxV) = Tbl.(w(idxV));
             if idxV>1
                 label = [label ',' char(w(idxV))];
             end
         end
+        x = cat(2,x{:});
 
         %  elseif isstring(w) || ischar(w) % variable name
         %      x = Tbl.(w);

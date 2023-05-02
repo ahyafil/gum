@@ -250,12 +250,8 @@ classdef regressor
                                 HPfit_def = ones(1,size(X,ndims(X)));
                                 HPfit_lbl = num2strcell('variance_%d',1:size(X,ndims(X)));
                             otherwise
-                                error('incorrect prior type');
+                                error('incorrect prior type: %s',prior);
                         end
-
-                        %  case 'categorical'
-                        %        HPfit_def = 1;
-                        %        HPfit_lbl = {'variance'};
 
                     case 'continuous'
                         HPfit_def = [1 1];
@@ -420,7 +416,8 @@ classdef regressor
                         case 'none'
                             obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
                         case 'ARD'
-                            obj.HP(nD) = HPstruct_ard(nWeight, nD, HP{nD}, HPfit);
+                            if nD ==1, ch=""; else ch=nD; end
+                            obj.HP(nD) = HPstruct_ard(nWeight, ch, HP{nD}, HPfit);
                             obj.Prior(nD).CovFun = @ard_covfun;
                     end
                     obj.Prior(nD).type = prior{nD};
@@ -757,11 +754,15 @@ classdef regressor
             if nargin<3
                 fild = 'PosteriorMean';
             else
-                assert(ismember(fild, {'PosteriorMean', 'PosteriorStd', 'T','p', 'scale'}),...
+                assert(ismember(fild, {'PosteriorMean', 'PosteriorStd', 'T','p', 'scale','PriorMean'}),...
                     'incorrect metric');
             end
             if nargin==1 || isequal(dims,0) % all weights
+               if strcmp(fild,'PriorMean')
+U = [obj.Prior];
+               else
                 U = [obj.Weights];
+               end
                 U = {U.(fild)};
                 U = cellfun(@(x) x(:)', U,'unif',0);
                 U = [U{:}];
@@ -789,7 +790,12 @@ classdef regressor
 
                     % for r=1:obj(m).rank
                     idx = ii + (1:nR(m)*obj(m).rank); % index of regressors in output vector
+
+                    if strcmp(fild,'PriorMean')
+                    thisU = obj(m).Prior(d).PriorMean;
+                    else
                     thisU = obj(m).Weights(d).(fild);
+                    end
                     U(idx) = thisU(:);
 
                     ii = idx(end); %
@@ -1253,7 +1259,7 @@ classdef regressor
                             case 'none'
                                 obj.Prior(d).CovFun = @infinite_cov;
                             case 'ARD'
-                                obj.HP(d) = HPstruct_ard(nWeight, d, HP{d}, HPfit);
+                                obj.HP(d) = HPstruct_ard(obj.Weights(d).nWeight, d, HP{d});
                                 obj.Prior(d).CovFun = @ard_covfun;
                         end
 
@@ -1872,9 +1878,10 @@ classdef regressor
 
                         % compute posterior covariance, standard error
                         % of weights in original domain
-                        W.PosteriorCov = zeros(W.nWeight, W.nWeight,obj(m).rank);
-                        W.PosteriorStd = zeros(obj(m).rank, W.nWeight);
-                        for r=1:obj(m).rank
+                        rk = obj(m).rank;
+                        W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
+                        W.PosteriorStd = zeros(rk, W.nWeight);
+                        for r=1:rk
                             PCov  = B.B' * B.PosteriorCov(:,:,r) * B.B;
                             W.PosteriorCov(:,:,r) = PCov;
                             W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
@@ -2780,6 +2787,7 @@ classdef regressor
             scale = interaction_levels(obj1.Weights.scale, obj2.Weights.scale);
 
             obj.Weights  = empty_weight_structure(1, [obj1.nObs nLevel], scale, []);
+            obj.Weights.label = [obj1.Weights.label ':' obj2.Weights.label];
 
             %% constraint (zeros for all default)
             if isFreeWeightSet(obj1)
@@ -3627,14 +3635,15 @@ classdef regressor
             % T = M.export_weights_to_table(obj);
             % creates a table with metrics for all weights (scale, PosteriorMean, PosteriorStd, T-statistics, etc.)
             W = [obj.Weights]; % concatenate weights over regressors
+            P = [obj.Prior];
+            HPs = [obj.HP];
 
-            nWeight = cellfun(@sum,{W.nWeight}); % number of weights for each set
-            reg_idx = repelem(1:length(W), nWeight)'; % regressor index
-            label = repelem({W.label},nWeight)'; % weight labels
+            [W,HPs,P] = split_concatenated_weights_HP_prior(W,HPs,P);
+
+            reg_idx = repelem(1:length(W), [W.nWeight])'; % regressor index
+            label = repelem({W.label},[W.nWeight])'; % weight labels
 
             T = table(reg_idx, label, 'VariableNames',{'regressor','label'});
-
-
 
             filds = {'scale','PosteriorMean','PosteriorStd','T','p'};
             for f=1:length(filds)
@@ -3666,10 +3675,9 @@ classdef regressor
             end
 
             % prior mean
-            P = [obj.Prior];
             PM = {P.PriorMean};
             for i=1:length(W) % if using basis function, project prior mean on full space
-                if ~isempty(W(i).basis)
+                if ~iscell(W(i).basis) && ~isempty(W(i).basis)
                     B = W(i).basis.B;
                     PM{i} = PM{i}*B;
                 end
@@ -4200,6 +4208,22 @@ end
 
 %% split concatenated HP and prior structure
 function [W, HP, P] = split_concatenated_weights_HP_prior(W, HP,P)
+if ~isscalar(W)
+    % recursive call
+Wc = cell(size(W));
+HPc = cell(size(W));
+Pc = cell(size(W));
+for i=1:numel(W)
+[Wc{i}, HPc{i}, Pc{i}] = split_concatenated_weights_HP_prior(W(i), HP(i),P(i));
+end
+W = [Wc{:}];
+HP = [HPc{:}];
+P = [Pc{:}];
+
+return;
+
+end
+
   if isscalar(W.nWeight)
         return;
   end
@@ -4219,7 +4243,9 @@ for i=1:nSet
     % prior structure
     P(i).CovFun = Pc.CovFun{i};
              index_weight = iWeight(i)+1:iWeight(i+1); % indices of weights for this set
-    P(i).PriorCovariance = Pc.PriorCovariance(index_weight,index_weight);
+    P(i).PriorMean = Pc.PriorMean(:,index_weight);
+             P(i).PriorCovariance = Pc.PriorCovariance(index_weight,index_weight);
+
 
     % HP structure
     index_HP = HPc.index==i;
@@ -4228,8 +4254,9 @@ for i=1:nSet
     HP(i).UB = HPc.UB(index_HP);
     HP(i).label = HPc.label(index_HP);
     HP(i).fit = HPc.fit(index_HP);
+    HP(i).index = [];
 end
-HP = rmfield(HP, 'index');
+%HP = rmfield(HP, 'index');
 end
 
 %% split concatenated weight structure (for plotting)
