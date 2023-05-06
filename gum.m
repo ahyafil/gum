@@ -15,11 +15,15 @@ classdef gum
     %
     % Possible fields in params are:
     % -'observations': 'binomial' (default), 'normal' or 'poisson'
-    %
+    % - 'link': link function. Default is canonical link function ('logit'
+    % for binomal observation; 'identity' for normal observation; 'log' for
+    % Poisson observations). The other possible value is 'probit' for
+    % binomial observations
     % -'w': is a weighting vector with length equal to the number of training examples
     % - 'split': add
     % - 'constant': whether a regressor of ones is included (to capture the
     % intercept). Possible values: 'on' [default], 'off'
+    %
     %
     % - 'mixture': for mixture of GUMs: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
     % (e.g. 'hmm3' for 3-state HMM). The value can also be a user-defined mixture model (defined with mixturemodel). Other fields may be provided:
@@ -87,10 +91,13 @@ classdef gum
     % - 'isgam': whether model corresponds to a GAM
     % - 'isglm': whether model corresponds to a GLM
     % - 'isestimated': whether model weights have been estimated
+    % - 'is_weight_set': whether model weights haven been assigned
+    % - 'isfitted': whether hyperparameters have been fitted
     % - 'is_infinite_covariance': whether any regressor has infinite
     % covariance (i.e. no prior)
     % - 'number_of_regressors': number of regressors
     % - 'concatenate_weights': concatenates model weights into vector
+    % - 'freeze_weights': freezes weights and parameters in the model
     % - 'clear_data'
     % - 'save': save model into .mat file
     %
@@ -138,23 +145,24 @@ classdef gum
     % - 'plot_score': plot scores of different models (model comparison)
     % - 'plot_basis_functions': plot regressor basis functions
     %
-    % version 0.0. Bug/comments: send to alexandre.hyafil@gmail.com
+    % version 0.0. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
     %
 
     % TODO:
     % - Matern prior
+    % - verbose vs display
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
-    % - negative binomial, probit (finish)
+    % - add: negative binomial (check nbreg.m)
     % - link functions as in glmfit
-    % - CV gradient for dispersion parameter
+    % - CV gradient for dispersion parameter (TEST)
     % - CV gradient for parameterized basis functions
     % - crossvalidation compatibility with matlab native (done?)
-    % - cat_regressor: add for basis and EM 
+    % - add "cov" and "basis" label to HP structure
+    % - cat_regressor: add for basis and EM
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
-    % - work on labels
     % - add label on models (or just dataset label?)
     % - merge select_weights (does not work) / find_weights?
     % - reset: weights for gum, clearing all scores and predictions
@@ -163,7 +171,9 @@ classdef gum
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
     % - knock-out model
+    % - freeze weights: TEST, add for subset of weights only
     % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
+    % - use linsolve instead of A \ B?
 
     properties
         formula = ''
@@ -247,8 +257,12 @@ classdef gum
             end
             if isfield(param,'ObservationWeight')
                 obj.ObservationWeight = param.ObservationWeight;
+                obj.score.nObservations = sum(obj.ObservationWeight);
+            else
+                obj.score.nObservations = obj.nObs;
             end
-
+            obj.score.isEstimated = 0;
+            obj.score.isFitted = 0;
 
             %% transform two-column dependent variable into one-column
             if BinaryCountCode % if binary observations with one column for counts of value 1 and one column for total counts
@@ -304,14 +318,23 @@ classdef gum
             end
             obj.obs = obs;
 
-            % link function
-            switch obs
+            %% link function
+            switch obs % default link function
                 case 'normal'
                     obj.link = 'identity';
                 case 'binomial'
                     obj.link = 'logit';
                 case 'poisson'
                     obj.link = 'log';
+            end
+
+            if isfield(param,'link') && ~isempty(param.link)
+                if strcmp(obs,'binomial') && strcmpi(param.link,'probit')
+                    obj.link = 'probit';
+                elseif ~strcmp(param.link, obj.link)
+                    error('incorrect link function for %s observations: ''%s''', obs, obj.link);
+                end
+
             end
 
             %% add constant bias ('on' by default)
@@ -349,7 +372,12 @@ classdef gum
             obj.param = param;
             obj.regressor = M;
 
-            obj = obj.computer_n_parameters_df; % compute number of parameters and degrees of freedom
+            obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
+            obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
+            obj.score.scaling = 1;
+            if strcmp(obs, 'normal') % free dispersion parameter
+                obj.score.scaling = nan;
+            end
 
             %% mixture model
             if isfield(param, 'mixture') && ~isempty(param.mixture)
@@ -407,7 +435,7 @@ classdef gum
             fprintf([repmat('=',1,80) '\n']);
             fprintf('Generalized Unrestricted Model (GUM) object\n');
             fprintf('%s\n', obj.formula);
-                        fprintf([repmat('-',1,80) '\n']);
+            fprintf([repmat('-',1,80) '\n']);
 
             if isglm(obj)
                 typestr = 'GLM';
@@ -425,13 +453,15 @@ classdef gum
             ScoreLabel = Sc.Properties.VariableNames;
             ScoreString = '';
             ScoreValues = {};
+            Integer_scores = {'df', 'nObservations','nParameters','nFreeParameters','exitflag','nFreeHyperparameters','isEstimated','isFitted'};
+
             for s=1:length(ScoreLabel)
                 this_score = Sc.(ScoreLabel{s});
                 if isscalar(this_score) || ischar(this_score)
                     ScoreString = [ScoreString '%16s: %14'];
                     if ischar(this_score)
                         ScoreString(end+1) = 's';
-                    elseif any(strcmp(ScoreLabel{s},{'df', 'nParameters','nFreeParameters','exitflag'} ))
+                    elseif any(strcmp(ScoreLabel{s},Integer_scores))
                         ScoreString(end+1) = 'd';
                     else
                         ScoreString(end+1) = 'f';
@@ -452,8 +482,9 @@ classdef gum
             end
             fprintf(ScoreString,ScoreValues{:});
 
-                        fprintf([repmat('=',1,80) '\n']);
+            %%
 
+            fprintf([repmat('=',1,80) '\n']); % line of ====
 
             % add weights to summary
             if obj.isestimated()
@@ -461,6 +492,10 @@ classdef gum
             else
                 fprintf('Weights: not estimated\n');
             end
+
+            % add hyperparameters to summary
+            fprintf([repmat('=',1,80) '\n']); % line of ====
+            obj.print_hyperparameters;
 
         end
 
@@ -472,7 +507,7 @@ classdef gum
                 W = export_weights_to_table(obj);
                 label = string(W.label);
                 nReg = height(W);
-                
+
                 if nReg>30
                     fprintf('\nToo many regressor values (%d) to print, use export_weights_to_table instead\n', nReg);
                 elseif isgam(obj)
@@ -505,14 +540,14 @@ classdef gum
             end
             if isgam(obj)
 
-                fprintf('%20s %12s %8s %8s %8s %8s\n', 'Regressor','Level','value','fittable','LowerBnd','UpperBnd');
+                fprintf('%20s %20s %8s %8s %8s %8s\n', 'Regressor','HP','value','fittable','LowerBnd','UpperBnd');
                 for r=1:nHP
                     if iscell(H.label)
                         this_label = H.label{r};
                     else
                         this_label = H.label(r);
                     end
-                    fprintf('%20s %12s %8f %8d %8f %8f\n', H.transform{r}, this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
+                    fprintf('%20s %20s %8f %8d %8f %8f\n', H.transform{r}, this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
                 end
             else
                 fprintf('%10s %20s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','value','fittable','LowerBnd','UpperBnd');
@@ -523,7 +558,7 @@ classdef gum
                     else
                         this_label = H.label(r);
                     end
-                    fprintf('%10s %20s %8f %8f %8d %8f %8f\n', H.RegressorId{r}, H.transform(r), this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
+                    fprintf('%10d %20s %8f %8f %8d %8f %8f\n', H.RegressorId{r}, H.transform(r), this_label, H.value(r), H.fittable(r), H.LowerBound(r), H.UpperBound(r));
                 end
             end
 
@@ -538,12 +573,17 @@ classdef gum
             % observations to be included.
 
             obj.T = obj.T(subset);
+            n_obs = length(obj.T);
+            obj.nObs = n_obs;
+
             if ~isempty(obj.ObservationWeight)
                 obj.ObservationWeight = obj.ObservationWeight(subset);
+                obj.score.nObservations = sum(obj.ObservationWeight);
+            else
+                obj.score.nObservations = n_obs;
             end
-            n_obs = length(obj.T);
 
-            obj.nObs = n_obs;
+
             for m=1:length(obj.regressor) % for each module
                 obj.regressor(m) = extract_observations(obj.regressor(m), subset);
                 %  obj.regressor(m).Data =   extract_observations(obj.regressor(m).Data,subset); % extract for this module
@@ -561,7 +601,7 @@ classdef gum
             end
 
             % update number of parameters and degrees of freedom
-            obj = computer_n_parameters_df(obj);
+            obj = compute_n_parameters_df(obj);
 
         end
 
@@ -626,6 +666,12 @@ classdef gum
             % numerical estimate is correct)
             %
             % - 'display':'on','off'
+            % - 'crossvalidation': a scalar defining the number of folds
+            % (default:5), a cvpartition object or a cell array with two
+            % columns and a number of rows defining the number of folds,
+            % with the first column defining the indices of the training
+            % set and the second column defining the indices of the test
+            % set
             % -'CovPriorJacobian': provide gradient of prior covariance matrix w.r.t hyperparameters
             % to compute gradient of MAP LLH over hyperparameters.
             % - 'maxiter_HP': integer, defining the maximum number of iterations for
@@ -692,6 +738,9 @@ classdef gum
             %%  check cross validation parameters
             if isfield(param, 'crossvalidation')
                 obj.param.crossvalidation =  param.crossvalidation;
+            elseif strcmpi(HPfit,'cv')
+                % if asked for cross-validation but did not provide CVset
+                obj.param.crossvalidation = .8; % use 10-fold CVLL with 80% data in training and 20% in test set
             end
             obj = check_crossvalidation(obj);
 
@@ -759,7 +808,7 @@ classdef gum
                     %% expectation-maximization to find  hyperpameters that maximize marginal evidence
                 case 'em'
                     obj = em(obj, HPini,HPidx, use_gradient, maxiter, HP_TolFun);
-                 
+
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
 
                     % clear persisitent value for best-fitting parameters
@@ -778,6 +827,7 @@ classdef gum
                     obj =  cv_score(obj, HP, HPidx, 1);
             end
 
+            obj.score.isFitted = 1;
         end
 
         %%% EM ALGORITHM
@@ -831,7 +881,7 @@ classdef gum
                         error('infinite covariance (probably some regressor have no prior), cannot use the ''em'' algorithm for fitting');
                         %% instead we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
                     end
-                    
+
                     fprintf('Initial weight inference (%d starting points):', prm.initialpoints);
                     prm.verbose = 'little';
                 else
@@ -883,7 +933,7 @@ classdef gum
                                     this_Prior = obj.regressor(m).Prior(r,d);
                                     this_PriorMean = this_Prior.PriorMean;
                                     if iscell(this_Prior.CovFun)
-                                         error('not coded yet for regressor with basis functions concatenated with another regressor');
+                                        error('not coded yet for regressor with basis functions concatenated with another regressor');
                                     elseif ~isa(this_Prior.CovFun, 'function_handle') % function handle
                                         error('hyperparameters with no function');
                                     end
@@ -1134,7 +1184,7 @@ classdef gum
                 validationscore = zeros(1,nSet); % score for each (LLH per observation)
                 accuracy = zeros(1,nSet); % proportion correct
                 exitflag_CV = zeros(1,nSet); % exit flag (converged or not)
-                U_CV = zeros(obj.score.nParameters,nperm);
+                U_CV = zeros(obj.score.nParameters,nSet);
 
                 if do_grad_hyperparam
                     grad_hp = zeros(size(CovJacob,3),nSet); % gradient matrix (hyperparameter x permutation)
@@ -1148,7 +1198,6 @@ classdef gum
                 warning('off','MATLAB:nearlySingularMatrix');
                 % end
 
-                s = 1; % !!warning: dispersion parameter - change for normal observations
 
                 % parfor p=1:nperm % for each permutation
                 for p=1:nSet % for each permutation
@@ -1162,7 +1211,6 @@ classdef gum
                     if iscell(trainset) % CV structure
                         trainset = trainset{1};
                         validationset = validationset{1};
-
                     end
 
                     %fit on training set
@@ -1172,10 +1220,14 @@ classdef gum
                     allU = concatenate_weights(obj_train);
                     U_CV(:,p) = allU;
 
+                    score_train = obj_train.score;
+                    s = score_train.scaling; % dispersion parameter
+
                     %compute score on testing set (mean log-likelihood per observation)
                     obj_v = extract_observations(obj,validationset); % model with validat
                     obj_v.regressor = set_weights(obj_v.regressor, obj_train.regressor); % set weights computed from training data
                     obj_v.Predictions.rho = [];
+                    obj_v.score.scaling = s; % dispersion parameter estimated in training set
 
                     [obj_v,validationscore(p),grad_validationscore] = LogLikelihood(obj_v); % evaluate LLH, gradient of LLH
                     accuracy(p) = Accuracy(obj_v); % and accuracy
@@ -1187,10 +1239,40 @@ classdef gum
 
                     end
                     validationscore(p) = validationscore(p)/ n_Validation; % normalize by number of observations
-                    grad_validationscore = grad_validationscore / n_Validation; % gradient w.r.t each weight
+
+
+
 
                     % compute gradient of score over hyperparameters
                     if do_grad_hyperparam
+
+                        % add contribution of free dispersion parameter to
+                        % gradient of CVLL w.r.t weights
+                        free_dispersion = strcmp(obj.obs, 'normal');
+                        if free_dispersion
+                            [~,~,grad_LLtrain] = LogLikelihood(obj_train); % gradient of LLH w.r.t. parameters in training set
+
+                            Pr = [obj.regressor.Prior];
+                            if all(strcmp({Pr.type},'none'))
+                                % if no prior, we use degrees of freedom to obtained
+                                % unbiased mse
+                                norm_factor = score_train.df;
+                            else % otherwise max likelihood
+                                norm_factor = score_train.nObservations;
+                            end
+                            grad_dispersion = -2*s / norm_factor * grad_LLtrain; % grad. of dispersion parameter w.r.t weights
+
+                            obj_v = obj_v.compute_r_squared;
+                            score_test = obj_v.score;
+                            dLLtest_dDispersion = -score_test.nObservations/2/s + score_test.SSE/2/s^2; % derivative of LLtest w.r.t dispersion param
+
+                            grad_LLtest_disp = dLLtest_dDispersion * grad_dispersion; % grad of LLtest wr.t. weights due to free dispersion param
+
+                            grad_validationscore = grad_validationscore + grad_LLtest_disp;
+
+                        end
+
+                        grad_validationscore = grad_validationscore / n_Validation; % gradient w.r.t each weight
 
                         PCov = PosteriorCov(obj_train); % posterior covariance computed from train data
                         this_gradhp = zeros(1,size(CovJacob,3));
@@ -1232,7 +1314,7 @@ classdef gum
                     Sfit.accuracy_test = accuracy_test;
                 end
                 if do_grad_hyperparam
-                    Sfit.grad = mean(grad_hp,2); % gradient is mean of gradient over permutations
+                    obj.grad = mean(grad_hp,2); % gradient is mean of gradient over permutations
                 end
 
             elseif do_grad_hyperparam % optimize parameters directly likelihood of whole dataset (not recommended)
@@ -1257,6 +1339,9 @@ classdef gum
 
                 PCov = PosteriorCov(obj); % posterior covariance computed from train data
                 grd = zeros(size(CovJacob,3),1);
+                s = obj.score.scaling; % dispersion parameter
+
+
                 for q=1:size(CovJacob,3) % for each hyperparameter
                     warning('looks like should be derivative for inverse of GHP here');
                     gradgrad = PP*CovJacob(:,:,q)'*allU'; % LLH derived w.r.t to U (free basis) and hyperparameter
@@ -1369,22 +1454,13 @@ classdef gum
                 end
             end
 
-            Sfit.BIC = nFreePar*log(obj.nObs) -2*Sfit.LogLikelihood; % Bayes Information Criterion
+            Sfit.BIC = nFreePar*log(obj.score.nObservations) -2*Sfit.LogLikelihood; % Bayes Information Criterion
             Sfit.AIC = 2*nFreePar - 2*Sfit.LogLikelihood; % Akaike Information Criterior
-            Sfit.AICc = Sfit.AIC + 2*nFreePar*(nFreePar+1)/(obj.nObs-nFreePar-1); % AIC corrected for sample size
+            Sfit.AICc = Sfit.AIC + 2*nFreePar*(nFreePar+1)/(obj.score.nObservations -nFreePar-1); % AIC corrected for sample size
             Sfit.LogJoint_allstarting = Sfit.LogJoint_allstarting; % values for all starting points
 
-            % compute r2
-            if strcmp(obj.obs, 'normal')
-                if isempty(obj.ObservationWeight)
-                    SSE = sum((obj.T-obj.Predictions.rho).^2); % residual error
-                    SST = (obj.nObs-1)*var(obj.T); % total variance
-                else
-                    SSE = sum(obj.ObservationWeight .* (obj.T-obj.Predictions.rho).^2);
-                    SST = (sum(obj.ObservationWeight)-1) * var(obj.T, obj.ObservationWeight);
-                end
-                Sfit.r2 = 1- SSE/SST; % r-squared
-            end
+            % compute SSE and r2 for normal observations
+            obj = obj.compute_r_squared;
 
             % model evidence using Laplace approximation (Bishop - eq 4.137)
             % S.LLH_model = S.LLH - U'*sigma1*U/2 - V'*sigma2*V/2 + (m1+m2)/2*log(2*pi) - log(det(Inff))/2;
@@ -1405,6 +1481,7 @@ classdef gum
                 obj.score.(score_fields{f}) = Sfit.(score_fields{f});
             end
 
+            obj.score.isEstimated = true;
             obj.score.FittingTime = toc;
         end
 
@@ -1451,73 +1528,73 @@ classdef gum
                 end
             end
 
-                n = obj(1).nObs;
-                if length(obj)>1
-                    assert([obj.nObs]==n, 'all models must have the same number of observations');
-                end
+            n = obj(1).nObs;
+            if length(obj)>1
+                assert([obj.nObs]==n, 'all models must have the same number of observations');
+            end
 
-                if strcmp(verbose,'on')
-                    fprintf('Computing %d boostraps for %d model(s): ',nBootstrap, length(obj));
-                end
+            if strcmp(verbose,'on')
+                fprintf('Computing %d boostraps for %d model(s): ',nBootstrap, length(obj));
+            end
 
+            if nargout>1
+                bootsam = zeros(n, nBootstrap);
+            end
+
+            % pre-allocate boostrap weights
+            U_bt = cell(1,numel(obj));
+            for i=1:numel(obj)
+                U_bt{i} = zeros(obj(i).score.nParameters,nBootstrap);
+            end
+
+            for p=1:nBootstrap % for each permutation
+
+                bt_set = randi(n,1,n); % generating boostrap (sampling with replacement)
                 if nargout>1
-                    bootsam = zeros(n, nBootstrap);
+                    bootsam(:,p) = bt_set;
                 end
 
-                % pre-allocate boostrap weights
-                U_bt = cell(1,numel(obj));
+                %fit on bootstrap data set
+                vbs = obj(i).param.verbose;
+                obj(i).param.verbose = 'off';
                 for i=1:numel(obj)
-                    U_bt{i} = zeros(obj(i).score.nParameters,nBootstrap);
+                    obj_bt = IRLS(extract_observations(obj(i),bt_set));
+
+                    Ucat = concatenate_weights(obj_bt);
+                    U_bt{i}(:,p) = Ucat;
                 end
-
-                for p=1:nBootstrap % for each permutation
-
-                    bt_set = randi(n,1,n); % generating boostrap (sampling with replacement)
-                    if nargout>1
-                        bootsam(:,p) = bt_set;
-                    end
-
-                    %fit on bootstrap data set
-                    vbs = obj(i).param.verbose;
-                    obj(i).param.verbose = 'off';
-                    for i=1:numel(obj)
-                        obj_bt = IRLS(extract_observations(obj(i),bt_set));
-
-                        Ucat = concatenate_weights(obj_bt);
-                        U_bt{i}(:,p) = Ucat;
-                    end
-                    obj(i).param.verbose = vbs;
-
-                    if strcmp(verbose,'on')
-                        fprintf('*');
-                    end
-
-                end
-
-                % compute confidence intervals
-                ci_bt = cell(size(obj));
-                for i=1:numel(obj)
-                    if strcmpi(type,'norm')
-                        %!!! check this is correct (ref in doc bootci)
-                        U_mean = mean(U_bt{i},2); % mean and std over bootstraps
-                        U_std = std(U_bt{i},[],2);
-                        ci_bt{i} = U_mean + norminv(alpha/2)*U_std*[1 -1];
-                    else
-                        ci_bt{i} = quantile(U_bt{i}', [alpha/2 1-alpha/2])'; % compute quantiles on boostrap samples
-                    end
-
-                end
-
-                % add bootstrap weights and C.I. to weight structures
-                for i=numel(obj)
-                    obj(i).regressor = set_weights(obj(i).regressor,U_bt{i},[],'U_bootstrap');
-                    obj(i).regressor = set_weights(obj(i).regressor,ci_bt{i},[],'ci_boostrap');
-
-                end
+                obj(i).param.verbose = vbs;
 
                 if strcmp(verbose,'on')
-                    fprintf('\n done!\n');
+                    fprintf('*');
                 end
+
+            end
+
+            % compute confidence intervals
+            ci_bt = cell(size(obj));
+            for i=1:numel(obj)
+                if strcmpi(type,'norm')
+                    %!!! check this is correct (ref in doc bootci)
+                    U_mean = mean(U_bt{i},2); % mean and std over bootstraps
+                    U_std = std(U_bt{i},[],2);
+                    ci_bt{i} = U_mean + norminv(alpha/2)*U_std*[1 -1];
+                else
+                    ci_bt{i} = quantile(U_bt{i}', [alpha/2 1-alpha/2])'; % compute quantiles on boostrap samples
+                end
+
+            end
+
+            % add bootstrap weights and C.I. to weight structures
+            for i=numel(obj)
+                obj(i).regressor = set_weights(obj(i).regressor,U_bt{i},[],'U_bootstrap');
+                obj(i).regressor = set_weights(obj(i).regressor,ci_bt{i},[],'ci_boostrap');
+
+            end
+
+            if strcmp(verbose,'on')
+                fprintf('\n done!\n');
+            end
 
         end
 
@@ -1722,17 +1799,21 @@ classdef gum
                 else
                     weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
                 end
-                weighted_sum = @(x,cc) sum(weighted_fun(x,cc));
-                unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
+                % weighted_sum = @(x,cc) sum(weighted_fun(x,cc));
+                % unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
 
                 % dispersion parameter from exponential family
                 FixedDispersion = ~strcmp(obj.obs, 'normal');
-                if ~FixedDispersion
-                    s = unbiased_mse(obj.T - weighted_sum(obj.T)/weighted_sum(ones(obj.nObs,1))); % variance of centered data
-                else
-                    s = 1;
+                for cc=1:nC
+                    pseudo_rho =  sum(weighted_fun(obj.T,cc)) / obj.score.nObservations; % mean value
+                    [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion, pseudo_rho);
                 end
-                obj.score.scaling = s;
+                %if ~FixedDispersion
+                %    s = unbiased_mse(obj.T - ); % variance of centered data
+                %else
+                %   s = 1;
+                %end
+                %obj.score.scaling = s;
 
                 FullHessianUpdate = false(1,nC);
                 logFullHessianStep = 0; % determine size of full Hessian step (https://en.wikipedia.org/wiki/Backtracking_line_search)
@@ -1742,7 +1823,7 @@ classdef gum
 
                     old_logjoint = logjoint;
 
-                    for c=1:nC
+                    for cc=1:nC
                         idxC = idxComponent==cc;
 
                         for d=1:D % for each dimension
@@ -1783,28 +1864,38 @@ classdef gum
                                     Y = this_rho;
                                     R = ones(obj.nObs,1);
                                 case 'probit'
+
                                     Y = normcdf(this_rho);
-                                    sgn = sign(obj.T-0.5); % convert to -1/+1
-                                    error('');
-                                    R =  sgn .*normpdf(this_rho) ./ Y;
+
+                                    norm_rho = normpdf(this_rho);
+                                    sgn = sign(obj.T-.5); % convert to -1/+1
+                                    Ysgn = Y;
+                                    Ysgn(sgn==-1) = 1-Ysgn(sgn==-1);
+                                    R = (norm_rho./Ysgn).^2 + sgn.*this_rho.*norm_rho./Ysgn;
                             end
+                                                   
+
 
                             % remove constant parts from projected activation
                             [rho_tilde, UconstU] = remove_constrained_from_predictor(M(idxC), this_d(idxC), this_rho, Phi, UU);
 
                             % compute gradient
-                            if ~FullHessianUpdate(c)
-                                G = weighted_fun(R .* rho_tilde + (obj.T-Y),cc); % inside equation 12
+                            %err = obj.T-Y;
+                            err = prediction_error(obj,Y, this_rho);
+                            if ~FullHessianUpdate(cc)
+                                G = weighted_fun(R .* rho_tilde + err,cc); % inside equation 12
                             else
-                                G =  weighted_fun(obj.T-Y,cc);
+                                G =  weighted_fun(err,cc);
                             end
-                            Rmat = spdiags(weighted_fun(R,cc), 0, n, n);
+
+                               %  Rmat = spdiags(weighted_fun(R,cc), 0, n, n);
+                                                        R = weighted_fun(R,cc);
 
                             if ~SpCode
                                 Psi = Phi*P{cc,d}';
                             end
 
-                            if FullHessianUpdate(c)
+                            if FullHessianUpdate(cc)
                                 inf_cov = any(isinf(Kall(:)));
                             else
                                 inf_cov = any(isinf(Lambda{cc,d}(:)));
@@ -1824,22 +1915,23 @@ classdef gum
                             end
 
 
-                            if ~FullHessianUpdate(c) %% update weights just along that dimension
+                            if ~FullHessianUpdate(cc) %% update weights just along that dimension
 
                                 % Hessian matrix on the free basis (eq. 12)
-
-                                if ~inf_cov %finite covariance matrix
-                                    if SpCode
-                                        H = KP{cc,d}*(Phi'*Rmat*Phi)*P{cc,d}' + s*eye(nFree(cc,d)); % should be faster this way
-                                    else
-                                        H = Lambda{cc,d}* Psi'*Rmat*Psi + s*eye(nFree(cc,d)); % Hessian matrix on the free basis (equation 12)
+  if SpCode
+      PhiRPhi = (Phi'.*R)*Phi;
+                                if ~inf_cov %finite covariance matrix  
+                                        H = KP{cc,d}*PhiRPhi*P{cc,d}' + s*eye(nFree(cc,d)); % should be faster this way
+                                else % any infinite covariance matrix (e.g. no prior on a weight)
+                                      H = P{cc,d}*PhiRPhi*P{cc,d}' + s*precision{cc,d};
                                     end
 
-                                else % any infinite covariance matrix (e.g. no prior on a weight)
-                                    if SpCode
-                                        H = P{cc,d}*(Phi'*Rmat*Phi)*P{cc,d}' + s*precision{cc,d};
+  else 
+      PsiRPsi = (Psi'.*R)*Psi;
+                                    if ~inf_cov %finite covariance matrix
+                                                                                H = Lambda{cc,d}*PsiRPsi  + s*eye(nFree(cc,d)); % Hessian matrix on the free basis (equation 12)
                                     else
-                                        H = Psi'*Rmat*Psi + s*precision{cc,d};
+                                        H = PsiRPsi + s*precision{cc,d};
                                     end
                                 end
 
@@ -1856,10 +1948,6 @@ classdef gum
                                 end
 
                                 [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
-                                % if ~FixedDispersion
-                                %     s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(:,cc)); %  scaling parameter: unbiased mse
-                                %     obj.score.scaling = s;
-                                % end
 
                                 % compute log-joint
                                 interim_logjoint = logjoint;
@@ -1933,7 +2021,7 @@ classdef gum
                         end
 
                         %% DIRECT NEWTON STEP ON WHOLE PARAMETER SPACE
-                        if FullHessianUpdate(c)
+                        if FullHessianUpdate(cc)
 
                             UU = concatenate_weights(M(idxC)); % old set of weights
                             UconstU = concatenate_weights(Udc_dummy(idxC)); % fixed weights
@@ -2106,7 +2194,7 @@ classdef gum
                 %% compute variance of each order components and sort
                 obj = predictor_variance(obj);
                 for m=1:nM
-                 
+
                     if all([M(m).Weights.nWeight]>0) && M(m).ordercomponent && rank(m)>1
                         [~,order] = sort(obj.score.PredictorVariance(:,m),'descend'); % sort variances by descending order
                         for d=1:M(m).nDim
@@ -2303,10 +2391,22 @@ classdef gum
             end
         end
 
-        %% TEST IF MODEL WEIGHTS HAVE BEEN ESTIMATED (OR SET)
+        %% TEST IF MODEL WEIGHTS HAVE BEEN ESTIMATED
         function bool = isestimated(obj)
             % bool = isestimated(M)
-            % tests if weights in model M have been estimated (or assigned)
+            % tests if weights in model M have been estimated
+
+            bool = false(size(obj));
+            for m=1:numel(obj)
+                bool(m) = obj.score.isEstimated;
+            end
+        end
+
+        %% TEST IF MODEL WEIGHTS HAVE BEEN ASSIGNED (OR INFERRED)
+        function bool = is_weight_set(obj)
+            % bool = isestimated(M)
+            % tests if weights in model M have been set (estimated or
+            % pre-assigned)
 
             bool = false(size(obj));
             for m=1:numel(obj)
@@ -2315,12 +2415,22 @@ classdef gum
             end
         end
 
+        %% TEST IF MODEL HYPERPARAMETERS HAVE BEEN FITTED
+        function bool = isfitted(obj)
+            % bool = isfitted(M)
+            % tests if hyperparameters in model M have been fitted
+
+            bool = false(size(obj));
+            for m=1:numel(obj)
+                bool(m) = obj.score.isFitted;
+            end
+        end
+
         %% TEST IF ANY REGRESSOR HAS INFINITE COVARIANCE
         function bool = is_infinite_covariance(obj)
             % bool = is_infinite_covariance(M) tests if any regressor in
             % model M has infinite prior covariance
 
-            %  K = {obj.regressor.sigma};
             K = prior_covariance_cell(obj.regressor, true); % group prior covariacne from all modules
             bool = any(cellfun(@(x) any(isinf(x(:))), K));
 
@@ -2401,60 +2511,81 @@ classdef gum
 
                 switch obj.link
                     case 'logit'
-                        %  Y = 1 ./ (1 + exp(-rho)); % predicted probability
                         R = Y .* (1-Y) ; % derivative wr.t. predictor
-
                     case 'probit'
-                        %  Y = normcdf(rho);
-                        %  if nargout>2
                         % see e.g. Rasmussen 3.16
                         n = normpdf(rho);
-                        Ysgn = Y;
-                        Ysgn(obj.T==0) = 1-Y(obj.T==0);
                         sgn = sign(obj.T-.5); % convert to -1/+1
-                        R = (n./Ysgn)^2 + sgn.*rho.*n./Ysgn;
-                        % end
+
+                         Ysgn = Y;
+                           Ysgn(sgn==-1) = 1-Ysgn(sgn==-1);
+                                 R = (n./Ysgn).^2 + sgn.*rho.*n./Ysgn;
 
                     case 'log'
-                        % Y = exp(rho);
-                        % if nargout>2
                         R = Y;
-                        %end
                     case 'identity'
-                        %Y = rho;
-                        %if nargout>2
                         R = ones(obj.nObs,1);
-                        %end
                 end
             end
 
             obj.Predictions.Expected = Y;
         end
 
+        %% COMPUTE SUM OF SQUARED ERRORS AND R-SQUARED (FOR NORMAL OBSERVATIONS)
+        function  obj = compute_r_squared(obj)
+
+            % M = M.compute_r_squared
+            % compute SSE and r2 for normal observations
+            if ~strcmp(obj.obs, 'normal')
+                return;
+            end
+            if isempty(obj.ObservationWeight)
+                SSE = sum((obj.T-obj.Predictions.rho).^2); % residual error
+                SST = (obj.nObs-1)*var(obj.T); % total variance
+            else
+                SSE = sum(obj.ObservationWeight .* (obj.T-obj.Predictions.rho).^2);
+                SST = (sum(obj.ObservationWeight)-1) * var(obj.T, obj.ObservationWeight);
+            end
+            obj.score.SSE = SSE;
+            obj.score.r2 = 1- SSE/SST; % r-squared
+
+        end
+
         %% UPDATE DISPERSION PARAMETER
-        function [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion)
+        function [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion, rho)
             s = obj.score.scaling;
 
             if FixedDispersion
                 return;
             end
+            if nargin<4
+                rho = obj.Predictions.rho;
+            end
 
- % weighting by observations weights
-                if isempty(obj.ObservationWeight) && nC==1
-                    weighted_fun = @(x,cc) x;
-                elseif nC ==1
-                    weighted_fun = @(x,cc) x.*obj.ObservationWeight;
-                elseif isempty(obj.ObservationWeight)
-                    weighted_fun = @(x,cc) x.*obj.mixture.Posterior(:,cc);
-                    warning('move down??');
-                else
-                    weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
-                end
+            % weighting by observations weights
+            if isempty(obj.ObservationWeight) && isempty(obj.mixture)
+                weighted_fun = @(x,cc) x;
+            elseif nC ==1
+                weighted_fun = @(x,cc) x.*obj.ObservationWeight;
+            elseif isempty(obj.ObservationWeight)
+                weighted_fun = @(x,cc) x.*obj.mixture.Posterior(:,cc);
+                warning('move down??');
+            else
+                weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
+            end
 
-                weighted_sum = @(x,cc) sum(weighted_fun(x,cc));
-                unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
+            err  = obj.T - rho(cc); % model error
 
-            s(cc) = unbiased_mse(obj.T - obj.Predictions.rho(cc)); %  update scaling parameter: unbiased mse
+            P = [obj.regressor.Prior];
+            if all(strcmp({P.type},'none'))
+                % if no prior, we use degrees of freedom to obtained
+                % unbiased mse
+                norm_factor = obj.score.df;
+            else % otherwise max likelihood
+                norm_factor = obj.score.nObservations;
+            end
+
+            s(cc) =  sum(weighted_fun(err.^2,cc))/norm_factor; %  update scaling parameter: unbiased mse
             obj.score.scaling = s;
         end
 
@@ -2564,7 +2695,7 @@ classdef gum
                 case 'binomial'
                     lh = log(Y.*obj.T + (1-Y).*(1-obj.T));
                 case 'poisson'
-                    lh = obj.T.*log(Y) - Y -logfact(obj.T);
+                    lh = obj.T.*log(Y) - Y - gammaln(obj.T+1);
                 case 'normal'
                     if isfield(obj.score, 'scaling')
                         s = obj.score.scaling;
@@ -2599,28 +2730,34 @@ classdef gum
 
             % compute gradient of LLH w.r.t weights
             if nargout>2 %
-                gd = [];
+
                 % prediction error: difference between target and predictor
-                err = (obj.T-Y)';
+                %  err = (obj.T-Y)';
+                err = prediction_error(obj,Y, obj.Predictions.rho)';
                 if ~isempty(obj.ObservationWeight)
                     err = obj.ObservationWeight' .* err;
                 end
 
                 M = obj.regressor;
 
-                for m=1:obj.nMod % for each module
+                % full design matrix
+                Phi = design_matrix(M,[], 0,false);
+                gd = err * Phi;
 
-                    for d=1:M(m).nDim % for each dimension
-                        for r=1:M(m).rank
-                            Phi =  ProjectDimension(M(m),r,d);
-                            if sum(M(m).Weights(d).nWeight)==1 % correct a bug in ProjectDimension that outputs row vector instead of column
-                                Phi = Phi';
-                            end
-                            this_gd = err*Phi; % gradient of LLH w.r.t each weight in U{r,d}
-                            gd = [gd this_gd];
-                        end
-                    end
-                end
+                %                gd = [];
+                %                 for m=1:obj.nMod % for each module
+                %
+                %                     for d=1:M(m).nDim % for each dimension
+                %                         for r=1:M(m).rank
+                %                             Phi =  ProjectDimension(M(m),r,d);
+                %                             if sum(M(m).Weights(d).nWeight)==1 % correct a bug in ProjectDimension that outputs row vector instead of column
+                %                                 Phi = Phi';
+                %                             end
+                %                             this_gd = err*Phi; % gradient of LLH w.r.t each weight in U{r,d}
+                %                             gd = [gd this_gd];
+                %                         end
+                %                     end
+                %                 end
             end
         end
 
@@ -2637,7 +2774,7 @@ classdef gum
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
 
                 case 'poisson' % poisson
-                                  correct = (obj.T==Y);
+                    correct = (obj.T==Y);
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
                 case 'normal'
                     accuracy = nan;
@@ -2875,9 +3012,8 @@ classdef gum
 
 
         %% COMPUTE NUMBER OF PARAMETER
-        function obj = computer_n_parameters_df(obj)
-            % M = computer_n_parameters(M)
-            %
+        function obj = compute_n_parameters_df(obj)
+            % M = compute_n_parameters(M)
 
             % we count parameter in projected space
             M = obj.regressor.project_to_basis;
@@ -2888,6 +3024,28 @@ classdef gum
                 obj.score.df = obj.nObs - obj.score.nParameters; % degree of freedom
             else
                 obj.score.df = sum(obj.ObservationWeight) - obj.score.nParameters; % degree of freedom
+            end
+        end
+
+        %% COMPUTE NUMBER OF FREE HYPERPARAMETERS
+        function obj = compute_n_free_hyperparameters(obj)
+
+            HP = [obj.regressor.HP];
+            isFreeHP = [HP.fit];
+
+            obj.score.nFreeHyperparameters = sum(isFreeHP);
+        end
+
+        %% FREEZE WEIGHTS
+        function obj = freeze_weights(obj)
+            %  R = freeze_weights(R) freezes all weights and
+            %  hyperparameters.
+            for i=1:numel(obj)
+                obj(i).regressor = freeze_weights(obj(i).regressor);
+
+                % update d.f., number of parameters and HPs
+                obj(i) = obj(i).compute_n_parameters_df;
+                obj(i) = obj(i).compute_n_free_hyperparameters;
             end
         end
 
@@ -2944,7 +3102,7 @@ classdef gum
                 if ~all(rank==rank(1))
                     error('rank of module %d differs between models', m);
                 end
-               
+
                 W = cellfun(@(x) x(m).Weights, {obj.regressor},'unif',0); % set of weights for this module, for all models
                 W = cat(1,W{:}); % weights structure array, nObj x nDim
                 fnames = fieldnames(W);
@@ -2968,14 +3126,14 @@ classdef gum
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    if DifferentScale && isnumeric(scale{1,d}) 
+                    if DifferentScale && isnumeric(scale{1,d})
 
-                         % just in case same scale with some numerical imprecisions
+                        % just in case same scale with some numerical imprecisions
                         DifferentScale = ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
-                            ~all(cellfun(@(x) all(abs(x(:)-scale{1,d}(:))<1e-15) ,scale(2:end,d))); 
+                            ~all(cellfun(@(x) all(abs(x(:)-scale{1,d}(:))<1e-15) ,scale(2:end,d)));
                     end
                     if  DifferentScale
-                           
+
                         sc = unique([scale{:,d}]); % all values across all models
                         for i=1:nObj
                             ss = scale{i,d};
@@ -3344,6 +3502,8 @@ classdef gum
 
         %% CHECK FORMAT OF CROSS-VALIDATION
         function obj = check_crossvalidation(obj)
+            % M = M.check_crossvalidation;
+            % process cross-validation set
 
             if ~isfield(obj.param, 'crossvalidation') || isempty(obj.param.crossvalidation)
                 % if no cross-validation is planned, we're fine!
@@ -3383,6 +3543,8 @@ classdef gum
 
             elseif isscalar(CV) % only the number of observations in training set is provided draw the permutations now
                 nTrain = CV; % number of observations in training set
+                n = obj.nObs;
+
                 %  generateperm = 1;
 
                 if nTrain == -1
@@ -3598,7 +3760,7 @@ classdef gum
             %
             % If M is an array of models, will display weights in a grid of
             % subplots
-            if ~all(isestimated(obj))
+            if ~all(is_weight_set(obj))
                 error('weights have not been estimated or set');
             end
 
@@ -3957,6 +4119,22 @@ if M.nObs ~=n
 end
 end
 
+%% prediction error (to compute gradient of LLH w.r.t weights)
+function err = prediction_error(obj,Y, rho)
+
+if ~strcmp(obj.link,'probit')
+    % canonical link function, so this is truly the prediction error
+    err = obj.T-Y;
+else
+    % for probit regression
+    T_signed = 2*obj.T-1; % map targets to -1/+1
+    Y_signed = Y;
+    Y_signed(T_signed==-1) = 1-Y_signed(T_signed==-1);
+    err = T_signed .* normpdf(rho) ./ Y_signed; % see e.g. Rasmussen 3.16
+end
+
+end
+
 %% negative marginalized evidence (for hyperparameter fitting)
 function [negME, obj] = gum_neg_marg(obj, HP, idx)
 
@@ -4074,13 +4252,11 @@ else % same without gradient
     obj.regressor = compute_prior_covariance(M);
 end
 
-
 %% estimate GUM weights
-
 obj = obj.infer(param);
 
 if nargout>1
-    grad = obj.score.grad;
+    grad = obj.grad;
 end
 
 n = obj.nObs;
@@ -4091,7 +4267,7 @@ end
 
 % for decomposition on basis functions, convert weights back to
 % original domain
-obj.regressor = project_from_spectral(obj.regressor);
+obj.regressor = project_from_basis(obj.regressor);
 
 % if best parameter so far, update the value for initial parameters
 if errorscore < fval
@@ -4251,18 +4427,6 @@ else          % det(L) = 1 and U triangular => det(A) = det(P)*prod(diag(U))
 end
 end
 
-%% compute log-factorial
-function L = logfact(T)
-L = zeros(length(T),1);
-for i=1:length(T)
-    if T(i)>100 % Stirling approximation to log n!
-        L(i) = (T(i) + 0.5)*log(T(i) + 0.5) - 0.434294*(T(i) + 0.5)*log(10) + 0.399090*log(10);
-    else
-        L(i) = log(factorial(T(i)));
-    end
-end
-end
-
 %% PARSE FORMULA OF GUM (FOR TABLE SYNTAX)
 function [M,T, param] = parse_formula(Tbl,fmla, param)
 if ~ischar(fmla)
@@ -4313,10 +4477,10 @@ O = ''; % list of operators
 OpenBracketPos = []; % position of opening brackets
 CloseBracketPos = []; % position of closing brackets
 
-option_list = {'sum','mean','tau','variance','binning','constraint', 'type', 'period','fit','prior'}; % possible option types
+option_list = {'sum','mean','tau','variance','basis','binning','constraint', 'type', 'period','fit','prior'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
-basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)('}; % regular expressions for 'basis' options
+basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','none','auto'}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
 
 is_null_regressor = false;
@@ -4658,11 +4822,11 @@ for v=1:length(V)
     end
     if isstring(w) % for f(x) or f(x,y,...)
         label = char(w(1));
-      %  x = zeros(nObs,length(w));
-      x = cell(1,length(w));
+        %  x = zeros(nObs,length(w));
+        x = cell(1,length(w));
         for idxV = 1:length(w)
             x{idxV} = Tbl.(w(idxV));
-           % x(:,idxV) = Tbl.(w(idxV));
+            % x(:,idxV) = Tbl.(w(idxV));
             if idxV>1
                 label = [label ',' char(w(idxV))];
             end
@@ -4810,9 +4974,9 @@ while length(V)>1
         v = find(O==':' || O=='^',1);
 
         if O(v) == ':'
-        V{v} = V{v} : V{v+1}; % compose interaction
+            V{v} = V{v} : V{v+1}; % compose interaction
         else
-V{v} = V{v} ^ V{v+1}; % compose interaction (with main effects)
+            V{v} = V{v} ^ V{v+1}; % compose interaction (with main effects)
         end
 
         % remove regressor and operation
@@ -5012,15 +5176,15 @@ end
 
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
-metrics = {'nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
-    'accuracy','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','FittingTime'};
+metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
+    'accuracy','scaling','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','isEstimated','isFitted','FittingTime'};
 end
 
- function c = char_type(X)
- if isnumeric(X)
-     c = 'f';
- else
-     c = 's';
- end
- end
+function c = char_type(X)
+if isnumeric(X)
+    c = 'f';
+else
+    c = 's';
+end
+end
 

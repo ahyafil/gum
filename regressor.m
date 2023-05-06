@@ -1012,6 +1012,22 @@ U = [obj.Prior];
             end
         end
 
+        %% FREEZE WEIGHTS
+        function obj = freeze_weights(obj)
+        % R = R.freeze_weights;
+
+        % if needed, initialize weights to default values
+        obj = obj.initialize_weights('normal');
+
+            for i=1:numel(obj)
+                for d=1:obj(i).nDim
+                    obj.Weights(d).constraint = "fixed";
+                    obj.Weights(d).PosteriorStd = nan(size(obj.Weights(d).PosteriorMean));
+                    obj.HP(d).fit(:) = 0;
+                end
+            end
+        end
+
         %% ORTHOGONALIZE WEIGHTS (FOR PWA)
         function obj = orthogonalize_weights(obj, d)
             if nargin<1
@@ -1301,6 +1317,8 @@ U = [obj.Prior];
                 else % otherwise no basis functions
                     basis = [];
                 end
+            elseif strcmp(basis,'none')
+                    basis = [];
             end
             obj.Weights(d).basis = basis;
 
@@ -1640,18 +1658,18 @@ U = [obj.Prior];
 
             %% initialize weights
             if init_weight
-                for m=1:nM
+               % for m=1:nM
                     % if empty weight, pre-allocate
-                    for d=1:obj(m).nDim
-                        W = obj(m).Weights(d);
-                        if isempty(W.PosteriorMean)
-                            obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank, sum(W.nWeight));
-                        end
-                    end
+                   % for d=1:obj(m).nDim
+                   %     W = obj(m).Weights(d);
+                   %     if isempty(W.PosteriorMean)
+                   %         obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank, sum(W.nWeight));
+                   %     end
+                   % end       
+               % end
 
-                    % initialize weight to default value
-                    obj(m) = obj(m).initialize_weights();
-                end
+                % initialize weights to default value
+                    obj = obj.initialize_weights();
             end
 
             ii = 0; % index for regressors in design matrix
@@ -3289,9 +3307,7 @@ U = [obj.Prior];
                 if nargin>=3 && check_dims_only
                     obj = true;
                 end
-
                 return;
-
             end
 
             if nargin<2
