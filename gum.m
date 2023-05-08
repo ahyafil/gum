@@ -14,11 +14,12 @@ classdef gum
     % define the formula.
     %
     % Possible fields in params are:
-    % -'observations': 'binomial' (default), 'normal' or 'poisson'
+    % -'observations': 'binomial' (default), 'normal', 'poisson' or
+    % 'neg-binomial'
     % - 'link': link function. Default is canonical link function ('logit'
-    % for binomal observation; 'identity' for normal observation; 'log' for
-    % Poisson observations). The other possible value is 'probit' for
-    % binomial observations
+    % for binomal observations; 'identity' for normal observations; 'log' for
+    % Poisson and neg-binomial observations). The other possible value is 'probit' for
+    % binomial observations.
     % -'w': is a weighting vector with length equal to the number of training examples
     % - 'split': add
     % - 'constant': whether a regressor of ones is included (to capture the
@@ -149,31 +150,30 @@ classdef gum
     %
 
     % TODO:
-    % - Matern prior
     % - verbose vs display
+  % - CV gradient for dispersion parameter (TEST)
+    % - CV gradient for parameterized basis functions
+    % - add "cov" and "basis" label to HP structure
+    % - merge select_weights (does not work) / find_weights?
+    % - plot_vif
+    % - freeze weights: TEST, add for subset of weights only
+    % - use linsolve instead of A \ B?
+    % - knock-out model
+    % - cat_regressor: add for basis and EM
+
+    % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
-    % - add: negative binomial (check nbreg.m)
     % - link functions as in glmfit
-    % - CV gradient for dispersion parameter (TEST)
-    % - CV gradient for parameterized basis functions
     % - crossvalidation compatibility with matlab native (done?)
-    % - add "cov" and "basis" label to HP structure
-    % - cat_regressor: add for basis and EM
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - add label on models (or just dataset label?)
-    % - merge select_weights (does not work) / find_weights?
     % - reset: weights for gum, clearing all scores and predictions
-    % - plot_vif
-    % - add number of (free) HPs to metrics
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
-    % - knock-out model
-    % - freeze weights: TEST, add for subset of weights only
     % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
-    % - use linsolve instead of A \ B?
 
     properties
         formula = ''
@@ -304,13 +304,16 @@ classdef gum
                 obs = strrep(obs, 'count','poisson');
                 obs = strrep(obs, 'binary','binomial');
                 obs = strrep(obs, 'gaussian','normal');
-                assert(any(strcmp(obs, {'normal','binomial','poisson'})), 'incorrect observation type: possible types are ''normal'',''binomial'' and ''poisson''');
+                obs = strrep(obs, 'NB',  'neg-binomial');
+                obs = strrep(obs, 'negative binomial',  'neg-binomial');
+                assert(any(strcmp(obs, {'normal','binomial','poisson','neg-binomial'})), ...
+                    'incorrect observation type: possible types are ''normal'',''binomial'', ''poisson'' and ''neg-binomial''');
             else
                 obs = 'binomial';
             end
             if strcmp(obs,'binomial') && any(T~=0 & T~=1)
                 error('for binomial observations, T values must be 0 or 1');
-            elseif strcmp(obs, 'poisson') && any(T<0)
+            elseif ismember(obs, {'poisson','neg-binomial'}) && any(T<0)
                 error('for count observations, all values must be non-negative');
             end
             if all(T==0) || all(T==1)
@@ -324,7 +327,7 @@ classdef gum
                     obj.link = 'identity';
                 case 'binomial'
                     obj.link = 'logit';
-                case 'poisson'
+                case {'poisson','neg-binomial'}
                     obj.link = 'log';
             end
 
@@ -375,7 +378,7 @@ classdef gum
             obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
             obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
             obj.score.scaling = 1;
-            if strcmp(obs, 'normal') % free dispersion parameter
+            if ismember(obs, {'normal','neg-binomial'}) % free dispersion parameter
                 obj.score.scaling = nan;
             end
 
@@ -1240,9 +1243,6 @@ classdef gum
                     end
                     validationscore(p) = validationscore(p)/ n_Validation; % normalize by number of observations
 
-
-
-
                     % compute gradient of score over hyperparameters
                     if do_grad_hyperparam
 
@@ -1253,14 +1253,18 @@ classdef gum
                             [~,~,grad_LLtrain] = LogLikelihood(obj_train); % gradient of LLH w.r.t. parameters in training set
 
                             Pr = [obj.regressor.Prior];
-                            if all(strcmp({Pr.type},'none'))
+                            if all(strcmp({Pr.type},'none')) && strcmp(obj.obs,'normal')
                                 % if no prior, we use degrees of freedom to obtained
                                 % unbiased mse
                                 norm_factor = score_train.df;
                             else % otherwise max likelihood
                                 norm_factor = score_train.nObservations;
                             end
-                            grad_dispersion = -2*s / norm_factor * grad_LLtrain; % grad. of dispersion parameter w.r.t weights
+                            if strcmp(obj.obs,'normal')
+                                grad_dispersion = -2*s / norm_factor * grad_LLtrain; % grad. of dispersion parameter w.r.t weights
+                            else
+                                error('not coded yet for neg-binomial');
+                            end
 
                             obj_v = obj_v.compute_r_squared;
                             score_test = obj_v.score;
@@ -1340,7 +1344,6 @@ classdef gum
                 PCov = PosteriorCov(obj); % posterior covariance computed from train data
                 grd = zeros(size(CovJacob,3),1);
                 s = obj.score.scaling; % dispersion parameter
-
 
                 for q=1:size(CovJacob,3) % for each hyperparameter
                     warning('looks like should be derivative for inverse of GHP here');
@@ -1605,7 +1608,6 @@ classdef gum
         function  obj = IRLS(obj)
 
             nM = obj.nMod; % number of modules
-            n = obj.nObs; % number of observations
             M = obj.regressor;
             nD = [M.nDim]; % number of dimension for each module
             D = max([M.nFreeDimensions]);
@@ -1619,13 +1621,9 @@ classdef gum
                 idxComponent = obj.mixture.idxComponent;
             end
 
-            %stepsize = 1; % should always stay 1 unless LLH decreases after some step(s)
-
-            % logprior = cell(1,nM);
             rank = zeros(1,nM);
             for m=1:nM
                 rank(m) = M(m).rank;
-                % logprior{m} = zeros(rank(m),nD(m));
             end
 
             % order of updates for each dimensions
@@ -1803,17 +1801,14 @@ classdef gum
                 % unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
 
                 % dispersion parameter from exponential family
-                FixedDispersion = ~strcmp(obj.obs, 'normal');
+                FixedDispersion = ~ismember(obj.obs, {'normal','neg-binomial'});
                 for cc=1:nC
                     pseudo_rho =  sum(weighted_fun(obj.T,cc)) / obj.score.nObservations; % mean value
+                    if strcmp(obj.obs, 'neg-binomial')
+pseudo_rho = log(pseudo_rho);
+                    end
                     [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion, pseudo_rho);
                 end
-                %if ~FixedDispersion
-                %    s = unbiased_mse(obj.T - ); % variance of centered data
-                %else
-                %   s = 1;
-                %end
-                %obj.score.scaling = s;
 
                 FullHessianUpdate = false(1,nC);
                 logFullHessianStep = 0; % determine size of full Hessian step (https://en.wikipedia.org/wiki/Backtracking_line_search)
@@ -1858,7 +1853,10 @@ classdef gum
                                     R = Y .* (1-Y) ; % derivative wr.t. predictor
                                 case 'log'
                                     Y = exp(this_rho); % rate
-                                    R = Y;
+                                    R = Y; % for Poisson observations
+                                    if strcmp(obj.obs,'neg-binomial')
+                                        R = R .* (1+s*obj.T) ./(1+s*Y).^2;
+                                    end
                                     R = min(R,1e10); % to avoid badly scaled hessian
                                 case 'identity'
                                     Y = this_rho;
@@ -1873,8 +1871,6 @@ classdef gum
                                     Ysgn(sgn==-1) = 1-Ysgn(sgn==-1);
                                     R = (norm_rho./Ysgn).^2 + sgn.*this_rho.*norm_rho./Ysgn;
                             end
-                                                   
-
 
                             % remove constant parts from projected activation
                             [rho_tilde, UconstU] = remove_constrained_from_predictor(M(idxC), this_d(idxC), this_rho, Phi, UU);
@@ -1888,8 +1884,8 @@ classdef gum
                                 G =  weighted_fun(err,cc);
                             end
 
-                               %  Rmat = spdiags(weighted_fun(R,cc), 0, n, n);
-                                                        R = weighted_fun(R,cc);
+                            %  Rmat = spdiags(weighted_fun(R,cc), 0, n, n);
+                            R = weighted_fun(R,cc);
 
                             if ~SpCode
                                 Psi = Phi*P{cc,d}';
@@ -1918,18 +1914,18 @@ classdef gum
                             if ~FullHessianUpdate(cc) %% update weights just along that dimension
 
                                 % Hessian matrix on the free basis (eq. 12)
-  if SpCode
-      PhiRPhi = (Phi'.*R)*Phi;
-                                if ~inf_cov %finite covariance matrix  
+                                if SpCode
+                                    PhiRPhi = Phi'*(R.*Phi);
+                                    if ~inf_cov %finite covariance matrix
                                         H = KP{cc,d}*PhiRPhi*P{cc,d}' + s*eye(nFree(cc,d)); % should be faster this way
-                                else % any infinite covariance matrix (e.g. no prior on a weight)
-                                      H = P{cc,d}*PhiRPhi*P{cc,d}' + s*precision{cc,d};
+                                    else % any infinite covariance matrix (e.g. no prior on a weight)
+                                        H = P{cc,d}*PhiRPhi*P{cc,d}' + s*precision{cc,d};
                                     end
 
-  else 
-      PsiRPsi = (Psi'.*R)*Psi;
+                                else
+                                    PsiRPsi = Psi'*(R.*Psi);
                                     if ~inf_cov %finite covariance matrix
-                                                                                H = Lambda{cc,d}*PsiRPsi  + s*eye(nFree(cc,d)); % Hessian matrix on the free basis (equation 12)
+                                        H = Lambda{cc,d}*PsiRPsi  + s*eye(nFree(cc,d)); % Hessian matrix on the free basis (equation 12)
                                     else
                                         H = PsiRPsi + s*precision{cc,d};
                                     end
@@ -2517,12 +2513,16 @@ classdef gum
                         n = normpdf(rho);
                         sgn = sign(obj.T-.5); % convert to -1/+1
 
-                         Ysgn = Y;
-                           Ysgn(sgn==-1) = 1-Ysgn(sgn==-1);
-                                 R = (n./Ysgn).^2 + sgn.*rho.*n./Ysgn;
+                        Ysgn = Y;
+                        Ysgn(sgn==-1) = 1-Ysgn(sgn==-1);
+                        R = (n./Ysgn).^2 + sgn.*rho.*n./Ysgn;
 
                     case 'log'
-                        R = Y;
+                        R = Y; % Poisson observation
+                        if strcmp(obj.obs,'neg-binomial')
+                            s = obj.score.scaling;
+                            R = R .* (1+s*obj.T) ./(1+s*Y).^2;
+                        end
                     case 'identity'
                         R = ones(obj.nObs,1);
                 end
@@ -2564,28 +2564,45 @@ classdef gum
 
             % weighting by observations weights
             if isempty(obj.ObservationWeight) && isempty(obj.mixture)
-                weighted_fun = @(x,cc) x;
+                w  = [];
             elseif nC ==1
-                weighted_fun = @(x,cc) x.*obj.ObservationWeight;
+                w = obj.ObservationWeight;
             elseif isempty(obj.ObservationWeight)
-                weighted_fun = @(x,cc) x.*obj.mixture.Posterior(:,cc);
+                w = obj.mixture.Posterior(:,cc);
                 warning('move down??');
             else
-                weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
+                w = obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
             end
 
-            err  = obj.T - rho(cc); % model error
 
-            P = [obj.regressor.Prior];
-            if all(strcmp({P.type},'none'))
-                % if no prior, we use degrees of freedom to obtained
-                % unbiased mse
-                norm_factor = obj.score.df;
-            else % otherwise max likelihood
-                norm_factor = obj.score.nObservations;
+            if strcmp(obj.obs,'neg-binomial')
+                % neg-binomial observations
+                Y = exp(rho(:,cc));
+                s(cc) = compute_dispersion_parameter_neg_binomial(obj.T, Y, w, s(cc));
+            else
+                %% gaussian observations
+
+                err  = obj.T - rho(:,cc); % model error
+
+                P = [obj.regressor.Prior];
+                if all(strcmp({P.type},'none'))
+                    % if no prior, we use degrees of freedom to obtained
+                    % unbiased mse
+                    norm_factor = obj.score.df;
+                else % otherwise max likelihood
+                    norm_factor = obj.score.nObservations;
+                end
+
+
+                % weighting by observations weights
+                if isempty(w)
+                    SSE = sum(err.^2);
+                else
+                    SSE = sum((x.*w).^2);
+                end
+
+                s(cc) =  SSE/norm_factor; %  update scaling parameter: unbiased mse
             end
-
-            s(cc) =  sum(weighted_fun(err.^2,cc))/norm_factor; %  update scaling parameter: unbiased mse
             obj.score.scaling = s;
         end
 
@@ -2618,6 +2635,10 @@ classdef gum
                     smp = Y > rand(obj.nObs,1); % generate from Bernouilli distribution
                 case {'poisson','count'}
                     smp = poissrnd(Y);
+                case 'neg-binomial'
+                    r =  1 / obj.score.scaling; % p parameter of NB is inverse of dispersion
+                    p = 1./(1 + obj.score.scaling*Y);
+                    smp = nbinrnd(r,p);
                 case 'normal'
                     smp = Y + sqrt(obj.score.scaling)*randn(obj.nObs,1); % generate from normal distribution
             end
@@ -2696,6 +2717,11 @@ classdef gum
                     lh = log(Y.*obj.T + (1-Y).*(1-obj.T));
                 case 'poisson'
                     lh = obj.T.*log(Y) - Y - gammaln(obj.T+1);
+                case 'neg-binomial'
+                    s =  obj.score.scaling;
+                    one_sY = 1+s*Y;
+                    r = 1/s;
+                    lh = obj.T.*log(s*Y./one_sY) - r*log(one_sY) + gammaln(obj.T+r) - gammaln(obj.T +1) - gammaln(r);
                 case 'normal'
                     if isfield(obj.score, 'scaling')
                         s = obj.score.scaling;
@@ -2773,7 +2799,7 @@ classdef gum
                     correct = obj.T==(Y>.5); % whether each observation is correct (using greedy policy)
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
 
-                case 'poisson' % poisson
+                case {'poisson','neg-binomial'} % poisson
                     correct = (obj.T==Y);
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
                 case 'normal'
@@ -4122,15 +4148,19 @@ end
 %% prediction error (to compute gradient of LLH w.r.t weights)
 function err = prediction_error(obj,Y, rho)
 
-if ~strcmp(obj.link,'probit')
-    % canonical link function, so this is truly the prediction error
-    err = obj.T-Y;
-else
-    % for probit regression
+if strcmp(obj.link,'probit')
+ % for probit regression
     T_signed = 2*obj.T-1; % map targets to -1/+1
     Y_signed = Y;
     Y_signed(T_signed==-1) = 1-Y_signed(T_signed==-1);
     err = T_signed .* normpdf(rho) ./ Y_signed; % see e.g. Rasmussen 3.16
+elseif strcmp(obj.obs, 'neg-binomial')
+    % NB regression
+    s = obj.score.scaling;
+    err = (obj.T-Y)./(1 + s*Y);
+else
+    % canonical link function, so this is truly the prediction error
+    err = obj.T-Y;   
 end
 
 end
