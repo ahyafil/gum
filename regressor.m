@@ -758,11 +758,11 @@ classdef regressor
                     'incorrect metric');
             end
             if nargin==1 || isequal(dims,0) % all weights
-               if strcmp(fild,'PriorMean')
-U = [obj.Prior];
-               else
-                U = [obj.Weights];
-               end
+                if strcmp(fild,'PriorMean')
+                    U = [obj.Prior];
+                else
+                    U = [obj.Weights];
+                end
                 U = {U.(fild)};
                 U = cellfun(@(x) x(:)', U,'unif',0);
                 U = [U{:}];
@@ -792,9 +792,9 @@ U = [obj.Prior];
                     idx = ii + (1:nR(m)*obj(m).rank); % index of regressors in output vector
 
                     if strcmp(fild,'PriorMean')
-                    thisU = obj(m).Prior(d).PriorMean;
+                        thisU = obj(m).Prior(d).PriorMean;
                     else
-                    thisU = obj(m).Weights(d).(fild);
+                        thisU = obj(m).Weights(d).(fild);
                     end
                     U(idx) = thisU(:);
 
@@ -1014,10 +1014,10 @@ U = [obj.Prior];
 
         %% FREEZE WEIGHTS
         function obj = freeze_weights(obj)
-        % R = R.freeze_weights;
+            % R = R.freeze_weights;
 
-        % if needed, initialize weights to default values
-        obj = obj.initialize_weights('normal');
+            % if needed, initialize weights to default values
+            obj = obj.initialize_weights('normal');
 
             for i=1:numel(obj)
                 for d=1:obj(i).nDim
@@ -1318,7 +1318,7 @@ U = [obj.Prior];
                     basis = [];
                 end
             elseif strcmp(basis,'none')
-                    basis = [];
+                basis = [];
             end
             obj.Weights(d).basis = basis;
 
@@ -1658,18 +1658,18 @@ U = [obj.Prior];
 
             %% initialize weights
             if init_weight
-               % for m=1:nM
-                    % if empty weight, pre-allocate
-                   % for d=1:obj(m).nDim
-                   %     W = obj(m).Weights(d);
-                   %     if isempty(W.PosteriorMean)
-                   %         obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank, sum(W.nWeight));
-                   %     end
-                   % end       
-               % end
+                % for m=1:nM
+                % if empty weight, pre-allocate
+                % for d=1:obj(m).nDim
+                %     W = obj(m).Weights(d);
+                %     if isempty(W.PosteriorMean)
+                %         obj(m).Weights(d).PosteriorMean = zeros(obj(m).rank, sum(W.nWeight));
+                %     end
+                % end
+                % end
 
                 % initialize weights to default value
-                    obj = obj.initialize_weights();
+                obj = obj.initialize_weights();
             end
 
             ii = 0; % index for regressors in design matrix
@@ -1897,17 +1897,24 @@ U = [obj.Prior];
                         % compute posterior covariance, standard error
                         % of weights in original domain
                         rk = obj(m).rank;
-                        W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
-                        W.PosteriorStd = zeros(rk, W.nWeight);
-                        for r=1:rk
-                            PCov  = B.B' * B.PosteriorCov(:,:,r) * B.B;
-                            W.PosteriorCov(:,:,r) = PCov;
-                            W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
-                        end
+                        if ~isempty(B.PosteriorCov)
+                            W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
+                            W.PosteriorStd = zeros(rk, W.nWeight);
+                            for r=1:rk
+                                PCov  = B.B' * B.PosteriorCov(:,:,r) * B.B;
+                                W.PosteriorCov(:,:,r) = PCov;
+                                W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
+                            end
 
-                        % compute T-statistic and p-value
-                        W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
-                        W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
+                            % compute T-statistic and p-value
+                            W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
+                            W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
+                        else
+                            W.PosteriorCov = [];
+                            W.PosteriorStd = [];
+                            W.T = [];
+                            W.p = [];
+                        end
 
                         % replace basis structure
                         B.projected = false;
@@ -2253,6 +2260,10 @@ U = [obj.Prior];
 
         %% INITIALIZE WEIGHTS
         function obj = initialize_weights(obj, obs)
+            if nargin<2
+                obs = 'binomial';
+            end
+
             % if more than one object, compute iteratively
             if length(obj)>1
                 for i=1:numel(obj)
@@ -2483,8 +2494,7 @@ U = [obj.Prior];
         end
 
         %% PROJECT REGRESSOR DIMENSION
-        function P = ProjectDimension(obj,r,d, do_squeeze, Uobs, to_double)
-            %  P = projdim(obj.Data, obj.U(r,:), obj.sparse, d, varargin{:});  % add activation for component r
+        function P = ProjectDimension(obj, r, d, do_squeeze, Uobs, to_double)
 
             if nargin<6 % by default, always convert output to double if sparse array
                 to_double = true;
@@ -2495,12 +2505,7 @@ U = [obj.Prior];
             for dd = setdiff(1:obj.nDim,d) % dimensions to be collapsed (over which tensor product must be computed)
                 VV{dd} = obj.Weights(dd).PosteriorMean(r,:);
             end
-            %   VV = obj.U(r,:);
-            %   for dd=d % dimensions over which we project (no tensor product over this one)
-            %       VV{dd} = [];
-            %   end
 
-            % spd = obj.sparse;
             if nargin<4 % by default, squeeze resulting matrix
                 do_squeeze = 1;
             end
@@ -2531,6 +2536,109 @@ U = [obj.Prior];
             if to_double && isa(P, 'sparsearray')
                 P = matrix(P);
             end
+        end
+
+
+        %% COMPUTE GRADIENT OF LLH W.R.T. BASIS FUNCTION HYPERPARAMETERS
+        function P = compute_gradient_LLH_wrt_basis_fun_hps(obj, err, gradLLH, dY_drho)
+
+            if gradLLH % directly gradient of LLH w.r.t HP
+                P =[];
+            else
+                P = {};
+                drho_dHP = zeros(obj(1).nObs,0); % derivative of rho w.r.t HP
+            end
+
+            for i=1:numel(obj)
+                for d=1:obj(i).nDim
+                    W = obj(i).Weights(d);
+                    B = W.basis;
+                    HPs = obj(i).HP(d);
+                    nHP = length(HPs.HP);
+
+                    if ~isempty(B) && ~iscell(B) && ~B.fixed % for basis functions parameterized by HP
+                        % !! should modify to also deal with concatenated regressors
+
+                        % compute gradient of basis fun w.r.t HP
+                        if isrow(B.scale)
+                            [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
+                        else
+                            % more rows in scale means we fit different
+                            % functions for each level of splitting
+                            % variable
+                            [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
+                            B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
+
+                            gradB = zeros(0,size(B.scale,2),nHP);
+                            for g=1:length(id_list)
+                                subset = split_id==g; % subset of weights for this level of splitting variable
+                                [this_B,~,~, this_gradB] = B.fun(B.scale(1,subset), HPs.HP, B.params);
+                                n_new = size(this_B,1);
+                                B.B(end+1 : end+n_new, subset) = this_B; %
+                                gradB(end+1 : end+n_new, subset,:) = this_gradB;
+                            end
+
+                        end
+
+                        % original data
+                        X = obj(i).DataOriginal;
+                        VV = cell(1,obj(i).nDim+1);
+                        VV{1} = err';
+                        for dd = setdiff(1:obj(i).nDim,d) % dimensions to be collapsed (over which tensor product must be computed)
+                            VV{dd+1} = obj(i).Weights(dd).PosteriorMean(r,:);
+                        end
+
+                        if gradLLH % multiply with weights (gradient of LLH)
+                            gradB = tensorprod(gradB, {W.PosteriorMean,[],[]});
+                            gradB = permute(gradB,[3 2 1]);
+
+                            VV{d+1} = gradB;
+                            this_P = tensorprod(X,VV);
+                            if isa(this_P, 'sparsearray')
+                                this_P = matrix(this_P);
+                            end
+                            P = [P this_P];
+                        else
+
+                            this_P = zeros(sum(W.nWeight),nHP);
+                            for h=1:nHP
+                                VV{d+1} = gradB(:,:,h);
+                                this_P(:,h) = tensorprod(X,VV);
+                            end
+                            P{end+1} = this_P;
+
+                            % to compute other part of the term
+                            WW = VV;
+                            WW{1} = []; % do not project over observations
+                            for h=1:nHP
+                                WW{d+1} = W.PosteriorMean*gradB(:,:,h);
+                                this_drho_dHP(:,h) = tensorprod(X,WW);
+                            end
+                            drho_dHP = [drho_dHP this_drho_dHP];
+                        end
+
+                    elseif gradLLH
+                        % no basis function for this set of weight, direct grad
+                        P = [P zeros(1,nHP)];
+                    else
+                        this_P = zeros(sum(W.nWeight),nHP);
+                        P{end+1} = this_P;
+
+                        drho_dHP = [drho_dHP zeros(obj(1).nObs,nHP)];
+                    end
+                end
+            end
+
+            if ~gradLLH
+                % part of the matrix linked with derivate of basis function
+                P = blkdiag(P{:});
+
+                % now add other part linked to derivative of prediction error
+                dY_dHP = dY_drho .*drho_dHP; % derivative of predicted value w.r.t HP
+                DM = design_matrix(obj);
+                P = P - DM'*dY_dHP;
+            end
+
 
         end
 
@@ -2551,13 +2659,14 @@ U = [obj.Prior];
 
             for i=1:numel(obj)
                 S = size(obj(i).Data);
-                %  obj.Data = reshape(obj.Data, S(1), prod(S(2:end))); % reshape as matrix to make subindex easier to call
                 obj(i).Data = obj(i).Data(subset,:);
                 n_Obs = size(obj(i).Data,1); % update number of observations
-                %    if issparse(obj.Data) && length(S)>2
-                %        obj.Data = sparsearray(obj.Data);
-                %    end
                 obj(i).Data = reshape(obj(i).Data, [n_Obs, S(2:end)]); % back to nd array
+                if ~isempty(obj(i).DataOriginal)
+                    S = size(obj(i).DataOriginal);
+                    obj(i).DataOriginal = obj(i).DataOriginal(subset,:);
+                    obj(i).DataOriginal = reshape(obj(i).DataOriginal, [n_Obs, S(2:end)]); % back to nd array
+                end
                 obj(i).nObs = n_Obs;
             end
         end
@@ -3353,9 +3462,9 @@ U = [obj.Prior];
             end
             obj(1).Data = cat(D+1, obj.Data); % concatenate all regressors
 
-         %   if D==nD && isempty(obj(1).Weights(D).constraint)
-         %       obj(1).Weights(D).constraint = "free";
-         %   end
+            %   if D==nD && isempty(obj(1).Weights(D).constraint)
+            %       obj(1).Weights(D).constraint = "free";
+            %   end
 
             %% deal with prior
             PP = obj(1).Prior(D);
@@ -3448,10 +3557,10 @@ U = [obj.Prior];
 
                 % convert first0 to first1 (assuming we're going this is a
                 % categorical regressor and we're going to multiply it)
-            for w = find( [S_ct.type]=="first0")               
+                for w = find( [S_ct.type]=="first0")
                     S_ct(w).u(:) = 1;
                     S_ct(w).constraint.type = "first1";
-            end
+                end
 
                 ctype = "mixed";
                 V = blkdiag(S_ct.V);
@@ -3630,16 +3739,16 @@ U = [obj.Prior];
                     end
 
                     % split concatenated structures
-                     [W, this_HP, P] = split_concatenated_weights_HP_prior(W, this_HP,P);
+                    [W, this_HP, P] = split_concatenated_weights_HP_prior(W, this_HP,P);
 
                     % plot weights
                     for s=1:length(W)
                         axes(h.Axes(i)); % set as active subplot
 
-                    [h_nu, c, cm] = plot_single_weights(W(s), P(s), this_HP(s).HP, obj(m).rank, c, cm, cols, colmaps);
+                        [h_nu, c, cm] = plot_single_weights(W(s), P(s), this_HP(s).HP, obj(m).rank, c, cm, cols, colmaps);
 
-                    h.Objects = [h.Objects {h_nu}];
-                    i = i+1; % update subplot counter
+                        h.Objects = [h.Objects {h_nu}];
+                        i = i+1; % update subplot counter
                     end
                 end
             end
@@ -4085,47 +4194,47 @@ end
 Sigma = cell(1,nSet);
 grad = cell(1,nSet);
 
-for s=1:nSet 
-    index_weight = iWeight(s)+1:iWeight(s+1); 
+for s=1:nSet
+    index_weight = iWeight(s)+1:iWeight(s+1);
     this_scale = W.scale(:, index_weight); % scale for this set of weights
     iHP = HP.index ==s; % hyperparameter for this set of weight
 
     CovFun = P.CovFun{s}; % corresponding prior covariance function
 
-if nargout>1 % need gradient
-    [Sigma{s}, gg]= CovFun(this_scale,HP.HP(iHP), W.basis{s});
+    if nargout>1 % need gradient
+        [Sigma{s}, gg]= CovFun(this_scale,HP.HP(iHP), W.basis{s});
 
-    % replicate covariance matrix if needed
-    [Sigma{s}, gg]= replicate_covariance(nRep, Sigma{s},gg);
-    if isstruct(gg)
-        gg = gg.grad;
+        % replicate covariance matrix if needed
+        [Sigma{s}, gg]= replicate_covariance(nRep, Sigma{s},gg);
+        if isstruct(gg)
+            gg = gg.grad;
+        end
+
+        % nHP = length(HP.HP); % number of hyperparameters
+        nHP = sum(iHP);% number of hyperparameters
+        if size(gg,3) ~= nHP
+            error('For component %d and rank %d, size of covariance matrix gradient along dimension 3 (%d) does not match corresponding number of hyperparameters (%d)',...
+                d,r, size(gg,3),nHP);
+        end
+
+        %% compute gradient now
+        grad{s} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
+        for l=1:nHP
+            freeW = ~constrained_weight(W); % exclude fixed weights
+            freeW = freeW(index_weight);
+            freeSigma = Sigma{s}(freeW,freeW);
+            grad{s}(freeW,freeW,l) = - (freeSigma \ gg(freeW,freeW,l)) / freeSigma;
+        end
+
+        % select gradient only for fittable HPs
+        HP_fittable = logical(HP.fit(iHP));
+        grad{s} = grad{s}(:,:,HP_fittable);
+    else
+        Sigma{s}= CovFun(this_scale, HP.HP(iHP), W.basis{s});
+
+        % replicate covariance matrix if needed
+        Sigma{s} = replicate_covariance(nRep, Sigma{s});
     end
-
-   % nHP = length(HP.HP); % number of hyperparameters
-    nHP = sum(iHP);% number of hyperparameters
-    if size(gg,3) ~= nHP
-        error('For component %d and rank %d, size of covariance matrix gradient along dimension 3 (%d) does not match corresponding number of hyperparameters (%d)',...
-            d,r, size(gg,3),nHP);
-    end
-
-    %% compute gradient now
-    grad{s} = zeros(size(gg)); % gradient of covariance w.r.t hyperparameters
-    for l=1:nHP
-        freeW = ~constrained_weight(W); % exclude fixed weights
-        freeW = freeW(index_weight);
-        freeSigma = Sigma{s}(freeW,freeW);
-        grad{s}(freeW,freeW,l) = - (freeSigma \ gg(freeW,freeW,l)) / freeSigma;
-    end
-
-    % select gradient only for fittable HPs
-    HP_fittable = logical(HP.fit(iHP));
-    grad{s} = grad{s}(:,:,HP_fittable);
-else
-    Sigma{s}= CovFun(this_scale, HP.HP(iHP), W.basis{s});
-
-    % replicate covariance matrix if needed
-    Sigma{s} = replicate_covariance(nRep, Sigma{s});
-end
 end
 
 % merge over sets of weights
@@ -4226,27 +4335,27 @@ end
 function [W, HP, P] = split_concatenated_weights_HP_prior(W, HP,P)
 if ~isscalar(W)
     % recursive call
-Wc = cell(size(W));
-HPc = cell(size(W));
-Pc = cell(size(W));
-for i=1:numel(W)
-[Wc{i}, HPc{i}, Pc{i}] = split_concatenated_weights_HP_prior(W(i), HP(i),P(i));
+    Wc = cell(size(W));
+    HPc = cell(size(W));
+    Pc = cell(size(W));
+    for i=1:numel(W)
+        [Wc{i}, HPc{i}, Pc{i}] = split_concatenated_weights_HP_prior(W(i), HP(i),P(i));
+    end
+    W = [Wc{:}];
+    HP = [HPc{:}];
+    P = [Pc{:}];
+
+    return;
+
 end
-W = [Wc{:}];
-HP = [HPc{:}];
-P = [Pc{:}];
 
-return;
-
+if isscalar(W.nWeight)
+    return;
 end
-
-  if isscalar(W.nWeight)
-        return;
-  end
 
 [W,iWeight] = split_concatenated_weights(W);
 
-    nSet = length(W);
+nSet = length(W);
 
 Pc = P; % copy values
 HPc = HP;
@@ -4258,9 +4367,9 @@ HP = repmat(HP,1,nSet);
 for i=1:nSet
     % prior structure
     P(i).CovFun = Pc.CovFun{i};
-             index_weight = iWeight(i)+1:iWeight(i+1); % indices of weights for this set
+    index_weight = iWeight(i)+1:iWeight(i+1); % indices of weights for this set
     P(i).PriorMean = Pc.PriorMean(:,index_weight);
-             P(i).PriorCovariance = Pc.PriorCovariance(index_weight,index_weight);
+    P(i).PriorCovariance = Pc.PriorCovariance(index_weight,index_weight);
 
 
     % HP structure
@@ -4277,32 +4386,32 @@ end
 
 %% split concatenated weight structure (for plotting)
 function [W,iWeight] = split_concatenated_weights(W)
-    if isscalar(W.nWeight)
-        return;
-    end
+if isscalar(W.nWeight)
+    return;
+end
 
-    nSet = length(W.nWeight);
-    Wc = W; % copy
-    W = repmat(W, 1, nSet);
+nSet = length(W.nWeight);
+Wc = W; % copy
+W = repmat(W, 1, nSet);
 
-    iWeight = cumsum([0 W.nWeight]);
+iWeight = cumsum([0 W.nWeight]);
 
-    for s=1:nSet
-         W(s).label = Wc.label{s};
-         W(s).nWeight = Wc.nWeight(s);
+for s=1:nSet
+    W(s).label = Wc.label{s};
+    W(s).nWeight = Wc.nWeight(s);
 
-         index_weight = iWeight(s)+1:iWeight(s+1); % indices of weights for this set
-         W(s).PosteriorMean = Wc.PosteriorMean(:,index_weight);
-         W(s).PosteriorStd = Wc.PosteriorStd(:,index_weight);
-         W(s).PosteriorCov = Wc.PosteriorCov(index_weight,index_weight,:);
-         W(s).T = Wc.T(:,index_weight);
-         W(s).p = Wc.p(:,index_weight);
-         W(s).scale = Wc.scale(:,index_weight);
-         dummy_scale_dim = all(isnan(W(s).scale),2); % dimensions for scale that are not used for this set
-         W(s).scale(dummy_scale_dim,:) = [];
-         W(s).basis = Wc.basis{s};
-         W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
-    end
+    index_weight = iWeight(s)+1:iWeight(s+1); % indices of weights for this set
+    W(s).PosteriorMean = Wc.PosteriorMean(:,index_weight);
+    W(s).PosteriorStd = Wc.PosteriorStd(:,index_weight);
+    W(s).PosteriorCov = Wc.PosteriorCov(index_weight,index_weight,:);
+    W(s).T = Wc.T(:,index_weight);
+    W(s).p = Wc.p(:,index_weight);
+    W(s).scale = Wc.scale(:,index_weight);
+    dummy_scale_dim = all(isnan(W(s).scale),2); % dimensions for scale that are not used for this set
+    W(s).scale(dummy_scale_dim,:) = [];
+    W(s).basis = Wc.basis{s};
+    W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
+end
 end
 
 %% converts to cell if not already a cell

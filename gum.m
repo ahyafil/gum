@@ -25,7 +25,6 @@ classdef gum
     % - 'constant': whether a regressor of ones is included (to capture the
     % intercept). Possible values: 'on' [default], 'off'
     %
-    %
     % - 'mixture': for mixture of GUMs: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
     % (e.g. 'hmm3' for 3-state HMM). The value can also be a user-defined mixture model (defined with mixturemodel). Other fields may be provided:
     % - 'indexComponent': to which component each regressor object is assigned to. If not provided, all regressors are duplicated
@@ -150,22 +149,22 @@ classdef gum
     %
 
     % TODO:
-    % - verbose vs display
-  % - CV gradient for dispersion parameter (TEST)
-    % - CV gradient for parameterized basis functions
-    % - add "cov" and "basis" label to HP structure
-    % - merge select_weights (does not work) / find_weights?
-    % - plot_vif
-    % - freeze weights: TEST, add for subset of weights only
-    % - use linsolve instead of A \ B?
-    % - knock-out model
-    % - cat_regressor: add for basis and EM
+    % - 1. verbose vs display
+    % - 4. add "cov" and "basis" label to HP structure
+    % - 5. merge select_weights (does not work) / find_weights?
+    % - 6. plot_vif
+    % - 7. freeze weights: TEST, add for subset of weights only
+    % - 8. use linsolve instead of A \ B?
+    % - 9. knock-out model
+    % - 10. cat_regressor: add for basis and EM
+    % - 11. check complex lag formula, i.e x1+lag(x2+x3)
 
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
     % - link functions as in glmfit
+    % - test rank again
     % - crossvalidation compatibility with matlab native (done?)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
@@ -596,7 +595,7 @@ classdef gum
             if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'rho') && ~isempty(obj.Predictions.rho)
                 obj.Predictions.rho = obj.Predictions.rho(subset);
             end
-            if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'Expected') && ~isempty(obj.Predictions.rho)
+            if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'Expected') && ~isempty(obj.Predictions.Expected)
                 obj.Predictions.Expected = obj.Predictions.Expected(subset);
             end
             if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'sample') && ~isempty(obj.Predictions.rho)
@@ -1227,64 +1226,70 @@ classdef gum
                     s = score_train.scaling; % dispersion parameter
 
                     %compute score on testing set (mean log-likelihood per observation)
-                    obj_v = extract_observations(obj,validationset); % model with validat
-                    obj_v.regressor = set_weights(obj_v.regressor, obj_train.regressor); % set weights computed from training data
-                    obj_v.Predictions.rho = [];
-                    obj_v.score.scaling = s; % dispersion parameter estimated in training set
+                    obj_test = extract_observations(obj,validationset); % model with test set
+                    obj_test.regressor = set_weights(obj_test.regressor, obj_train.regressor); % set weights computed from training data
+                    obj_test.Predictions.rho = [];
+                    obj_test.score.scaling = s; % dispersion parameter estimated in training set
 
-                    [obj_v,validationscore(p),grad_validationscore] = LogLikelihood(obj_v); % evaluate LLH, gradient of LLH
-                    accuracy(p) = Accuracy(obj_v); % and accuracy
+                    [obj_test,validationscore(p),grad_validationscore] = LogLikelihood(obj_test); % evaluate LLH, gradient of LLH
+                    accuracy(p) = Accuracy(obj_test); % and accuracy
 
-                    if isempty(obj.ObservationWeight)
-                        n_Validation = length(validationset);
-                    else
-                        n_Validation = sum(obj.ObservationWeight(validationset));
+                    nValidation = obj_test.score.nObservations; % number of observations in test set
 
-                    end
-                    validationscore(p) = validationscore(p)/ n_Validation; % normalize by number of observations
+                    validationscore(p) = validationscore(p)/ nValidation; % normalize by number of observations
 
                     % compute gradient of score over hyperparameters
                     if do_grad_hyperparam
 
                         % add contribution of free dispersion parameter to
                         % gradient of CVLL w.r.t weights
-                        free_dispersion = strcmp(obj.obs, 'normal');
+                        free_dispersion = ismember(obj.obs, {'normal','neg-binomial'});
+
+                        PPP = PP;
+
+                        dY_drho = inverse_link_function(obj_train,obj_train.Predictions.rho, 1); % derivative of inverse link
+
                         if free_dispersion
-                            [~,~,grad_LLtrain] = LogLikelihood(obj_train); % gradient of LLH w.r.t. parameters in training set
+                            PPP(end+1,end+1) = 1;
 
-                            Pr = [obj.regressor.Prior];
-                            if all(strcmp({Pr.type},'none')) && strcmp(obj.obs,'normal')
-                                % if no prior, we use degrees of freedom to obtained
-                                % unbiased mse
-                                norm_factor = score_train.df;
-                            else % otherwise max likelihood
-                                norm_factor = score_train.nObservations;
-                            end
-                            if strcmp(obj.obs,'normal')
-                                grad_dispersion = -2*s / norm_factor * grad_LLtrain; % grad. of dispersion parameter w.r.t weights
-                            else
-                                error('not coded yet for neg-binomial');
-                            end
+                            % add derivative of test data LLH w.r.t.
+                            % dispersion parameter
+                            obj_test = obj_test.compute_r_squared;
+                            grad_validationscore(end+1) = -nValidation/2/s + obj_test.score.SSE/2/s^2;
 
-                            obj_v = obj_v.compute_r_squared;
-                            score_test = obj_v.score;
-                            dLLtest_dDispersion = -score_test.nObservations/2/s + score_test.SSE/2/s^2; % derivative of LLtest w.r.t dispersion param
-
-                            grad_LLtest_disp = dLLtest_dDispersion * grad_dispersion; % grad of LLtest wr.t. weights due to free dispersion param
-
-                            grad_validationscore = grad_validationscore + grad_LLtest_disp;
+                            %  log-joint derived w.r.t to dispersion param and basis function hyperparameters
+                            gradgrad_dispersion = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, dY_drho.*prediction_error(obj_train), 1)/s^2;
 
                         end
 
-                        grad_validationscore = grad_validationscore / n_Validation; % gradient w.r.t each weight
+                        grad_validationscore = grad_validationscore / nValidation; % gradient w.r.t each weight
 
-                        PCov = PosteriorCov(obj_train); % posterior covariance computed from train data
+                        % posterior covariance computed from train data (include dispersion parameter if free)
+                        PCov = PosteriorCov(obj_train, free_dispersion);
+
+                        % compute LLH derived w.r.t to U (free basis) and basis fun hyperparameters
+                        err_train = prediction_error(obj_train); % training model prediction error
+                        gradgrad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, err_train,0, dY_drho)/s;
+
                         this_gradhp = zeros(1,size(CovJacob,3));
                         for q=1:size(CovJacob,3) % for each hyperparameter
-                            gradgrad = PP*CovJacob(:,:,q)'*allU'; % LLH derived w.r.t to U (free basis) and hyperparameter
-                            gradU = - PP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
-                            this_gradhp(q) = grad_validationscore * gradU/s; % derivate of score w.r.t hyperparameter
+                            gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+                            gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
+
+                            if free_dispersion % add log-joint derived w.r.t to dispersion param and hyperparameters (null for cov HPs)
+                                gradgrad(end+1,:) = gradgrad_dispersion(:,q);
+                            end
+
+                            gradU = - PPP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
+
+                            this_gradhp(q) = grad_validationscore * gradU; % derivate of score w.r.t hyperparameter
                         end
+
+                        % add direct contribution of basis function
+                        % hyperparameters
+                        this_grad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_test.regressor, prediction_error(obj_test), 1)/s;
+                        this_gradhp = this_gradhp + this_grad_basisfun_hp/ nValidation;
+
                         grad_hp(:,p) = this_gradhp;
                     end
 
@@ -1805,7 +1810,7 @@ classdef gum
                 for cc=1:nC
                     pseudo_rho =  sum(weighted_fun(obj.T,cc)) / obj.score.nObservations; % mean value
                     if strcmp(obj.obs, 'neg-binomial')
-pseudo_rho = log(pseudo_rho);
+                        pseudo_rho = log(pseudo_rho);
                     end
                     [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion, pseudo_rho);
                 end
@@ -2298,6 +2303,10 @@ pseudo_rho = log(pseudo_rho);
             % [obj,rho] = Predictor(obj)
             %
             %Predictor(obj, cc) only for component cc (for mixture models)
+
+            assert(obj.is_weight_set,'model weights are not defined/set/estimated');
+
+
             if isempty(obj.mixture)
                 nC = 1;
                 idxComponent = ones(1,obj.nMod);
@@ -2463,23 +2472,45 @@ pseudo_rho = log(pseudo_rho);
         end
 
         %% LINK FUNCTION
-        function f = inverse_link_function(obj,rho)
+        function f = inverse_link_function(obj,rho,isDerivative)
             % f = inverse_link_function(M) returns handle to inverse link
             % function.
             % a = inverse_link_function(M, rho) returns values of inverse
             % link function evaluated at points rho
-            switch obj.link
-                case 'identity'
-                    f = @(x) x;
-                case 'logit'
-                    f = @(x) 1./(1+exp(-x));
-                case 'log'
-                    f = @exp;
-                case 'probit'
-                    f = @normcdf;
+            %
+            %  a = inverse_link_function(M, rho, 1) returns the derivative
+            %  of the inverse link w.r.t rho instead
+
+            if nargin<3 || ~isDerivative
+                switch obj.link
+                    case 'identity'
+                        f = @(x) x;
+                    case 'logit'
+                        f = @(x) 1./(1+exp(-x));
+                    case 'log'
+                        f = @exp;
+                    case 'probit'
+                        f = @normcdf;
+                end
+            else
+                % return derivative instead
+                switch obj.link
+                    case 'identity'
+                        f = @(x) ones(size(x));
+                    case 'logit'
+                        f = @(x) exp(-x)./(1+exp(-x)).^2;
+                    case 'log'
+                        f = @exp;
+                        assert(~strcmp(obj.obs, 'neg-binomial'), 'need to adapt the formula to prediction error for NB');
+
+                    case 'probit'
+                        f = @normpdf;
+                        error( 'need to adapt the formula to prediction error for probit');
+                end
+
             end
 
-            if nargin>1 % evaluate at data points
+            if nargin>1 && ~isempty(rho) % evaluate at data points
                 f = f(rho);
             end
         end
@@ -2683,7 +2714,7 @@ pseudo_rho = log(pseudo_rho);
         end
 
         %% COMPUTE LOG-LIKELIHOOD
-        function  [obj,LLH, gd] = LogLikelihood(obj,fit_mixture_weights)
+        function  [obj,LLH, grad] = LogLikelihood(obj,fit_mixture_weights)
             %  M = LogLikelihood(M) computes the LogLikelihood of the model
             %
             %  [M,LLH] = LogLikelihood(M)
@@ -2698,6 +2729,7 @@ pseudo_rho = log(pseudo_rho);
             if isempty(obj.Predictions.rho)
                 obj = Predictor(obj);
             end
+            s = obj.score.scaling;
 
             % compute log-likelihood
             switch obj.link
@@ -2709,7 +2741,6 @@ pseudo_rho = log(pseudo_rho);
                     Y = obj.Predictions.rho;
                 case 'probit'
                     Y = normcdf(obj.Predictions.rho);
-
             end
 
             switch obj.obs
@@ -2718,16 +2749,18 @@ pseudo_rho = log(pseudo_rho);
                 case 'poisson'
                     lh = obj.T.*log(Y) - Y - gammaln(obj.T+1);
                 case 'neg-binomial'
+                    % from Generalized Linear Models and Extensions, by
+                    % Hardin & Hilbe
                     s =  obj.score.scaling;
                     one_sY = 1+s*Y;
-                    r = 1/s;
+                    r = 1/s; % r-parameter is inverse of dispersion
                     lh = obj.T.*log(s*Y./one_sY) - r*log(one_sY) + gammaln(obj.T+r) - gammaln(obj.T +1) - gammaln(r);
                 case 'normal'
-                    if isfield(obj.score, 'scaling')
-                        s = obj.score.scaling;
-                    else
-                        s = var(Y);
-                    end
+                    %  if isfield(obj.score, 'scaling')
+                    %      s = obj.score.scaling;
+                    %  else
+                    %      s = var(Y);
+                    %  end
                     lh = - (Y-obj.T).^2./(2*s) - log(2*pi*s)/2;
 
             end
@@ -2753,37 +2786,18 @@ pseudo_rho = log(pseudo_rho);
             end
             obj.score.LogLikelihood = LLH;
 
-
             % compute gradient of LLH w.r.t weights
             if nargout>2 %
 
                 % prediction error: difference between target and predictor
-                %  err = (obj.T-Y)';
+                % (different for non-canonical link funcion)
                 err = prediction_error(obj,Y, obj.Predictions.rho)';
                 if ~isempty(obj.ObservationWeight)
                     err = obj.ObservationWeight' .* err;
                 end
 
-                M = obj.regressor;
-
-                % full design matrix
-                Phi = design_matrix(M,[], 0,false);
-                gd = err * Phi;
-
-                %                gd = [];
-                %                 for m=1:obj.nMod % for each module
-                %
-                %                     for d=1:M(m).nDim % for each dimension
-                %                         for r=1:M(m).rank
-                %                             Phi =  ProjectDimension(M(m),r,d);
-                %                             if sum(M(m).Weights(d).nWeight)==1 % correct a bug in ProjectDimension that outputs row vector instead of column
-                %                                 Phi = Phi';
-                %                             end
-                %                             this_gd = err*Phi; % gradient of LLH w.r.t each weight in U{r,d}
-                %                             gd = [gd this_gd];
-                %                         end
-                %                     end
-                %                 end
+                Phi = design_matrix(obj.regressor,[], 0,false);                 % full design matrix
+                grad = err * Phi / s;
             end
         end
 
@@ -2795,16 +2809,13 @@ pseudo_rho = log(pseudo_rho);
             Y = obj.Predictions.Expected;
             switch obj.obs
                 case 'binomial'
-
                     correct = obj.T==(Y>.5); % whether each observation is correct (using greedy policy)
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
-
                 case {'poisson','neg-binomial'} % poisson
                     correct = (obj.T==Y);
                     accuracy = weighted_mean(correct, obj.ObservationWeight); % proportion of correctly classified
                 case 'normal'
                     accuracy = nan;
-
             end
         end
 
@@ -2865,18 +2876,18 @@ pseudo_rho = log(pseudo_rho);
 
             logjoint =  obj.score.LogLikelihood + obj.score.LogPrior;
             obj.score.LogJoint = logjoint;
-
         end
 
 
-        %% COMPUTE HESSIAN OF NEG LOG-LIKELIHOOD (IN UNCONSTRAINED SPACE)
+        %% COMPUTE HESSIAN OF NEG LOG-LIKELIHOOD (IN UNCONSTRAINED SPACE) - NOT NORMALIZED BY DISPERSION PARAMETER
         function [H,P] = Hessian(obj, c_fpd)
             %  H = Hessian(obj) computes the Hessian of the negative
             %  Log-Likelihood in unconstrained space of weights
             %
-            %[H,P] = Hessian(obj)
+            % [H,P] = Hessian(obj)
             % P is the project matrix from full parameter space to free
             % parameter space (over all set of regressors)
+            
             M = obj.regressor;
             n = obj.nObs;
             full_idx = [0 cumsum([M.nParameters])]; % position for full parameter in each dimension
@@ -2946,12 +2957,18 @@ pseudo_rho = log(pseudo_rho);
         end
 
         %% COMPUTE POSTERIOR COVARIANCE
-        function [V, B, invHinvK] = PosteriorCov(obj)
+        function [V, B, invHinvK] = PosteriorCov(obj, withScaling)
             % V = PosteriorCov(M) computes the posterior covariance in free basis for
             % model M
 
+            if nargin<2
+                withScaling = 0;
+            end
+
             % compute Hessian of likelihood
             [H,P] = Hessian(obj);
+                        s = obj.score.scaling;
+            H = H/s; % re-scale with dispersion parameter
 
             %% compute covariance prior
             M = obj.regressor;
@@ -2994,7 +3011,7 @@ pseudo_rho = log(pseudo_rho);
             %B = eye(free_idx(end)) + sqW*Kfree*sqW; % formula to computed marginalized evidence (eq 3.32 from Rasmussen & Williams 2006)
             nFreeParameters = sum(cellfun(@(x) sum(x(:)), {M.nFreeParameters}));%nFreeParameters = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
             %   nFreeParameters = sum([M.nFreeParameters]);
-            B = Kfree*H / obj.score.scaling + eye(nFreeParameters); % formula to compute marginalized evidence
+            B = Kfree*H + eye(nFreeParameters); % formula to compute marginalized evidence
 
             %       Wsqrt = sqrtm(full(H)); % matrix square root
             %   B = Wsqrt*Kfree*Wsqrt / obj.score.scaling + eye(nFreeParameters); % Rasmussen 3.26
@@ -3005,12 +3022,24 @@ pseudo_rho = log(pseudo_rho);
 
 
             % compute posterior covariance
-            if inf_terms || all([M.nFreeDimensions]<2)
+            if inf_terms || all([M.nFreeDimensions]<2) || withScaling
 
                 % use this if no prior on some variable, or if non convex
-                % likelihood
+                % likelihood, or if includes scaling parameter
+
+                HH = H + inv(Kfree);
+
+                % extend matrix to include dispersion parameter
+                if withScaling
+                    obj = obj.compute_r_squared;
+                    d2logjoint_ds2 = obj.score.nObservations/2/s^2 - obj.score.SSE/s^3; % second derivate of log-joint w.r.t dispersion
+                    d2logjoint_ds_dU = - prediction_error(obj)' * obj.regressor.design_matrix * P' / s^2; % second derivate of LJ w.r.t dispersion and free weights
+
+                    HH = [HH -d2logjoint_ds_dU'; -d2logjoint_ds_dU -d2logjoint_ds2]; % add to Hessian matrix
+                end
+
                 wrn = warning('off', 'MATLAB:singularMatrix');
-                V = inv(H/obj.score.scaling + inv(Kfree));
+                V = inv(HH);
                 warning(wrn.state, 'MATLAB:singularMatrix');
             else
                 V = B\Kfree; %inv(W + inv(Kfree));
@@ -3077,16 +3106,25 @@ pseudo_rho = log(pseudo_rho);
 
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
         function [obj,I] = set_weights_and_hyperparameters_from_model(obj, varargin)
+            % M = M.set_weights_and_hyperparameters_from_model(M2);
+            % sets weights and hyperparameters of model M at values of model
+            % M2 (for regressors shared between the two models)
             [obj.regressor,I] = set_weights_and_hyperparameters_from_model(obj.regressor, varargin{:});
         end
 
         %% SET HYPERPARAMETERS FROM ANOTHER MODEL
         function [obj,I] = set_hyperparameters_from_model(obj, varargin)
+            % M = M.set_hyperparameters_from_model(M2);
+            % sets  hyperparameters of model M at values of model
+            % M2 (for regressors shared between the two models)
             [obj.regressor,I] = set_hyperparameters_from_model(obj.regressor, varargin{:});
         end
 
         %% SET WEIGHTS FROM ANOTHER MODEL
         function [obj,I] = set_weights_from_model(obj, varargin)
+            % M = M.set_weights_from_model(M2);
+            % sets weights of model M at values of model
+            % M2 (for regressors shared between the two models)
             [obj.regressor,I] = set_weights_from_model(obj.regressor, varargin{:});
         end
 
@@ -3095,8 +3133,6 @@ pseudo_rho = log(pseudo_rho);
             % U = concatenate_weights(M)
             % concatenates all weights from model M into a single vector
             U = concatenate_weights(obj.regressor);
-            % U = [obj.regressor.U];
-            % U = [U{:}];
         end
 
         %% CONCATENATE WEIGHTS OVER POPULATION
@@ -4148,8 +4184,15 @@ end
 %% prediction error (to compute gradient of LLH w.r.t weights)
 function err = prediction_error(obj,Y, rho)
 
+if nargin<2
+    Y = obj.Predictions.Expected;
+end
+if nargin<3
+    rho = obj.Predictions.rho;
+end
+
 if strcmp(obj.link,'probit')
- % for probit regression
+    % for probit regression
     T_signed = 2*obj.T-1; % map targets to -1/+1
     Y_signed = Y;
     Y_signed(T_signed==-1) = 1-Y_signed(T_signed==-1);
@@ -4160,7 +4203,7 @@ elseif strcmp(obj.obs, 'neg-binomial')
     err = (obj.T-Y)./(1 + s*Y);
 else
     % canonical link function, so this is truly the prediction error
-    err = obj.T-Y;   
+    err = obj.T-Y;
 end
 
 end
@@ -4933,22 +4976,23 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         % make sure there's no lag operator within this bracket
         if ~isempty(LagStruct)
             LSini = cellfun(@(x) x.ini,LagStruct);
-            i_lag = find(LSini>OpenBracketPos(iBracket) & LSini<=OpenBracketPos(iBracket),1);
-            process_lag = ~isempty(i_lag);
+            iLag = find(LSini>OpenBracketPos(iBracket) & LSini<=OpenBracketPos(iBracket),1);
+            process_lag = ~isempty(iLag);
         else
             process_lag = false;
         end
 
     else % if there's no more brackets to process, then we're left with processing lags
         process_lag = true;
-        i_lag =1; % start with first lag operator
+        iLag =1; % start with first lag operator
     end
 
     if process_lag
         %process lag
-        LS = LagStruct{i_lag};
+        LS = LagStruct{iLag};
         idx = LS.ini+1 : LS.end; % indices of regressors into the bracket
-        iBracket = i_lag;
+        iBracket = iLag;
+        iReg = iLag; % not sure at all about this line
     else
         % process brackets
         idx = OpenBracketPos(iBracket)+1:CloseBracketPos(iBracket)+1; % indices of regressors into the bracket
