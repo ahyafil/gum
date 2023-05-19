@@ -77,9 +77,11 @@ classdef sparsearray
                 %sparsearray(X)
                 if issparse(varargin{1})
                     obj.value = varargin{1}(:);
-                else
+                elseif nnz(varargin{1})<.1*numel(varargin{1}) % make value sparse if needed
                     [I,J,V] = find(varargin{1}(:)); % find indices and values
                     obj.value = sparse(I,J,V, numel(varargin{1}),1);
+                else
+                    obj.value = varargin{1}(:);
                 end
                 obj.siz = size(varargin{1});
             end
@@ -197,9 +199,9 @@ classdef sparsearray
             obj = fullcoding(obj);
 
             obj.siz = S;
-            if ~issparse(obj.value) || length(S)<=2
-                obj.value = reshape(obj.value,S);
-            end
+            % if ~issparse(obj.value) || length(S)<=2
+            %     obj.value = reshape(obj.value,S);
+            % end
 
         end
 
@@ -367,6 +369,7 @@ classdef sparsearray
                 error('not a subindex coding dimension');
             end
 
+            obj.value = sparse(obj.value);
 
             [Ind,~,V] = find(obj.value(:)); % indices and values of non-zero values
 
@@ -376,11 +379,9 @@ classdef sparsearray
 
             Sub = cell(1,length(NonSubDims));
             [Sub{:}] = ind2sub(sz, Ind); % indices of values for non-subindex coding position
-            %  SubOld = Sub;
             NSD = NonSubDims;
 
             for dd=d
-                %  SubSub = SubOld;
                 SubSub = Sub;
                 for f = 1:length(NSD)
                     if size(obj.sub{dd},NSD(f)) ==1 % if subindex matrix is singleton along this dim
@@ -403,15 +404,8 @@ classdef sparsearray
                 Sub{end+1} = NewSub;
                 sz(end+1) = size(obj,dd);
 
-                %  fct = prod(sz(NonSubDims<dd));
-                %  Ind = Ind + (NewSub-1)*fct;
-
                 obj.sub{dd} = [];
                 NSD(end+1) = dd;
-                %  NonSubDims = sort([NonSubDims dd]); % add to list of non sub-index dimensions
-                %  sz = size(obj);
-                %  sz  = sz(NonSubDims);
-
             end
 
             [NonSubDims,ord] = sort([NonSubDims d]);
@@ -483,12 +477,16 @@ classdef sparsearray
                     end
                     ind = ind + sb;
                 end
-
+                
                 obj.value = obj.value(ind);
                 obj.value = reshape(obj.value,prod(new_sz),1);
 
             else
+                sz = obj.siz;
+                sz(subcoding(obj)) = 1;
+                obj.value = reshape(obj.value, sz);
                 obj.value = repmat(obj.value,varargin{:});
+                obj.value = obj.value(:);
             end
 
             for d=find(subcoding(obj))
@@ -612,10 +610,13 @@ classdef sparsearray
 
                     s1 = s(1);
 
-                    if ~issparse(obj.value) || length(s1.subs)==1 % obj(ind1:ind3) or obj(:)
+                    if ~issparse(obj.value) || isscalar(s1.subs) % syntax: obj(ind1:ind3) or obj(:)
                         if any(subcoding(obj))
                             obj= fullcoding(obj);
-                            % error('not coded yet');
+                        end
+
+                        if ~isscalar(s1.subs)
+                            obj.value = reshape(obj.value, size(obj));
                         end
 
                         % return column vector
@@ -688,7 +689,8 @@ classdef sparsearray
 
                             [ind,nsub] = get_indices(obj.siz, s1.subs);
 
-                            %  inz = find(obj.value);
+                            %!!! correct bug here: will not work if there
+                            %are still one-hot-encoding dimensions!
 
                             % extract value
                             b = obj.value(ind);
@@ -1241,123 +1243,125 @@ end
 function obj = oper(strfun,obj1,obj2, fullcode)
 fun = eval(['@' strfun]);
 
+% process the easy cases first
 if  isscalar(obj2) % between sparse array and scalar
     x = fun(allvalues(obj1),obj2);
     S = size(obj1);
 
     obj = sparsearray(x);
     obj = reshape(obj,S);
+    return;
 elseif isscalar(obj1) % between scalar and sparse array
     x = fun(allvalues(obj2),obj1);
     S = size(obj2);
 
     obj = sparsearray(x);
     obj = reshape(obj,S);
-else % between one sparse array and another (possibly sparse) array
+    return;
+end
 
-    % convert both to sparse arrays
-    obj1 = sparsearray(obj1);
-    obj2 = sparsearray(obj2);
+% now prpcess the hard case: operation between one sparse array and another (possibly sparse) array
 
-    if fullcode % some operations cannot work with subindex coding
-        obj1 = fullcoding(obj1);
-        obj2 = fullcoding(obj2);
-    end
+% convert both to sparse arrays
+obj1 = sparsearray(obj1);
+obj2 = sparsearray(obj2);
 
-    % size of both objects
-    S1 = size(obj1);
-    S2 = size(obj2);
-    S1(end+1:length(S2)) = 1; % pad with ones if required so that they have same length
-    S2(end+1:length(S1)) = 1;
-    if ~all(S1==S2 | S1==1 | S2==1)
-        error('dimensions do not match');
-    end
+if fullcode % some operations cannot work with subindex coding
+    obj1 = fullcoding(obj1);
+    obj2 = fullcoding(obj2);
+end
 
-    %% replicate matrices along singleton dimensions to match size
-    % D = max(ndims(obj1),ndims(obj2)); % number of dimensions
-    D = length(S1); % number of dimensions
-    R1 = ones(1,D); % replication number per dimension (default:1), for each object
-    R2 = ones(1,D);
+% size of both objects
+S1 = size(obj1);
+S2 = size(obj2);
+S1(end+1:length(S2)) = 1; % pad with ones if required so that they have same length
+S2(end+1:length(S1)) = 1;
+if ~all(S1==S2 | S1==1 | S2==1)
+    error('dimensions do not match');
+end
 
-    fc = false(1,D); % dimensions with subindex coding
-    sb = cell(1,D);
+%% replicate matrices along singleton dimensions to match size
+% D = max(ndims(obj1),ndims(obj2)); % number of dimensions
+D = length(S1); % number of dimensions
+R1 = ones(1,D); % replication number per dimension (default:1), for each object
+R2 = ones(1,D);
 
-    for d=1:D
-        if S1(d)==1 && S2(d)>1 % if obj1 is singleton is this dimension and obj2 is not
-            % obj1 needs to be replicated
-            if ~subcoding(obj2,d)
-                R1(d) = S2(d);
-            else % unless there is subindex coding
-                fc(d) = true;
-                sb{d} = obj2.sub{d};
-                %  else % singleton coding in that dimension
-                %      obj1.sub{d} = 1;
-                %      obj1.siz(d) = S2(d);
-            end
-        end
-        if S2(d)==1 && S1(d)>1
-            if ~subcoding(obj1,d)
-                R2(d) = S1(d);
-            else
-                fc(d) = true;
-                sb{d} = obj1.sub{d};
-                %     obj2.sub{d} = 1; % singleton coding in that dimension
-                %    obj2.siz(d) = S1(d);
-            end
-        end
-        % cannot use subindex coding if the other array is not singleton
-        % along that dimension
-        if S1(d)>1 && S2(d)>1
-            if  subcoding(obj1,d)
-                obj1 = fullcoding(obj1,d);
-            end
-            if  subcoding(obj2,d)
-                obj2 = fullcoding(obj2,d);
-            end
+fc = false(1,D); % dimensions with subindex coding
+sb = cell(1,D);
+
+for d=1:D
+    if S1(d)==1 && S2(d)>1 % if obj1 is singleton is this dimension and obj2 is not
+        % obj1 needs to be replicated
+        if ~subcoding(obj2,d)
+            R1(d) = S2(d);
+        else % unless there is subindex coding
+            fc(d) = true;
+            sb{d} = obj2.sub{d};
+            %  else % singleton coding in that dimension
+            %      obj1.sub{d} = 1;
+            %      obj1.siz(d) = S2(d);
         end
     end
-
-    S = max(S1,S2); % size of the output array
-    Snonsub = S;
-    Snonsub(fc) = 1;
-
-    if isequal(fun, @times) && all(obj1.value(:)==1)
-        % if pairwise multiplication and obj1 is pure one-hot encoding, values are simply inherited from obj2
-        x = obj2.value;
-
-    elseif isequal(fun, @times) && all(obj2.value==1)
-        % if pairwise multiplication and obj2 is pure one-hot encoding,
-        % values are simply inherited from obj1
-        x = obj1.value;
-
-    else
-        % first replicate each object with required dimensions
-
-        % dim_R1 = S1==1 & S2>1;
-        % R1(dim_R1) = S2(dim_R1);
-        obj1 = repmat(obj1, R1);
-
-        %  dim_R2 = S2==1 & S1>1;
-        %  R2(dim_R2) = S1(dim_R2);
-        obj2 = repmat(obj2, R2);
-
-        %S = size(obj1);
-        x = fun(obj1.value, obj2.value);
-        % x = fun(allvalues(obj1),allvalues(obj2));
+    if S2(d)==1 && S1(d)>1
+        if ~subcoding(obj1,d)
+            R2(d) = S1(d);
+        else
+            fc(d) = true;
+            sb{d} = obj1.sub{d};
+            %     obj2.sub{d} = 1; % singleton coding in that dimension
+            %    obj2.siz(d) = S1(d);
+        end
     end
+    % cannot use subindex coding if the other array is not singleton
+    % along that dimension
+    if S1(d)>1 && S2(d)>1
+        if  subcoding(obj1,d)
+            obj1 = fullcoding(obj1,d);
+        end
+        if  subcoding(obj2,d)
+            obj2 = fullcoding(obj2,d);
+        end
+    end
+end
 
-    obj = sparsearray(x);
-    obj = reshape(obj,Snonsub);
+S = max(S1,S2); % size of the output array
+Snonsub = S;
+Snonsub(fc) = 1;
 
-    %% add subindex coding
-    obj.sub = sb;
-    obj.siz = S;
+if isequal(fun, @times) && all(obj1.value(:)==1)
+    % if pairwise multiplication and obj1 is pure one-hot encoding, values are simply inherited from obj2
+    x = obj2.value;
+
+elseif isequal(fun, @times) && all(obj2.value(:)==1)
+    % if pairwise multiplication and obj2 is pure one-hot encoding,
+    % values are simply inherited from obj1
+    x = obj1.value;
+
+else
+    % first replicate each object with required dimensions
+
+    % dim_R1 = S1==1 & S2>1;
+    % R1(dim_R1) = S2(dim_R1);
+    obj1 = repmat(obj1, R1);
+
+    %  dim_R2 = S2==1 & S1>1;
+    %  R2(dim_R2) = S1(dim_R2);
+    obj2 = repmat(obj2, R2);
+
+    %S = size(obj1);
+    x = fun(obj1.value, obj2.value);
+    % x = fun(allvalues(obj1),allvalues(obj2));
+end
+
+obj = sparsearray(x);
+obj = reshape(obj,Snonsub);
+
+%% add subindex coding
+obj.sub = sb;
+obj.siz = S;
 
 end
 
-
-
-end
 
 %% % tensor production for array
 function [X,S] = tprod(X,U,S)

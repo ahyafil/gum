@@ -4,8 +4,10 @@ function       [M,c] = force_definite_positive(M, c)
 % M = force_definite_positive(M, c) ensures that all eigenvalues are larger
 % or equal to c (default: c=1e3*eps)
 
+assert(isreal(M),'matrix should be real');
+
 if nargin<2 || isempty(c)
-    
+
     % it seems that we need to scale c with eigenvalues to make sure we really end up with definite positive matrix
     mean_eig = trace(M)/size(M,1); % mean eigenvalue (sum of eig is equal to trace)
     factor = max(mean_eig, 1e3); % can't be too small either
@@ -34,11 +36,11 @@ while isNPD % if some eigenvalue is negative
     if c==0
         isNPD = 0;
     else
-    [~,isNPD] = chol(M); % make sure that it did work (it may not, still for numerical reasons... not really sure why)
-    if isNPD % otherwise, repeat again with larger c
-        c = 10*c;
-    
-    end
+        [~,isNPD] = chol(M); % make sure that it did work (it may not, still for numerical reasons... not really sure why)
+        if isNPD % otherwise, repeat again with larger c
+            c = 10*c;
+
+        end
     end
 end
 end
