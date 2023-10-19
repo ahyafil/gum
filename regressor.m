@@ -1823,19 +1823,26 @@ classdef regressor
 
             for m=1:numel(obj)
                 for d=dims{m}
-                    subplot2(nSub,iSub);
                     W = obj(m).Weights(d);
-                    HPs = obj(m).HP;
+                    HPs = obj(m).HP(d);
                     [B,scale_basis] = compute_basis_functions(W.basis, W.scale, HPs);
-                    Bmat = B;
                     % [Bmat,scale_basis] = compute_basis_functions(obj(m),d);
 
-                    h{iSub} =  plot(obj(m).Weights(d).scale, Bmat);
+                    scale_basis(2,:) = []; % if concatenated regressors                  
                     if isnumeric(scale_basis)
+                                                is_real_basis = ~isnan(scale_basis);
                         scale_basis = num2strcell(scale_basis);
+                    else
+                        is_real_basis = true(1,length(scale_basis));
                     end
+                     Bmat = B(1).B(is_real_basis,:);
+
+
+                    subplot2(nSub,iSub);
+                    h{iSub} =  plot(obj(m).Weights(d).scale(1,:), Bmat);
+                    
                     box off;
-                    legend(scale_basis);
+                    legend(scale_basis(1,is_real_basis));
                     axis tight;
                     title(obj(m).Weights(d).label);
                     iSub = iSub+1;
