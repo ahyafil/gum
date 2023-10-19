@@ -1,21 +1,24 @@
-function S = HPstruct_ard(nReg,d, HP, HPfit)
+function H = HPstruct_ard(nReg,d, HP, HPfit)
 %S = HPstruct_ard(nReg,d, HP, HPfit)
 % HP structure for ARD regularization
 
-S = HPstruct();
+H = HPstruct();
 
 % value of hyperparameter
 if nargin>1
-    S.HP = HPwithdefault(HP, zeros(1,nReg)); % default value if not specified
+    H.HP = HPwithdefault(HP, zeros(1,nReg)); % default value if not specified
 else
-    S.HP = zeros(1,nReg);
+    H.HP = zeros(1,nReg);
 end
-    S.label = "log \lambda" +d+"_"+ (1:nReg);  % HP labels
+    H.label = "log \lambda" +d+"_"+ (1:nReg);  % HP labels
 if nargin>3
-    S.fit = HPfit; % if HP is fittable
+    H.fit = HPfit; % if HP is fittable
 else
-    S.fit = true(1,nReg);
+    H.fit = true(1,nReg);
 end
-S.LB = -max_log_var*ones(1,nReg); % lower bound: to avoid exp(HP) = 0
-S.UB = max_log_var*ones(1,nReg);  % upper bound: to avoid exp(HP) = Inf
+H.LB = -max_log_var*ones(1,nReg); % lower bound: to avoid exp(HP) = 0
+H.UB = max_log_var*ones(1,nReg);  % upper bound: to avoid exp(HP) = Inf
+
+H.type = repmat("cov",1,nReg);
+
 end

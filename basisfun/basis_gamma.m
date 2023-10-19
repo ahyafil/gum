@@ -3,6 +3,7 @@ function [B, scale, params, gradB] = basis_gamma(X,HP, params)
 % [B, scale, params, gradB] = basis_gamma(X,HP, params)
 
 nFun = params.nFunctions;
+assert(length(HP)==2*nFun, 'incorrect number of hyperparameters');
 theta = HP(1:nFun); % scale parameter
 k = HP(nFun+1:2*nFun); % shape parameter
 X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)

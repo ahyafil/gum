@@ -1,6 +1,6 @@
-function [B,scale,params] = fourier_basis(X, HP, params)
+function [B,scale,params, gradB] = fourier_basis(X, HP, params)
 % builds FFT transformation matrix concatenating for multiple processes
-%  B = fourier_basis(X, HP, params);
+%  B = fourier_basis(X, [], params);
 %
 % [B,scale]= fourier_basis(...)
 %
@@ -42,3 +42,7 @@ X = X - min(X); % start at 0
 scale = scale'; % row vector
 params.Tcirc = Tcirc;
 params.nFreq = nFreq;
+
+if nargout>3
+gradB = zeros([size(B) length(HP)]); % gradient is null as HP only used to define frequency cutoff
+end

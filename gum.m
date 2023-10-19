@@ -146,19 +146,8 @@ classdef gum
     % - 'plot_basis_functions': plot regressor basis functions
     %
     % version 0.0. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
-    %
 
-    % TODO:
-    % - 1. verbose vs display
-    % - 4. add "cov" and "basis" label to HP structure
-    % - 5. merge select_weights (does not work) / find_weights?
-    % - 6. plot_vif
-    % - 7. freeze weights: TEST, add for subset of weights only
-    % - 8. use linsolve instead of A \ B?
-    % - 9. knock-out model
-    % - 10. cat_regressor: add for basis and EM
-    % - 11. check complex lag formula, i.e x1+lag(x2+x3)
-
+    % TODO
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
@@ -354,7 +343,7 @@ classdef gum
                 clear GCov;
 
                 % create regressor
-                Mconst = regressor(ones(n,1),'linear','label','offset', 'prior',const_prior_type);
+                Mconst = regressor(ones(n,1),'linear','label',"offset", 'prior',const_prior_type);
 
                 M = [M,Mconst]; %structcat(M, Mconst); % append this component
                 nMod = nMod +1;
@@ -418,8 +407,6 @@ classdef gum
             if isfield(param, 'split')
                 obj = split(obj, param.split);
             end
-
-
         end
 
         %%% DISPLAY GUM OBJECT
@@ -661,13 +648,13 @@ classdef gum
             %     * a cell array of size nperm x 2, where the elements in the first column indicate
             % observations in the training sets, second column indicate observations in the test
             % sets, and rows indicate permutation
+            %
             % - 'gradient' (for crossvalidation fitting): whether to use gradients of CVLL to speed up search.
             % Gradients computation may suffer numerical estimation problems if
             % covariance are singular or close to singular. Possible values are: 'off'
             % [default], 'on' and 'check' (uses gradient but checks first that
             % numerical estimate is correct)
             %
-            % - 'display':'on','off'
             % - 'crossvalidation': a scalar defining the number of folds
             % (default:5), a cvpartition object or a cell array with two
             % columns and a number of rows defining the number of folds,
@@ -679,13 +666,16 @@ classdef gum
             % - 'maxiter_HP': integer, defining the maximum number of iterations for
             % hyperparameter optimization (default: 200)
             % - 'TolFun': tolerance criterion for stopping optimization
+            % - 'verbose':
+            % display information for optimzation. Possible
+            % values: 'full','on' [default for 'em'],'off','iter'[default for other methods]
             % - 'no_fitting': if true, does not fit parameters, simply provide as output variable a structure with LLH and
             % accuracy for given set of parameters (values must be provided in field
             % 'U')
 
             % default values
             HPfit = 'em'; % default algorithm
-            display = 'iter'; % default verbosity
+            verbose = 'iter'; % default verbosity
             use_gradient = 'on'; % use gradient for CV fitting
             maxiter = 200; % maximum number of iterations
             HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
@@ -722,14 +712,22 @@ classdef gum
             else
                 obj.param.verbose = 'on';
             end
-            if isfield(param, 'display')
-                display = obj.param.display;
+            if isfield(param, 'verbose')
+                verbose = obj.param.verbose;
+            elseif isfield(param, 'display')
+                verbose = obj.param.display;
             end
+
 
             %%  check fitting method
             if isfield(param, 'HPfit') % if specified as parameter
                 HPfit = param.HPfit;
                 assert(ischar(HPfit) && any(strcmpi(HPfit, {'em','cv','basic'})), 'incorrect value for field ''HPfit''');
+            end
+            if strcmp(verbose,'full') && ~strcmp(HPfit,'em')
+                warning('''full'' is not an option for ''verbose'' for ''%s'' method, changing to ''iter''', HPfit);
+                verbose = 'iter';
+                obj.param.verbose = 'iter';
             end
 
             if isfield(param, 'gradient')
@@ -754,6 +752,9 @@ classdef gum
             HP_LB = [HPall.LB]; % HP lower bounds
             HP_UB = [HPall.UB]; % HP upper bounds
             HP_fittable = logical([HPall.fit]);  % which HP are fitted
+            if strcmpi(HPfit,'em') &&  any(contains([HPall.type],'basis') & HP_fittable) % if  any fittable HP parametrizes basis functions
+                warning('Log-likelihood will usually not increase at every iteration of EM when fitting hyperparameters controlling basis functions. Take results with caution and consider using crossvalidation instead.');
+            end
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
@@ -800,7 +801,7 @@ classdef gum
 
                     % run gradient descent on negative marginal evidence
                     errorscorefun = @(HP) gum_neg_marg(obj, HP, HPidx);
-                    optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'display',display,'MaxIterations',maxiter);
+                    optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'display',verbose,'MaxIterations',maxiter);
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
                     %% run estimation again with the optimized hyperparameters to retrieve weights
@@ -822,7 +823,7 @@ classdef gum
                     % run gradient descent
                     errorscorefun = @(P) cv_score(obj, P, HPidx, 0);
                     optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
-                        'CheckGradients',check_grad,'display',display,'MaxIterations',maxiter);
+                        'CheckGradients',check_grad,'display',verbose,'MaxIterations',maxiter);
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
                     %% run estimation again with the optimized hyperparameters to retrieve weights
@@ -858,11 +859,9 @@ classdef gum
             param_tmp = obj.param;
 
             obj.param = prm;
-
+            vbs = prm.verbose;
 
             objective_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
-            check_grad = strcmpi(use_gradient,'check'); % whether to use gradient
-
 
             while keepIterating % EM iteration
                 %% E-step (running inference with current hyperparameters)
@@ -875,6 +874,8 @@ classdef gum
                 % obj.regressor = compute_prior_covariance(M);
                 obj.regressor = compute_prior_covariance(obj.regressor);
 
+                check_grad = strcmpi(use_gradient,'check') && iter==0; % whether to use gradient (only at first iteration)
+
 
                 % make sure that all weigths have real-valued priors (not infinite)
                 if iter==0
@@ -884,7 +885,19 @@ classdef gum
                         %% instead we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
                     end
 
-                    fprintf('Initial weight inference (%d starting points):', prm.initialpoints);
+                    if ~strcmp(vbs,'off')
+                        fprintf('Initial weight inference (%d starting points):', prm.initialpoints);
+                    end
+                    switch vbs
+                        case 'full'
+                            prm.verbose = 'on';
+                        case 'on'
+                            prm.verbose = 'little';
+                        otherwise
+
+                            prm.verbose = 'off';
+                    end
+                elseif strcmp(vbs, 'full')
                     prm.verbose = 'little';
                 else
                     prm.verbose = 'off';
@@ -934,36 +947,41 @@ classdef gum
                                     this_P = PP{m}{r,d};
                                     this_Prior = obj.regressor(m).Prior(r,d);
                                     this_PriorMean = this_Prior.PriorMean;
-                                    if iscell(this_Prior.CovFun)
-                                        error('not coded yet for regressor with basis functions concatenated with another regressor');
-                                    elseif ~isa(this_Prior.CovFun, 'function_handle') % function handle
+                                    if  ~isa(this_Prior.CovFun, 'function_handle') && ~iscell(this_Prior.CovFun) % function handle
                                         error('hyperparameters with no function');
                                     end
 
                                     B = W.basis; % here we're still in projected mode
+                                    non_fixed_basis = any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]); % if  any fittable HP parametrizes basis functions
 
                                     if ~isempty(B)
                                         if iscell(B)
                                             error('not coded yet for regressor with basis functions concatenated with another regressor');
                                         end
-                                        if ~B.fixed
+
+                                        if  non_fixed_basis %  if basis functions parametrized by fittable HP
                                             % working in original
                                             % space (otherwise working
                                             % in projected space)
-                                            this_mean = this_mean*B.B;
-                                            this_PriorMean = this_PriorMean*B.B;
-                                            this_cov = B.B' * this_cov *B.B;
-
-                                            assert(W.constraint=="free", 'EM not coded for non-free basis');
+                                            Bmat = B(1).B;
+                                            this_mean = this_mean*Bmat;
+                                            this_PriorMean = this_PriorMean*Bmat;
+                                            this_cov = Bmat' * this_cov *Bmat;
+                                            assert(W.constraint=="free", 'EM not coded for basis functions with constraint');
 
                                         end
                                         this_P = eye(length(this_cov));
-
                                     end
                                     this_cov = force_definite_positive(this_cov);
 
-                                    [~, gg] = this_Prior.CovFun(this_scale, HPs.HP, B);
-                                    if isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && (isempty(B)||B.fixed) % function provided to optimize hyperparameters
+                                    if ~iscell(this_Prior.CovFun)
+                                        iHP = contains(HPs.type, "cov"); % covariance hyperparameters
+                                        [~, gg] = this_Prior.CovFun(this_scale, HPs.HP(iHP), B);
+                                        withOptimizer = isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && ~non_fixed_basis;
+                                    else
+                                        withOptimizer = false;
+                                    end
+                                    if  withOptimizer % function provided to optimize hyperparameters
                                         %  work on this to also take into account constraints (marginalize in the free base domain)
 
                                         HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
@@ -1008,7 +1026,9 @@ classdef gum
                 % has converged if improvement in LLH is smaller than epsilon
                 iter = iter + 1; % update iteration counter;
                 LogEvidence = obj.score.LogEvidence;
-                fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
+                if ~strcmp(vbs,'off')
+                    fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
+                end
                 % HP
                 converged = abs(old_logjoint-LogEvidence)<HP_TolFun;
                 old_logjoint = LogEvidence;
@@ -1130,15 +1150,16 @@ classdef gum
                 fprintf('Evaluating prior covariance matrix...');
             end
             M = compute_prior_covariance(M, false);
+            M = M.check_prior_covariance();
             if verbose
                 fprintf('done\n');
             end
 
-            %% compute prior mean and covariance and initialize weight
-            M = M.check_prior_covariance();
+            %% compute prior mean and initialize weight
             M = M.compute_prior_mean();
             M = M.initialize_weights(obj.obs);
             obj.regressor = M;
+            obj = obj.compute_n_parameters_df;
 
             singular_warn = warning('off','MATLAB:nearlySingularMatrix');
 
@@ -1296,7 +1317,6 @@ classdef gum
                     if verbose
                         fprintf('done\n');
                     end
-
                 end
 
                 M = set_weights(M,U_CV,[],'U_CV'); % add MAP weights for each CV set to weight structure
@@ -1335,12 +1355,12 @@ classdef gum
                 Sfit.accuracy = Accuracy(obj); % and accuracy
 
                 % explained variance
-
-                if isempty(obj.ObservationWeight)
-                    nWeightedObs = obj.nObs;
-                else
-                    nWeightedObs = sum(obj.ObservationWeight);
-                end
+                nWeightedObs = obj.score.nObservation;
+                % if isempty(obj.ObservationWeight)
+                %     nWeightedObs = obj.nObs;
+                % else
+                %     nWeightedObs = sum(obj.ObservationWeight);
+                % end
                 Sfit.validationscore = validationscore/ nWeightedObs; % normalize by number of observations
                 grad_validationscore = grad_validationscore / nWeightedObs; % gradient w.r.t each weight
 
@@ -1398,7 +1418,7 @@ classdef gum
 
                 for d=1:M(m).nDim
                     W = M(m).Weights(d);
-                    nW = sum(W.nWeight);
+                    nW = W.nWeight;
                     W.PosteriorStd = zeros(M(m).rank, nW);
                     W.T = zeros(M(m).rank,nW);
                     W.p = zeros(M(m).rank, nW);
@@ -1434,15 +1454,11 @@ classdef gum
 
             % number of free parameters
             nFreePar = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
-
-            %  nFreePar = [M.nFreeParameters]; %cellfun(@(x) sum(x(:)), M);% number of free parameters for each component
-            %  nFreePar = sum(nFreePar);
             obj.score.nFreeParameters = nFreePar;
 
             % model evidence using Laplace approximation (Bishop - eq 4.137)  -
             % requires that a prior has been defined - Eq 16
             LD = logdet(B);
-            %S.LogEvidence = S.LogLikelihood + nfreepar/2*log(2*pi) - logdet/2;
             Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;
 
             PP = projection_matrix(M);
@@ -1451,12 +1467,16 @@ classdef gum
                     for r=1:M(m).rank % assign new set of weight to each component
                         dif =  (M(m).Weights(d).PosteriorMean(r,:) - M(m).Prior(r,d).PriorMean)*PP{m}{r,d}'; % distance from prior mean (projected)
                         this_cov = PP{m}{r,d} * M(m).Prior(r,d).PriorCovariance * PP{m}{r,d}'; % corresponding covariance prior
-                        % logdet = 2*sum(log(diag(chol(PP{m}{d}*this_cov*PP{m}{d}')))); % log-determinant of prior covariance (fast reliable way)
-                        % S.LogEvidence = S.LogEvidence -  (dif/this_cov)*dif'/2  - logdet/2 -M(m).nfreepar(1,d)/2*log(2*pi); % log-prior for this weight
                         inf_var = isinf(diag(this_cov)); % do not include weights with infinite prior variance
                         if any(~inf_var)
                             dif = dif(~inf_var);
-                            Sfit.LogEvidence = Sfit.LogEvidence -  (dif/this_cov(~inf_var,~inf_var))*dif'/2; % log-prior for this weight
+                            if sum(inf_var)<100 || ~issparse(dif) % faster
+                                MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
+                                CovDif = linsolve(full(this_cov(~inf_var,~inf_var)),full(dif)',MatOptions);
+                            else
+                                CovDif = this_cov(~inf_var,~inf_var) \ dif';
+                            end
+                            Sfit.LogEvidence = Sfit.LogEvidence - dif*CovDif/2; % log-prior for this weight
                         end
                     end
                 end
@@ -1505,7 +1525,7 @@ classdef gum
             % - 'alpha': Significance level for confidence interval, scalar between 0 and 1 (default: 0.05).
             % Computes the 100*(1-Alpha) bootstrap confidence interval of each weight.
             % - 'type': confidence interval type, can be set to 'per' (percentile method, default) or 'norm' (fits normal posterior)
-            % -'verbose': if Value (boolean) is set to true (default),
+            % -'verbose': 'on' or 'off',
             % an '*' on the command line indicates every new bootstrap completed.
             %
             % [M, bootsam] = M.boostrapping(nBootstrap) provide the bootstrap sample indices,
@@ -1516,7 +1536,7 @@ classdef gum
             % See also bootci, bootstrp
             assert(isscalar(nBootstrap) && nBootstrap>0, 'nBootstrap should be a positive scalar');
 
-            verbose = true;
+            verbose = 'on';
             alpha = 0.05;
             type = 'per';
 
@@ -1697,7 +1717,7 @@ classdef gum
                 nFree(d) = size(P{cc,d},1); % number of free parameters for this set of weight
                 this_d = UpdOrder(:,d)'; %min(d,nDim); % over which dimension we work for each model
                 for m=1:nM
-                    size_mod(m,d) = sum([M(m).Weights(this_d(m)).nWeight]);
+                    size_mod(m,d) = [M(m).Weights(this_d(m)).nWeight];
                     nReg(d) = nReg(d) + rank(m)*size_mod(m,d); % add number of regressors for this module
                 end
 
@@ -1752,11 +1772,10 @@ classdef gum
                 nFree_all = size(Kall,1);
             end
 
-
             %% repeat algorithn with each set of initial points
             for ip=1:initialpoints
 
-                if initialpoints>1 && strcmp(obj.param.verbose, 'on')
+                if initialpoints>1 && any(strcmp(obj.param.verbose, {'on','full'}))
                     fprintf('Fitting weights, starting point %d/%d\n',ip, initialpoints);
                     %  elseif initialpoints>1 && strcmp(obj.param.verbose,'little')
                     %      fprintf('*');
@@ -1802,8 +1821,6 @@ classdef gum
                 else
                     weighted_fun = @(x,cc) x.*obj.ObservationWeight .*obj.mixture.Posterior(:,cc);
                 end
-                % weighted_sum = @(x,cc) sum(weighted_fun(x,cc));
-                % unbiased_mse = @(x,cc) weighted_sum(x.^2,cc)/obj.score.df; % unbiased mean squared error
 
                 % dispersion parameter from exponential family
                 FixedDispersion = ~ismember(obj.obs, {'normal','neg-binomial'});
@@ -1844,10 +1861,8 @@ classdef gum
                                         this_rho = log(obj.T+.25);
                                     case {'logit','probit'}
                                         this_rho = log((obj.T+.5)./(1.5-obj.T));
-                                        %  case 'normal'
-                                        %      obj.Predictions.rho = obj.T/2;
                                 end
-                            elseif d==1 || ~FullHessianUpdate(c)
+                            elseif d==1 || ~FullHessianUpdate(cc)
                                 this_rho = Phi*UU'; % predictor
                             end
                             obj.Predictions.rho(:,cc) = this_rho;
@@ -1937,7 +1952,8 @@ classdef gum
                                 end
 
                                 % new set of weights eq.12 (projected back to full basis)
-                                xi = (H\B)' * P{cc,d};
+                                MatOptions = struct('POSDEF',inf_cov,'SYM',inf_cov); % is positive definite, symmetric only in one definition
+                                xi = linsolve(H,B,MatOptions)' * P{cc,d};
 
                                 %  while strcmp(obs,'poisson') && any(Phi*(Unu+[repelem(U_const(1:rank),m(d)) zeros(1,m(D+1))])'>500) % avoid jump in parameters that lead to Inf predicted rate
 
@@ -1953,21 +1969,10 @@ classdef gum
                                 % compute log-joint
                                 interim_logjoint = logjoint;
                                 [obj,logjoint] = LogJoint(obj,logprior, true);
-                                %if logjoint<interim_logjoint-1e-6
-                                %      2; % debug
-                                %  end
-
-
-                                %% end check
-
 
                                 % step halving if required (see glm2: Fitting Generalized Linear Models
                                 %    with Convergence Problems - Ian Marschner)
                                 obj.Predictions.rho(:,cc) = Phi*(xi'+UconstU);
-                                %  while LogJoint(rho, T, w, obs,prior_score)<old_logjoint %% avoid jumps that decrease the log-joint
-                                %      Unu = (UU+Unu)/2;  %reduce step by half
-                                %      rho = Phi*(Unu'+UconstU);
-                                %  end
                                 while iter<4 && strcmp(obj.link,'log') && any(abs(obj.Predictions.rho(:,cc))>500) % avoid jump in parameters that lead to Inf predicted rate
                                     xi = (UU+xi)/2;  %reduce step by half
                                     obj.Predictions.rho(:,cc) = Phi*(xi'+UconstU);
@@ -2037,13 +2042,13 @@ classdef gum
                             if ~inf_cov %finite covariance matrix
                                 B = B + Kall*(Hess*(Pall*UU'));
                                 H = Kall* Hess + s*eye(nFree_all(cc)); % K * Hessian matrix on the free basis
-
                             else % any infinite covariance matrix (e.g. no prior on a weight)
                                 B = B + Hess*(Pall*UU');
                                 H = Hess + s*precision_all; % Hessian matrix on the free basis
                             end
 
-                            xi = (H\B)' * Pall; % new set of weights (projected back to full basis)
+                            MatOptions = struct('POSDEF',inf_cov,'SYM',inf_cov); % is positive definite, symmetric only in one definition
+                            xi = linsolve(H,B,MatOptions)' * Pall; % new set of weights (projected back to full basis)
 
                             Unoconst = UU-UconstU;
                             if logFullHessianStep~=0
@@ -2052,9 +2057,8 @@ classdef gum
                                 xi = Unoconst + exp(logFullHessianStep)*(xi-Unoconst);
                             end
 
-                            compute_logjoint = -1;
-
                             % check that we did improve log-joint
+                            compute_logjoint = -1;
                             while compute_logjoint ~=0
 
                                 if compute_logjoint>0 % first loop: do not enter
@@ -2082,7 +2086,7 @@ classdef gum
                                 obj.regressor(idxC) = M(idxC);
                                 obj = Predictor(obj); % compute rho
 
-                                [obj,s] = compute_dispersion_parameter(obj, c, FixedDispersion);
+                                [obj,s] = compute_dispersion_parameter(obj, cc, FixedDispersion);
                                 [obj,logprior] = LogPrior(obj); % compute log-prior
                                 [obj,logjoint] = LogJoint(obj,[],true);
 
@@ -2090,7 +2094,6 @@ classdef gum
 
                                 % change thresholds for switching to full
                                 % hessian update to make it less likely
-                                %thr_FHU = .5 + thr_FHU/2; % twice as close to 1
                                 if c_fpd>0
                                     c_fpd = 10*c_fpd; % increase chances that Hessian will really be def positive
                                 else
@@ -2168,13 +2171,11 @@ classdef gum
 
                         % move to full hessian update if there are signs that
                         % has fallen into convex region of parameter space
-                        if ~FullHessianUpdate(c) && ...
+                        if ~FullHessianUpdate(cc) && ...
                                 cos_successive_updates(iter)>thr_FHU(1) && consistency>thr_FHU(2) && consistency<thr_FHU(3)
-
-
-                            FullHessianUpdate(c) = true;
+                            FullHessianUpdate(cc) = true;
                         end
-                        FHU(c,iter) = FullHessianUpdate(c);
+                        FHU(cc,iter) = FullHessianUpdate(cc);
                     end
 
                     if strcmp(obj.param.verbose, 'on')
@@ -2209,18 +2210,10 @@ classdef gum
 
                 extflg = (logjoint>old_logjoint-tolfun_negiter) && (logjoint - old_logjoint < TolFun); %)
                 extflg = simple_linear_regression || extflg;
-                %exitflag = (LLH>=oldLLH-1e-10) && abs(LLH-oldLLH<param.TolFun);
-                % if stepsize<1
-                %    2;
-                % end
                 if  ~extflg
-
-                    % warning('gum:notconverged', 'Failed to converge');
                     if iter>maxiter
                         extflg = -2; % maximum number of iterations
                         msg = '\nreached maximum number of iterations (%d), log-joint:%f\n';
-                        % elseif LLH<oldLLH
-                        %     exitflag = -3; % LLH lower than previous step
                     elseif diverged
                         extflg = -3;
                         msg = '\n incorrect step after %d iterations, log-joint:%f\n';
@@ -2232,7 +2225,7 @@ classdef gum
                     msg = '\nconverged after %d iterations, log-joint:%f\n';
                 end
                 switch obj.param.verbose
-                    case 'on'
+                    case {'on','full'}
                         fprintf(msg, iter-1, logjoint);
                     case 'little'
                         fprintf(DisplayChar(ip));
@@ -2349,7 +2342,7 @@ classdef gum
             nReg = 0;
 
             for m=1:obj.nMod
-                nReg = nReg + M(m).rank* sum(M(m).Weights(D(m)).nWeight); % add number of regressors for this module
+                nReg = nReg + M(m).rank* M(m).Weights(D(m)).nWeight; % add number of regressors for this module
             end
         end
 
@@ -2624,7 +2617,6 @@ classdef gum
                     norm_factor = obj.score.nObservations;
                 end
 
-
                 % weighting by observations weights
                 if isempty(w)
                     SSE = sum(err.^2);
@@ -2887,7 +2879,7 @@ classdef gum
             % [H,P] = Hessian(obj)
             % P is the project matrix from full parameter space to free
             % parameter space (over all set of regressors)
-            
+
             M = obj.regressor;
             n = obj.nObs;
             full_idx = [0 cumsum([M.nParameters])]; % position for full parameter in each dimension
@@ -2967,7 +2959,7 @@ classdef gum
 
             % compute Hessian of likelihood
             [H,P] = Hessian(obj);
-                        s = obj.score.scaling;
+            s = obj.score.scaling;
             H = H/s; % re-scale with dispersion parameter
 
             %% compute covariance prior
@@ -3010,7 +3002,6 @@ classdef gum
             %sqW = sqrtm(W);
             %B = eye(free_idx(end)) + sqW*Kfree*sqW; % formula to computed marginalized evidence (eq 3.32 from Rasmussen & Williams 2006)
             nFreeParameters = sum(cellfun(@(x) sum(x(:)), {M.nFreeParameters}));%nFreeParameters = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
-            %   nFreeParameters = sum([M.nFreeParameters]);
             B = Kfree*H + eye(nFreeParameters); % formula to compute marginalized evidence
 
             %       Wsqrt = sqrtm(full(H)); % matrix square root
@@ -3042,14 +3033,13 @@ classdef gum
                 V = inv(HH);
                 warning(wrn.state, 'MATLAB:singularMatrix');
             else
-                V = B\Kfree; %inv(W + inv(Kfree));
+                V = B \ Kfree; %inv(W + inv(Kfree));
                 %  V = Kfree - Kfree*Wsqrt /inv(B)*Wsqrt*Kfree; % Rasmussen 3.27
             end
             V = full(V);
 
             % check that covariance is symmetric
             if norm(V-V')>1e-3*norm(V)
-                %if any(cellfun(@(x) any(sum(x=='f',2)>1), constraint_cell(M)))
                 if any(cellfun(@(MM) any(sum(isFreeWeight(MM),2)>1), num2cell(M)))
                     warning('posterior covariance is not symmetric - this is likely due to having two free dimensions in our regressor - try adding constraints');
                 else
@@ -3092,11 +3082,14 @@ classdef gum
         end
 
         %% FREEZE WEIGHTS
-        function obj = freeze_weights(obj)
-            %  R = freeze_weights(R) freezes all weights and
-            %  hyperparameters.
+        function obj = freeze_weights(obj, varargin)
+            %  M = freeze_weights(M) freezes all weights and
+            %  hyperparameters in model M.
+            %
+            % M = M.freeze_weights(regressor_label);
+            % freezes weights for regressor with corresponding label
             for i=1:numel(obj)
-                obj(i).regressor = freeze_weights(obj(i).regressor);
+                obj(i).regressor = freeze_weights(obj(i).regressor, varargin{:});
 
                 % update d.f., number of parameters and HPs
                 obj(i) = obj(i).compute_n_parameters_df;
@@ -3104,6 +3097,48 @@ classdef gum
             end
         end
 
+        %% KNOCK_OUT REGRESSORS
+        function obj = knockout(obj, index)
+            % M = M.knockout(idx);
+            % "knocks-out" regressor(s) at indices in vector ind from model, i.e. removes it
+            % from the model.
+            %
+            % M = M.knockout(label1) or M = M.knockout([label1,label2,...])
+            % knocks-out regressors based on their label
+            %
+            % M = M.knockout('all') creates an array of models, where in
+            % each model one of the regressor is knocked-out
+
+            % M.knockout("all") syntax
+            if isequal(index,'all') || isequal(index,"all")
+                obj = repmat(obj,1,obj.nMod);
+                for i=1:obj(1).nMod
+                    obj(i) = obj(i).knockout(i); % remove regressor i
+                end
+                return;
+            end
+
+            if ischar(index) || isstring(index)
+                I = find_weights(obj.regressor, index);
+                index = unique(I(1,:)); % regressors that appear at list once in list of weights
+            end
+
+            if length(index) ==1
+                obj.formula = obj.regressor(index).formula + " knock-out";
+            end
+
+            % remove regressors
+            obj.regressor(index) = [];
+            obj.nMod = obj.nMod - 1;
+
+            % reset metrics
+            obj.score.isEstimated = 0;
+            obj.score.isFitted = 0;
+            obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
+            obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
+
+
+        end
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
         function [obj,I] = set_weights_and_hyperparameters_from_model(obj, varargin)
             % M = M.set_weights_and_hyperparameters_from_model(M2);
@@ -3337,7 +3372,7 @@ classdef gum
             else
                 S = obj.score;
             end
-            NoIncludeField =  {'PredictorVariance', 'exitflag_allstarting','LogJoint_allstarting','LogJoint_hist_allstarting','FreeCovariance','covb'};
+            NoIncludeField =  {'PredictorVariance', 'PredictorExplainedVariance','exitflag_allstarting','LogJoint_allstarting','LogJoint_hist_allstarting','FreeCovariance','covb'};
             NoIncludeField = NoIncludeField(ismember(NoIncludeField, fieldnames(S)));
             S = rmfield(S,NoIncludeField);
 
@@ -3488,11 +3523,6 @@ classdef gum
                     Msingle = gum(rho, obj.T, struct('observations',obj.obs,'ObservationWeight', obj.ObservationWeight));
                     Msingle = Msingle.infer(struct( 'verbose','off'));
                     [~,PEV(r,m)] = Msingle.ExplainedVariance; % compute explained variance
-
-                    % alternative: not good
-                    %   Y = obj.inverse_link_function(rho); % pass through inverse link function
-                    %Mse = (Y -obj.T).^2; % model squared error
-                    %PEV(r,m) = weighted_mean(Mse, obj.ObservationWeight) / var(obj.T,obj.ObservationWeight);
                 end
             end
 
@@ -3681,6 +3711,8 @@ classdef gum
             % V = vif(obj,D) computed the Variance Inflation Factor (VIF) for
             % a model. D is a vector specifying the dimensions on which to
             % project for each regressor (by default, all ones).
+            % If using basis functions, VIF is computed in the space of
+            % basis functions
             %
             %[V, V_free] = vif(obj,D)
 
@@ -3688,19 +3720,35 @@ classdef gum
                 D = ones(1,obj.nMod);
             end
 
+            % work in projected space
+            obj.regressor = obj.regressor.project_to_basis();
+
             Phi = design_matrix(obj.regressor,[],D);
 
-            PP = projection_matrix(obj.regressor); % free-to-full matrix conversion
+            PP = projection_matrix(obj.regressor); % free-to-full matrix projection
             P = blkdiag_subset(PP, D(:)); % projection matrix
             P = P{1};
 
+
+
             Phi = Phi*P';
 
+            % remove constant column (no VIF associated)
+            isConstantReg = all(Phi==Phi(1,:),1);
+            if sum(isConstantReg)>1 % more than one constant column: everything is colinear
+                V_free = Inf(1,size(P,1));
+                V = Inf(1,size(P,2));
+                return;
+            end
+            Phi(:,isConstantReg) = []; % remove corresponding regressor
+
             R = corrcoef(Phi); % correlation matrix
-            V_free = diag(inv(R))'; % VIF in free basis
+
+            V_free(~isConstantReg) = diag(inv(R))'; % VIF in free basis
+            V_free(isConstantReg) = 0;
 
             % project back to full basis and normalize
-            V = (V_free*P) ./ (V_free*ones(size(P)));
+            V = (V_free*P) ./ sum(P,1);
         end
 
 
@@ -3738,10 +3786,10 @@ classdef gum
             f = 1;
             for m=1:obj.nMod
                 h_txt = [];
-                lbl = {M(m).Weights(dims{m}).label};
+                lbl = [M(m).Weights(dims{m}).label];
                 for d=1:length(lbl)
-                    if ~isempty(lbl{d})
-                        h_txt(d) = text( mean(nRegCum(m:m+1))+1, 0.5, lbl{d},...
+                    if ~isempty(lbl(d))
+                        h_txt(d) = text( mean(nRegCum(m:m+1))+1, 0.5, lbl(d),...
                             'verticalalignment','bottom','horizontalalignment','center');
                         if nReg(f)<.2*sum(nReg)
                             set(h_txt(d),'Rotation',90,'horizontalalignment','left');
@@ -3754,6 +3802,31 @@ classdef gum
 
             axis off;
 
+        end
+
+        %% PLOT VIF
+        function h = plot_vif(obj,D)
+            % plot_vif(M) to plot Variance Inflation Factor.
+            % plot_vif(M,D) to specify which dimension to use
+            %
+            % See gum.vif
+
+            if nargin<2
+                D = ones(1,length(obj.regressor));
+            end
+            obj.regressor = obj.regressor.project_to_basis;
+            V= vif(obj,D);
+
+            % put VIF values as dummy weights (and std to nan values)
+            obj.regressor = obj.regressor.initialize_weights(obj.obs); % this is needed for fixed regressors
+            obj.regressor = set_weights(obj.regressor, V,D);
+            obj.regressor = set_weights(obj.regressor, nan(size(V)),D,'PosteriorStd');
+
+            idx = [1:length(obj.regressor); D]; % 2-rows columns for which regressor to plot
+
+            % now plot
+            obj.score.isEstimated = true; % to allow plotting
+            h = obj.plot_weights(idx);
         end
 
         %% PLOT POSTERIOR COVARIANCE
@@ -3788,7 +3861,7 @@ classdef gum
             end
 
             set(gca, 'ydir','reverse');
-            if ~all(cellfun(@isempty,{M.label}))
+            if ~all(cellfun(@isempty,[M.label]))
                 for m=1:obj.nMod
                     h_txt(m,1) = text( mean(nRegCum(m:m+1))+1, 0.5, M(m).label,'verticalalignment','bottom','horizontalalignment','center');
                     h_txt(m,2) = text(0.5, mean(nRegCum(m:m+1))+1,  M(m).label,'verticalalignment','middle','horizontalalignment','right');
@@ -3836,6 +3909,16 @@ classdef gum
                 else
                     U2 = 1:obj.nMod;
                 end
+            end
+            if isnumeric(U2) && isrow(U2)
+                % only providing index of regressor without dimensionality
+                nDim = [obj.regressor(U2).nDim];
+                U2 = repelem(U2 ,1, nDim);
+
+                for i=1:obj.nMod
+                    U2(2,U2(1,:)==i) = 1:obj.regressor(i).nDim;
+                end
+
             end
 
             if length(obj)>1
@@ -3907,7 +3990,7 @@ classdef gum
                 for d=1:ndim(m)
                     h.Axes(end+1) = subplot2(nDim_tot,i);
                     if isempty(M(m).Weights(d).label)
-                        M(m).Weights(d).label = sprintf('HP%d_%d',m,d); % default label
+                        M(m).Weights(d).label = "HP" + m +"_"+d; % default label
                     end
                     title(M(m).Weights(d).label);
 
@@ -3968,7 +4051,7 @@ classdef gum
                 nobs = sum(w(idx));
                 M(q) = sum(obj.T(idx) .* w(idx)) /  nobs;
                 if strcmp(obj.obs,'binomial')
-                    sem(q) = sqrt( M(q)*(1-M(q))/nobs);
+                    sem(q) = sqrt( M(q)*(1-M(q)) / nobs);
                 else
                     sem(q) = std( obj.T(idx), w(idx)) / sqrt(nobs);
                 end
@@ -4211,15 +4294,15 @@ end
 %% negative marginalized evidence (for hyperparameter fitting)
 function [negME, obj] = gum_neg_marg(obj, HP, idx)
 
-persistent UU fval nfval;
+persistent UU fval;
 %% first call with no input: clear persistent value for best-fitting parameters
 if nargin==0
     fval = [];
     UU = [];
-    nfval = 0;
     return;
 end
-if isempty(fval)
+first_eval = isempty(fval);
+if first_eval
     fval = Inf;
 end
 
@@ -4230,15 +4313,22 @@ end
 
 param = obj.param;
 param.originalspace = false;
-if strcmp(param.verbose, 'full')
-    param.verbose = 'on';
-elseif strcmp(param.verbose, 'on')
+if first_eval
+    switch param.verbose
+        case 'iter'
+            param.verbose = 'on';
+        case 'on'
+            param.verbose = 'little';
+        otherwise
+            param.verbose = 'off';
+    end
+elseif strcmp(param.verbose,'iter')
     param.verbose = 'little';
 else
     param.verbose = 'off';
 end
 
-if nfval>0
+if  ~first_eval
     param.initialpoints = 1; % just one initial point after first eval
 end
 
@@ -4273,20 +4363,17 @@ if negME < fval
     UU = concatenate_weights(M);
 end
 
-nfval = nfval+1;
-
 end
 
 
 %% CROSS-VALIDATED LLH SCORE
 function [errorscore, grad] = cv_score(obj, HP, idx, return_obj)
 
-persistent UU fval nfval;
+persistent UU fval;
 %% first call with no input: clear persistent value for best-fitting parameters
 if nargin==0
     fval = [];
     UU = [];
-    nfval = 0;
     return;
 end
 first_eval = isempty(fval);
@@ -4306,15 +4393,22 @@ M = set_hyperparameters(M, HP, idx);
 
 param = obj.param;
 param.originalspace = false;
-if strcmp(param.verbose, 'full')
-    param.verbose = 'on';
-elseif strcmp(param.verbose, 'on') && first_eval
-    param.verbose = 'little'; %'on'; %;
+if first_eval
+    switch param.verbose
+        case 'iter'
+            param.verbose = 'on';
+        case 'on'
+            param.verbose = 'little';
+        otherwise
+            param.verbose = 'off';
+    end
+elseif strcmp(param.verbose,'iter')
+    param.verbose = 'little';
 else
     param.verbose = 'off';
 end
 
-if nfval>0
+if ~first_eval
     param.initialpoints = 1; % just one initial point after first eval
 end
 
@@ -4348,8 +4442,6 @@ if errorscore < fval
     UU = concatenate_weights(M);
 end
 
-nfval = nfval+1;
-
 % if return full GUM object instead of score
 if return_obj
     errorscore = obj;
@@ -4379,48 +4471,97 @@ mdif = (m-mu)*P'; % difference between prior and posterior means (in free basis)
 %if ~isempty(B) && B.fixed
 %    scl = B.scale;
 %else
-scl = scale;
+%scl = scale;
 %end
 
-[K, gradK] = covfun(scl, HPs.HP, B); % prior covariance matrix and gradient w.r.t hyperparameters
-if isstruct(gradK), gradK = gradK.grad; end
+%% prior covariance matrix and gradient w.r.t hyperparameters
+if ~iscell(covfun)
+    nSet =1;
+    HPs.index = ones(1,length(HPs.HP));
+    index_weight = ones(1,size(scale,2));
+    covfun = {covfun};
+else
+    index_weight = scale(end,:);
+    scale(end,:) = [];
+    nSet = length(covfun);% number of weights sets (more than one if uses regressor concatenation)
+end
+K = cell(1,nSet);
+gradK = cell(1,nSet);
+isCovHP = contains(string(HPs.type),"cov");
 
-if ~isempty(B) && ~B.fixed % work on original space
+for s=1:nSet
+
+    iHP = HPs.index ==s & isCovHP; % hyperparameter for this set of weight
+    if isempty(B) ||  isequal(B(s).fun, 'none')
+        this_B = [];
+    else
+        this_B = B(s);
+    end
+    this_scale = scale(index_weight==s);
+
+    nW = sum(index_weight==s);
+    gradK{s} = zeros(nW, nW, sum(HPs.index==s));
+    this_covHP = isCovHP(HPs.index==s);
+    [K{s}, gg] = covfun{s}(this_scale, HPs.HP(iHP), this_B); % prior covariance matrix and gradient w.r.t hyperparameters
+    if isstruct(gg)
+        gg = gg.grad;
+    end
+    gradK{s}(:,:,this_covHP) = gg;
+
+    % replicate covariance matrix if needed
+    %       [K{s}, gradK]= replicate_covariance(nRep, Sigma{s},gradK);
+
+    if isstruct(gradK{s})
+        gradK{s} = gradK{s}.grad;
+    end
+end
+
+% merge over sets of weights
+K = blkdiag(K{:});
+gradK = blkdiag3(gradK{:});
+
+%% deal with basis functions
+if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis functions parametrized by fittable HP, work on original space
 
     nHP = length(HPs.HP);
 
+    % compute basis functions and gradient of basis fun w.r.t HP
+    [B,~, gradB] = compute_basis_functions(B, B(1).scale, HPs);
+    Bmat = B(1).B;
 
-    if isrow(B.scale)
-        [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
-    else
-        % more rows in scale means we fit different
-        % functions for each level of splitting
-        % variable
-        [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
-        B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
-        gradB = zeros(0,size(B.scale,2),nHP);
-        for g=1:length(id_list)
-            subset = split_id==g; % subset of weights for this level of splitting variable
-            [this_B,~,~, this_gradB] = B.fun(B.scale(1,subset), HPs.HP, B.params);
-            n_new = size(this_B,1);
-            B.B(end+1 : end+n_new, subset) = this_B; %
-            gradB(end+1 : end+n_new, subset,:) = this_gradB;
-        end
-
-    end
+    %     if isrow(B.scale)
+    %         [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
+    %     else
+    %         % more rows in scale means we fit different
+    %         % functions for each level of splitting
+    %         % variable
+    %         [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
+    %         B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
+    %         gradB = zeros(0,size(B.scale,2),nHP);
+    %         for g=1:length(id_list)
+    %             subset = split_id==g; % subset of weights for this level of splitting variable
+    %             [this_B,~,~, this_gradB] = B.fun(B.scale(1,subset), HPs.HP, B.params);
+    %             n_new = size(this_B,1);
+    %             B.B(end+1 : end+n_new, subset) = this_B; %
+    %             gradB(end+1 : end+n_new, subset,:) = this_gradB;
+    %         end
+    %
+    %     end
 
     % gradient for K for basis hyperparameter
-    gradK_tmp = zeros(B.nWeight, B.nWeight,nHP);
+    gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
+    basisHP = find(contains(HPs.type, "basis"));
 
-    for p=1:nHP % for all fitted hyperparameter
-        BKgradB =B.B'*K*gradB(:,:,p);
-        gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + BKgradB + BKgradB';
+    for p=1:length(basisHP) % for all fitted hyperparameter
+        BKgradB =Bmat'*K*gradB(:,:,p);
+        gradK_tmp(:,:,basisHP(p)) = Bmat'*gradK(:,:,p)*Bmat + BKgradB + BKgradB';
         %gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
     end
     gradK = gradK_tmp;
 
     % project prior covariance on full space
-    K = B.B'*K*B.B;
+    K = Bmat'*K*Bmat;
+    K = (K+K')/2;
 
     % we make prior and posterior matrices full rank artificially to allow for the EM to rotate the
     % basis functions - now there's no guarantee that the LLH will increase
@@ -4435,34 +4576,22 @@ if ~isempty(B) && ~B.fixed % work on original space
 end
 K = P*K*P'; % project on free base
 
-KinvSigma = K \Sigma;
-%KinvSigma = SigmaChol'* K \SigmaChol; % if L^T*L = Sigma, then trace(K^-1 Sigma) = trace(L*K^-1*L^T)
-%KinvSigma = (KinvSigma+KinvSigma')/2; % make sure it's symmetric
+MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
+try
+    KinvSigma = linsolve(K,Sigma,MatOptions);
+catch
+    % if not symmetric positive despite enforcing it, HPs probably have bad
+    % values
+    Q = Inf;
+    grad= nan(1,sum(HPs.fit));
+    return;
+end
 
-% compute log-determinant (faster and more stable than log(det(X)),
-% from Pillow lab code), since matrix is positive definite
-%[C,noisPD] = chol(K);
-
-%[C,noisPD] = chol(KinvSigma); % instead of log det(K), we compute -log det(L^T * K^-1 L) which is symmetric too and may deal better with non-full rank covariance prior
-%[C,noisPD] = chol(KinvSigma);
-% instead of log det(K), we compute -log det(K^-1 Sigma) which may deal better with non-full rank covariance prior
-
-%if noisPD % if not semi-definite (must be a zero eigenvalue, so logdet is -inf)
-%    warning('covariance is not semi-definite positive, hyperparameter fitting through EM may not work properly, you may change the covariance kernels or try fitting by cross-validation instead');
-%LD = logdet(S);
 LD = logdet(KinvSigma);
-% LD = -logdet(K);
-%Q = inf;
-%grad = nan(1,nP);
-%return;
-%else
-%    LD = 2*sum(log(diag(C)));
-%end
 
 % negative cross-entropy (equation 19)
-Q = (trace(KinvSigma) - LD + (mdif/K)*mdif' + k*log(2*pi)   )/2;
-%Q = (- LD )/2;
-
+Kmdif = linsolve(K,mdif',MatOptions);
+Q = (trace(KinvSigma) - LD + mdif*Kmdif + k*log(2*pi) )/2;
 
 % gradient (note: gradient check may fail if K is close to singular but
 % that's because of the numerical instability in computing Q, the formula
@@ -4471,10 +4600,8 @@ grad= zeros(1,sum(HPs.fit));
 cnt = 1; % HP counter
 for p=find(HPs.fit) % for all fitted hyperparameter
     this_gK = P*gradK(:,:,p)*P';
-    KgK = K\this_gK;
-    grad(cnt) = -(  trace( KgK*(KinvSigma-eye(k)))   + mdif*KgK*(K\mdif')  )/2;
-    %  grad(cnt) = -(  trace( KgK)    )/2;
-
+    KgK = linsolve(K,this_gK,MatOptions);
+    grad(cnt) = -(  trace( KgK*(KinvSigma-eye(k))) + mdif*KgK*Kmdif )/2;
     cnt = cnt + 1;
 end
 
@@ -4790,7 +4917,7 @@ while ~isempty(fmla)
     end
 
     % check for closing bracket or separator (for lag operator)
-    if any(fmla(1)==');')
+    while ~isempty(fmla) && any(fmla(1)==');')
 
 
         pp_bracket = find(isnan(CloseBrackPos),1,'last'); % check last open bracket which has not been closed yet
@@ -4858,8 +4985,9 @@ while ~isempty(fmla)
     end
 
     %% Now let's look for operations
-    if ~any(fmla(1)=='+*-:^;')
-        error('Was expecting an operator in formula at point ''%s''', fmla);
+    OperatorChars = '+*-:^;';
+    if ~any(fmla(1)==OperatorChars)
+        error('Was expecting an operator (%s) in formula at point ''%s''', OperatorChars, fmla);
     end
 
 
@@ -4958,7 +5086,7 @@ end
 
 end
 
-%% compose regressors into predictor
+%% COMPOSE REGRESSORS WITH OPERATORS
 function [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct)
 
 
@@ -4971,13 +5099,13 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         while length(OpenBracketPos)>iBracket && OpenBracketPos(iBracket+1)<CloseBracketPos(iBracket)
             iBracket = iBracket+1; % if another bracket is opened before this one is closed, then process the inner bracket first
         end
-        iReg = OpenBracketPos(iBracket)+1;
+        %  iReg = OpenBracketPos(iBracket)+1;
 
         % make sure there's no lag operator within this bracket
-        if ~isempty(LagStruct)
+        if ~isempty(LagStruct) % if there's a lag operator...
             LSini = cellfun(@(x) x.ini,LagStruct);
-            iLag = find(LSini>OpenBracketPos(iBracket) & LSini<=OpenBracketPos(iBracket),1);
-            process_lag = ~isempty(iLag);
+            iLag = find(LSini>OpenBracketPos(iBracket) & LSini<=CloseBracketPos(iBracket),1); % ... within this bracket
+            process_lag = ~isempty(iLag); %% then process it first
         else
             process_lag = false;
         end
@@ -4992,7 +5120,7 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         LS = LagStruct{iLag};
         idx = LS.ini+1 : LS.end; % indices of regressors into the bracket
         iBracket = iLag;
-        iReg = iLag; % not sure at all about this line
+        %  iReg = iLag; % not sure at all about this line
     else
         % process brackets
         idx = OpenBracketPos(iBracket)+1:CloseBracketPos(iBracket)+1; % indices of regressors into the bracket
@@ -5000,6 +5128,7 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
 
 
     % recursive call: compose regressors within brackets
+    iReg = idx(1); % index for new regressor
     [V{iReg}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], [],[]);
     assert( all(this_idxC==1), 'incorrect formula: cannot use mixture break within brackets');
 
@@ -5033,8 +5162,21 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         CloseBracketPos(iBracket) = [];
     end
 
+    % remove processed regressors from pending list
     V(idx(2:end)) = []; % regressors
     O(idx(1:end-1)) = []; % operators
+
+    % update indices for brackets after this bracket
+    nRemove = length(idx)-1;
+    after_this_bracket = OpenBracketPos>=idx(end);
+    OpenBracketPos(after_this_bracket) = OpenBracketPos(after_this_bracket) - nRemove;
+    CloseBracketPos(after_this_bracket) = CloseBracketPos(after_this_bracket) - nRemove;
+    for k=1:length(LagStruct)
+        if LagStruct{k}.ini>=idx(end)
+            LagStruct{k}.ini = LagStruct{k}.ini - nRemove;
+            LagStruct{k}.end = LagStruct{k}.end - nRemove;
+        end
+    end
 end
 
 %% build predictor from operations between predictors

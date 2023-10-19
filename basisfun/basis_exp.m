@@ -1,7 +1,7 @@
 function [B, scale, params, gradB] = basis_exp(X,HP, params)
 % compute basis functions as polynomial
 % [B, scale, params, gradB] = basis_exp(X,HP, params)
-nExp = length(HP)-1;
+nExp = length(HP);
 B = zeros(nExp,length(X));
 X = double(X(1,:)); % x is on first row (extra rows may be used e.g. if splitted)
 for p=1:nExp

@@ -6,7 +6,7 @@ if nargin<2
 else
     varargout = cell(1,nargout);
     loglambda = HP(end);
-    [varargout{:}] = L2_covfun(scale,loglambda, B);
+    [varargout{:}] = L2_covfun(scale,loglambda);
     if nargout>1
         % place gradient over variance HP as last matrix in 3-D array
         nR = size(varargout{1},1);

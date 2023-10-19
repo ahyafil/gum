@@ -1,4 +1,4 @@
-function [B, scale, params] = basis_poly(X,HP, params)
+function [B, scale, params, gradB] = basis_poly(X,HP, params)
 % compute basis functions as polynomial
 % [B, scale, params] = basis_poly(X,HP, params)
 
@@ -10,4 +10,10 @@ for p=1:order+1
     B(p,:) = X.^(p-1);
 end
 scale = 0:order;
+
+if nargout>3
+    % gradient of matrix w.r.t hyperparameters
+    gradB = zeros(order, length(X),length(HP));
+end
+
 end

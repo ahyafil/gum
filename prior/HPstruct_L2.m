@@ -18,4 +18,6 @@ else
 end
 S.LB = -max_log_var; % lower bound: to avoid exp(HP) = 0
 S.UB = max_log_var;  % upper bound: to avoid exp(HP) = Inf
+
+S.type = "cov";
 end

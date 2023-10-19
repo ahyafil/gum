@@ -1,6 +1,6 @@
 function [B, scale, params, gradB] = basis_raisedcos(X,HP, params)
 %computes basis functions as raised cosine
-%[B, scale, params, gradB] = basis_raisedcos(X,HP, params)
+%[B, scale, params, gradB] = basis_raisedcos(X,[a,c,Phi_1], params)
 
 nCos = params.nFunctions;
 a = HP(1);
@@ -18,7 +18,7 @@ end
 scale = 1:nCos;
 
 if nargout>3
-    gradB = zeros(nCos, length(X),length(HP));
+    gradB = zeros(nCos, length(X),3);
     for p=1:nCos
         alog = a*log(X+c)-Phi(p);
         nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value

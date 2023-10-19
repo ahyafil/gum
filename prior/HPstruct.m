@@ -1,10 +1,11 @@
-function S = HPstruct()
+function H = HPstruct()
 % S = HPstruct();
 % void HP structure
-S.HP = []; % value of hyperparameter
-S.label = {}; % labels
-S.fit = []; % which ones are fittable
-S.LB = []; % lower bound
-S.UB = []; % upper bound
-S.index = []; % index (for set of concatenated regressors)
+H.HP = []; % value of hyperparameter
+H.label = {}; % labels
+H.fit = []; % which ones are fittable
+H.LB = []; % lower bound
+H.UB = []; % upper bound
+H.index = []; % index (for set of concatenated regressors)
+H.type = string([]); % type "cov" or "basis", for covariance or basis function HP
 end

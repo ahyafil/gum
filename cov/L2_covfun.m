@@ -6,7 +6,7 @@ if nargin<2
     return;
 end
 
-nReg = length(scale);
+nReg = size(scale,2);
 lambda2 = exp(2*loglambda);
 if isinf(lambda2)
     K = diag(lambda2 * ones(1,nReg));
