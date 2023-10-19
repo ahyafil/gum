@@ -1828,7 +1828,7 @@ classdef regressor
                     [B,scale_basis] = compute_basis_functions(W.basis, W.scale, HPs);
                     % [Bmat,scale_basis] = compute_basis_functions(obj(m),d);
 
-                    scale_basis(2,:) = []; % if concatenated regressors                  
+                    scale_basis(2:end,:) = []; % if concatenated regressors                  
                     if isnumeric(scale_basis)
                                                 is_real_basis = ~isnan(scale_basis);
                         scale_basis = num2strcell(scale_basis);
