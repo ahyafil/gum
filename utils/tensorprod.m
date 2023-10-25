@@ -4,7 +4,11 @@ function X = tensorprod(X,U)
 % U: cell array of vectors
 
 prod_dims= find(~cellfun(@isempty,U));
-S = size(X);
+if isempty(prod_dims)
+    return;
+end
+nDim = max(ndims(X),max(prod_dims));
+S = size(X,1:nDim);
 
 for d= prod_dims
     

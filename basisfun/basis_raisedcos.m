@@ -2,6 +2,45 @@ function [B, scale, params, gradB] = basis_raisedcos(X,HP, params)
 %computes basis functions as raised cosine
 %[B, scale, params, gradB] = basis_raisedcos(X,[a,c,Phi_1], params)
 
+if size(X,1)>1
+    %% another scale: separate set of basis functions for each level
+    levels = X(end,:);
+    X(end,:) = [];
+    unq = unique(levels);
+    nLevel = length(unq);
+    B = cell(1,nLevel);
+    scale = cell(1,nLevel);
+    gradB = cell(1,nLevel);
+
+    for i=1:nLevel
+        % compute basis functions separately for each level (recursive
+        % call)
+        this_level = levels==unq(i);
+        if nargout>3
+            [this_B, scale{i}, ~, this_gradB] = basis_raisedcos(X(:,this_level),HP, params);
+        else
+            [this_B, scale{i}] = basis_raisedcos(X(:,this_level),HP, params);
+        end
+
+        scale{i}(end+1,:) = unq(i);
+        B{i} = zeros(size(this_B,1),length(levels));
+        B{i}(:,this_level) = this_B;
+
+        if nargout>3
+            gradB{i} = zeros(size(this_B,1),length(levels),length(HP));
+            gradB{i}(:,this_level,:) = this_gradB;
+        end
+    end
+
+    % now concatenate across all levels
+    B = cat(1,B{:});
+    scale = cat(2,scale{:});
+    if nargout>3
+        gradB = cat(1,gradB{:});
+    end
+    return;
+end
+
 nCos = params.nFunctions;
 a = HP(1);
 c = HP(2);

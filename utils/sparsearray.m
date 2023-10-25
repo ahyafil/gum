@@ -616,7 +616,7 @@ classdef sparsearray
                         end
 
                         if ~isscalar(s1.subs)
-                            obj.value = reshape(obj.value, size(obj));
+                            obj.value = reshape(full(obj.value), size(obj));
                         end
 
                         % return column vector

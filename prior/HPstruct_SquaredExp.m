@@ -11,6 +11,7 @@ else
     % tau = dt; % initial time scale: mean different between two points
     span = max(scale,[],2)' - min(scale,[],2)'; % total span in each dimension
     tau =  sqrt(dt.*span); % geometric mean between the two
+    tau = max(tau,span/10);
     if single_tau
         tau = mean(tau);
     end
@@ -31,17 +32,17 @@ HH.fit = true(1,nScale+1);
 % upper and lower bounds on hyperparameters
 if strcmp(basis, 'fourier')
     HH.LB(1:nScale) = log(2*tau/length(scale)); % lower bound on log-scale: if using spatial trick, avoid scale smaller than resolution
-    HH.LB(nScale+1) = -max_log_var; % to avoid exp(HP) = 0
-    HH.UB = max_log_var*[1 1];  % to avoid exp(HP) = Inf
+    HH.LB(nScale+1) = max(-max_log_var, log(dt)-3); % to avoid exp(HP) = 0
+    HH.UB = [log(span)+2 max_log_var];  % scale not much larger than overall span to avoid exp(HP) = Inf
 HH.type = repmat("basis_cov",1,nScale+1);
 
 else
-    HH.UB(1:nScale) = log(101*tau); %log(5*tau); % if not using spatial trick, avoid too large scale that renders covariance matrix singular
-    HH.UB(nScale+1) = max_log_var; 1;
+    HH.UB(1:nScale) = min(log(101*tau),log(span)+2); %log(5*tau); % if not using spatial trick, avoid too large scale that renders covariance matrix singular
+    HH.UB(nScale+1) = max_log_var;
     if ~isempty(binning)
         HH.LB = [log(binning)-2 -max_log_var];
     else
-        HH.LB = -max_log_var*[1 1];  % to avoid exp(HP) = Inf
+        HH.LB = [max(-max_log_var,log(dt)-2) -max_log_var];  % to avoid exp(HP) = Inf
     end
     HH.type =repmat("cov",1,nScale+1);
 
