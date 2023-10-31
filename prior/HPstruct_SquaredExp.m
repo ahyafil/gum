@@ -14,6 +14,7 @@ else
     tau = max(tau,span/10);
     if single_tau
         tau = mean(tau);
+        span = max(span);
     end
 end
 nScale = length(tau);

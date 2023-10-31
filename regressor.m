@@ -2288,7 +2288,11 @@ classdef regressor
                                 %if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
                                 %    Sigma = (Sigma+Sigma')/2;
                                 %end
-                                UU =  P.PriorMean + mvnrnd(zeros(nFreeWeights(r,d),1), P.PriorCovariance)*C.P;
+                                x = mvnrnd(zeros(nFreeWeights(r,d),1), P.PriorCovariance);
+                                if C.type~="free"
+                                    x = x*C.P;
+                                end
+                                UU =  P.PriorMean + x;
                             end
 
 %                             % offset to make sure that it fullfils the
