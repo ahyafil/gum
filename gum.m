@@ -3259,6 +3259,7 @@ classdef gum
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x)), scale)); % if scale of nans
                     if DifferentScale && isnumeric(scale{1,d})
 
                         % just in case same scale with some numerical imprecisions

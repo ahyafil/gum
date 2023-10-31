@@ -2020,13 +2020,15 @@ classdef regressor
 
                         %% project onto free basis (if constraint)
                         ct = constraint_structure(W);
-                        if ct.nConstraint>0
+                        if ct.type =="fixed"
+                            Sigma = [];
+                        elseif ct.nConstraint>0
                             J = eye(nW)- ct.V/(ct.V'*Sigma*ct.V)*ct.V'*Sigma;
                             Sigma = ct.P*Sigma*J*ct.P';
                             Sigma = (Sigma+Sigma')/2; % make symmetric to correct numerical errors
                         end
                         end
-                        
+
                         obj(m).Prior(1,d).PriorCovariance = Sigma;
                     end
 
