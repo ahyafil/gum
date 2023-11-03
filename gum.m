@@ -159,6 +159,8 @@ classdef gum
     % remove_constrained_rho for custom constraint
     % compute matrix/array of weights for multidim regressor (TEST
     % compose_weights)
+    % added property 'nTotalFreeParameters' to regressor object
+    % corrected computation of degree of freedom
 
     % - add more lines in design matrix plot if concatenated regressors or
     % sublevels
@@ -830,7 +832,7 @@ classdef gum
 
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
 
-                    % clear persisitent value for best-fitting parameters
+                    % clear persistent value for best-fitting parameters
                     cv_score();
 
                     objective_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
@@ -925,7 +927,7 @@ classdef gum
                 % inference
                 obj = obj.infer(prm);
 
-                % PP = projection_matrix(obj.regressor); % projection matrix for each dimension
+                % PP = projection_matrix_multiple(obj.regressor); % projection matrix for each dimension
 
                 %% M-step (adjusting hyperparameters)
                 regressorCounter = 0;
@@ -983,6 +985,12 @@ classdef gum
                                             this_mean = this_mean*Bmat;
                                             this_PriorMean = this_PriorMean*Bmat;
                                             this_cov = Bmat' * this_cov *Bmat;
+
+                                            % define constraint in original
+                                            % space
+                                            dummyR = obj.regressor(m).project_from_basis().compute_projection_matrix;
+                                            ct = dummyR.Weights(d).constraint;
+                                            this_cov = covariance_free_basis(this_cov,ct);
                                             %  assert(W.constraint=="free", 'EM not coded for basis functions with constraint');
 
                                         end
@@ -996,7 +1004,7 @@ classdef gum
                                         iHP = contains(HPs.type, "cov"); % covariance hyperparameters
                                         [~, gg] = this_Prior.CovFun(this_scale, HPs.HP(iHP), B);
                                         %  withOptimizer = isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && ~non_fixed_basis;
-                                        withOptimizer = isstruct(gg)  && ct.type=="free"  && ~non_fixed_basis;
+                                        withOptimizer = isstruct(gg)  && isFreeStructure(ct)  && ~non_fixed_basis;
                                     else
                                         withOptimizer = false;
                                     end
@@ -1184,7 +1192,7 @@ classdef gum
             % check hyper prior gradient matrix has good shape
             if do_grad_hyperparam
                 % nParamTot = sum([obj.regressor.nTotalParameters]);  % total number of weights
-                nParamTot = obj.score.nParameters;
+                nParamTot = obj.score.nFreeParameters;
                 if size(CovJacob,1)~=nParamTot || size(CovJacob,2)~=nParamTot
                     error('The number of rows and columns in field ''CovPriorJacobian'' (%d) must match the total number of weights (%d)',size(CovJacob,1),nParamTot);
                 end
@@ -1230,7 +1238,7 @@ classdef gum
                 if do_grad_hyperparam
                     grad_hp = zeros(size(CovJacob,3),nSet); % gradient matrix (hyperparameter x permutation)
 
-                    PP = projection_matrix(M,'all'); % global transformation matrix from full parameter set to free basis
+                    PP = projection_matrix_multiple(M,'all'); % global transformation matrix from full parameter set to free basis
                 else
                     PP = []; % just for parfor
                 end
@@ -1263,7 +1271,8 @@ classdef gum
 
                     %compute score on testing set (mean log-likelihood per observation)
                     obj_test = extract_observations(obj,validationset); % model with test set
-                    obj_test.regressor = set_weights(obj_test.regressor, obj_train.regressor); % set weights computed from training data
+                    %obj_test.regressor = set_weights(obj_test.regressor, obj_train.regressor); % set weights computed from training data
+                    obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
                     obj_test.Predictions.rho = [];
                     obj_test.score.scaling = s; % dispersion parameter estimated in training set
 
@@ -1309,8 +1318,11 @@ classdef gum
 
                         this_gradhp = zeros(1,size(CovJacob,3));
                         for q=1:size(CovJacob,3) % for each hyperparameter
-                            gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
-                            gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
+                         %   gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+                           gradgrad = CovJacob(:,:,q)'*(PP*allU'); % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+                           % gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
+                            gradgrad = gradgrad - gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
+
 
                             if free_dispersion % add log-joint derived w.r.t to dispersion param and hyperparameters (null for cov HPs)
                                 gradgrad(end+1,:) = gradgrad_dispersion(:,q);
@@ -1363,7 +1375,7 @@ classdef gum
 
             elseif do_grad_hyperparam % optimize parameters directly likelihood of whole dataset (not recommended)
 
-                PP = projection_matrix(M,'all'); % projection matrix for each dimension
+                PP = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
 
                 %compute score on whole dataset (mean log-likelihood per observation)
                 [obj,validationscore,grad_validationscore] = LogLikelihood(obj); % evaluate LLH
@@ -1408,7 +1420,7 @@ classdef gum
             end
 
             %Covariance
-            P = projection_matrix(M,'all'); % projection matrix for each dimension
+            P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
             Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
             invHinvK = P'*invHinvK*P;
 
@@ -1433,6 +1445,7 @@ classdef gum
                 for d=1:M(m).nDim
                     W = M(m).Weights(d);
                     nW = W.nWeight;
+                    nFW = M(m).nFreeParameters(d);
                     W.PosteriorStd = zeros(M(m).rank, nW);
                     W.T = zeros(M(m).rank,nW);
                     W.p = zeros(M(m).rank, nW);
@@ -1453,7 +1466,8 @@ classdef gum
                     M(m).Weights(d) = W;
                 end
 
-                midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
+                midx = midx + M(m).nTotalParameters; % jump index by number of components in module
+             %   midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
 
             end
 
@@ -1475,7 +1489,7 @@ classdef gum
             LD = logdet(B);
             Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;
 
-            PP = projection_matrix(M);
+            PP = projection_matrix_multiple(M);
             for m=1:nM % add part from prior
                 for d=1:M(m).nDim
                     for r=1:M(m).rank % assign new set of weight to each component
@@ -1674,7 +1688,7 @@ classdef gum
             % order of updates for each dimensions
             UpdOrder = UpdateOrder(M);
 
-            PP = projection_matrix(M); % free-to-full matrix conversion
+            PP = projection_matrix_multiple(M); % free-to-full matrix conversion
 
             % projection matrix and prior covariance for set of weights
             P = cell(nC,D); % free-to-full matrix conversion
@@ -1775,7 +1789,7 @@ classdef gum
 
                 % full prior covariance matrix
                 Kall = global_prior_covariance(M);
-                Pall = projection_matrix(M,'all'); % full-to-free basis
+                Pall = projection_matrix_multiple(M,'all'); % full-to-free basis
 
                 % project onto free basis (already done!)
                 %  if issparse(Kall) && issparse(Pall)
@@ -2963,7 +2977,7 @@ classdef gum
 
             %% project from full parameter space to free basis
 
-            P = projection_matrix(M,'all');  %  projection matrix from full to unconstrained space
+            P = projection_matrix_multiple(M,'all');  %  projection matrix from full to unconstrained space
             P = full(P);
             H = P*H_full*P';
             H = symmetric_part(H); % ensure that it's symmetric (may lose symmetry due to numerical problems)
@@ -3024,7 +3038,8 @@ classdef gum
             %eigenvalues
             %sqW = sqrtm(W);
             %B = eye(free_idx(end)) + sqW*Kfree*sqW; % formula to computed marginalized evidence (eq 3.32 from Rasmussen & Williams 2006)
-            nFreeParameters = sum(cellfun(@(x) sum(x(:)), {M.nFreeParameters}));%nFreeParameters = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
+            nFreeParameters = sum([M.nTotalFreeParameters]);
+            %nFreeParameters = sum(cellfun(@(x) sum(x(:)), {M.nFreeParameters}));%nFreeParameters = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
             B = K*H + eye(nFreeParameters); % formula to compute marginalized evidence
 
             %       Wsqrt = sqrtm(full(H)); % matrix square root
@@ -3086,12 +3101,13 @@ classdef gum
             % we count parameter in projected space
             M = obj.regressor.project_to_basis;
 
-            obj.score.nParameters = sum([M.nTotalParameters]); % total number of parameters (after projecting to
+            obj.score.nParameters = sum([M.nTotalParameters]); % total number of parameters 
+            obj.score.nFreeParameters = sum([M.nTotalFreeParameters]); % total number of free parameters
 
             if isempty(obj.ObservationWeight)
-                obj.score.df = obj.nObs - obj.score.nParameters; % degree of freedom
+                obj.score.df = obj.nObs - obj.score.nFreeParameters; % degree of freedom
             else
-                obj.score.df = sum(obj.ObservationWeight) - obj.score.nParameters; % degree of freedom
+                obj.score.df = sum(obj.ObservationWeight) - obj.score.nFreeParameters; % degree of freedom
             end
         end
 
@@ -3758,7 +3774,7 @@ classdef gum
 
             Phi = design_matrix(obj.regressor,[],D);
 
-            PP = projection_matrix(obj.regressor); % free-to-full matrix projection
+            PP = projection_matrix_multiple(obj.regressor); % free-to-full matrix projection
             P = blkdiag_subset(PP, D(:)); % projection matrix for constraints
             P = P{1};
             Phi = Phi*P';
@@ -4267,26 +4283,6 @@ for d=1:size(update_o,2) %siz
 end
 end
 
-
-
-%% projection matrix from free set of parameters to complete set of
-% parameters
-function PP = projection_matrix(M, do_all)
-nMod = length(M); % number of modules
-PP = cell(1,nMod);
-
-for m=1:nMod
-    PP{m} = ProjectionMatrix(M(m));
-end
-
-if nargin>1 && isequal(do_all,'all')
-    PP = cellfun(@(x) x(:)', PP,'unif',0);
-    PP = [PP{:}]; % concatenate over modules
-    PP = blkdiag(PP{:}); % global transformation matrix from full parameter set to free basis
-end
-
-end
-
 %% check size of regressors and resize if multiple dimension observations
 function M = checkregressorsize(M,n)
 if M.nObs ~=n
@@ -4479,14 +4475,7 @@ end
 
 end
 
-%% converts to cell if not already a cell
-%function x= tocell(x)
-%if ~iscell(x)
-%    x = {x};
-%end
-%end
-
-%% negative cross-entropy of prior and posterior
+%% NEGATIVE CROSS-ENTROPY BETWEEN PRIOR AND POSTERIOR
 % multivariate gaussians (for M-step of EM in hyperparameter optimization)
 function [Q, grad] = mvn_negxent(covfun, mu, scale, m, Sigma, ct, HP, HPs, B)
 
@@ -4496,7 +4485,7 @@ msgid1 = warning('off','MATLAB:nearlySingularMatrix');
 msgid2 = warning('off','MATLAB:SingularMatrix');
 
 mdif = m-mu;
-noConstraint = isequal(ct,"free") || ct.type=="free";
+noConstraint = isFreeStructure(ct);
 if ~noConstraint
     P=ct.P;
     k = size(P,1); % dimensionality of free space
@@ -4504,12 +4493,6 @@ if ~noConstraint
 else
     k = length(mu);
 end
-
-%if ~isempty(B) && B.fixed
-%    scl = B.scale;
-%else
-%scl = scale;
-%end
 
 %% prior covariance matrix and gradient w.r.t hyperparameters
 if ~iscell(covfun)
@@ -4563,25 +4546,6 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     [B,~, gradB] = compute_basis_functions(B, B(1).scale, HPs);
     Bmat = B(1).B;
 
-    %     if isrow(B.scale)
-    %         [B.B,~,~,gradB] = B.fun(B.scale, HPs.HP, B.params);
-    %     else
-    %         % more rows in scale means we fit different
-    %         % functions for each level of splitting
-    %         % variable
-    %         [id_list,~,split_id] = unique(B.scale(2:end,:)','rows'); % get id for each observation
-    %         B.B = zeros(0,size(B.scale,2)); % the matrix will be block-diagonal
-    %         gradB = zeros(0,size(B.scale,2),nHP);
-    %         for g=1:length(id_list)
-    %             subset = split_id==g; % subset of weights for this level of splitting variable
-    %             [this_B,~,~, this_gradB] = B.fun(B.scale(1,subset), HPs.HP, B.params);
-    %             n_new = size(this_B,1);
-    %             B.B(end+1 : end+n_new, subset) = this_B; %
-    %             gradB(end+1 : end+n_new, subset,:) = this_gradB;
-    %         end
-    %
-    %     end
-
     % gradient for K for basis hyperparameter
     gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
     basisHP = find(contains(HPs.type, "basis"));
@@ -4603,19 +4567,10 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     % meaningful result
     K = force_definite_positive(K, sqrt(min(diag(K)))*1e-3); % changing to see if we can avoid null values along diagonal
     Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
-
 end
 
-% prior covariance on free basis
-if ~noConstraint
-    Kfull = K;
-    V = ct.V;
-    VKV = V'*K*V;
-    J = eye(size(V,1)) - V/VKV*V'*K;
-    K = P*K*J*P';
-end
-
-%K = P*K*P'; % project on free base NOOOO!
+% prior and posterior covariances on free basis
+[K, gradK] = covariance_free_basis(K, ct,gradK);
 
 MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
 try
@@ -4642,10 +4597,10 @@ cnt = 1; % HP counter
 for p=find(HPs.fit) % for all fitted hyperparameter
     this_gK = gradK(:,:,p);
 
-    if ~noConstraint
-        gradJ = V/VKV*V'*this_gK*(V/VKV*V'*Kfull - eye(size(Kfull,1)));
-        this_gK = P*(gradK(:,:,p)*J + Kfull*gradJ)*P';
-    end
+%     if ~noConstraint
+%         gradJ = V/VKV*V'*this_gK*(V/VKV*V'*Kfull - eye(size(Kfull,1)));
+%         this_gK = P*(gradK(:,:,p)*J + Kfull*gradJ)*P';
+%     end
     KgK = linsolve(K,this_gK,MatOptions);
     grad(cnt) = -(  trace( KgK*(KinvSigma-eye(k))) + mdif*KgK*Kmdif )/2;
     cnt = cnt + 1;
@@ -5444,5 +5399,10 @@ if isnumeric(X)
 else
     c = 's';
 end
+end
+
+%% no constraint structure
+function bool = isFreeStructure(ct)
+bool = isequal(ct,"free") || ct.type=="free";
 end
 

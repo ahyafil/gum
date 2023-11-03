@@ -51,7 +51,6 @@ while ~gotit
     [~,flag] = chol(W'*W);
     gotit = ~flag; % if FLAG is 0, then vectors are not colinear
 
-
     i = i+1;
 end
 
