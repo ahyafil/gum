@@ -664,14 +664,14 @@ classdef regressor
             end
         end
 
-         %% TOTAL NUMBER OF FREE PARAMETERS
+        %% TOTAL NUMBER OF FREE PARAMETERS
         function np = get.nTotalFreeParameters(obj)
             np = zeros(size(obj));
             for i=1:numel(obj)
                 np(i) = sum(obj(i).nFreeParameters(:));
             end
         end
-        
+
 
         %% %%%%%%%%%%%%
         %%%% 1. OPERATIONS ON WEIGHTS AND HYPERPARAMETERS
@@ -949,7 +949,7 @@ classdef regressor
             % M = set_weights(M,U, dims) to apply only to specific weights
             %
             % M = set_weights(M,U, dims, field) or M = set_weights(M,U, [],
-            % field) to apply to specific field: 'PosteriorMean' (default=,
+            % field) to apply to specific field: 'PosteriorMean' (default),
             % 'PosteriorStd', 'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'
 
             if isa(U, 'regressor')
@@ -964,7 +964,6 @@ classdef regressor
             if isrow(U)
                 U = U';
             end
-
             if nargin<4
                 fild = 'PosteriorMean';
             end
@@ -979,46 +978,39 @@ classdef regressor
                 else % otherwise to all dimensions
                     dim_list = 1:obj(m).nDim;
                 end
+                rk = obj(m).rank;
                 for d = dim_list
                     nW = obj(m).Weights(d).nWeight; % number of regressors
                     this_constraint = constraint_type(obj(m).Weights(d));
 
-                    switch fild
-                        case 'PosteriorMean'
-                            for r=1:obj(m).rank % assign new set of weight to each component
-                                if this_constraint~="fixed" % unless fixed weights
+                    if any(strcmp(fild,{'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'} ))
 
-                                    idx = ii + (nW*(r-1)+1 : nW*r); % index of regressors for this component
-                                    obj(m).Weights(d).PosteriorMean(r,:) = U(idx); % weight for corresponding adim and component
-                                    if this_constraint=="first1" % enforce this
-                                        obj(m).Weights(d).PosteriorMean(r,1)=1;
-                                        %  warning('check if I should change idx to idx+1');
-                                    elseif this_constraint=="first0" % enforce this
-                                        obj(m).Weights(d).PosteriorMean(r,1)=0;
-                                    end
+                        idx = ii+(1:nW*rk);
+                        this_U = reshape(U(idx,:), [nW, rk, size(U,2)]); % weights x rank x initial point
+                        this_U = permute(this_U,[3 1 2]); % initial point x weights x rank
+                        obj(m).Weights(d).(fild) = this_U;
+                    elseif ~ismember(fild, {'PosteriorMean','PosteriorStd','T','p'})
+                        error('incorrect field: %s',fild);
+                    elseif this_constraint~="fixed" || ~strcmp(fild,'PosteriorMean') % unless fixed weights
+
+                        idx = ii+(1:nW*rk);
+                        this_U = reshape(U(idx), nW, rk)';
+                        obj(m).Weights(d).(fild) = this_U;
+
+                        switch fild
+                            case 'PosteriorMean'
+                                if this_constraint=="first1" % enforce this
+                                    obj(m).Weights(d).PosteriorMean(:,1)=1;
+                                elseif this_constraint=="first0" % enforce this
+                                    obj(m).Weights(d).PosteriorMean(:,1)=0;
                                 end
-                            end
-                        case 'PosteriorStd'
-                            for r=1:obj(m).rank % assign new set of weight to each component
-                                %if this_constraint~="fixed" % unless fixed weights
-
-                                idx = ii + (nW*(r-1)+1 : nW*r); % index of regressors for this component
-                                obj(m).Weights(d).PosteriorStd(r,:) = U(idx); % weight for corresponding adim and component
+                            case 'PosteriorStd'
                                 if any(this_constraint==["first0","first1"]) % enforce this
-                                    obj(m).Weights(d).PosteriorStd(r,1)=0;
+                                    obj(m).Weights(d).PosteriorStd(:,1)=0;
                                 end
-                                %end
-                            end
-                        case {'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'}
-                            idx = ii+(1:nW*obj(m).rank);
-                            this_U = reshape(U(idx,:), [nW, obj(m).rank, size(U,2)]); % weights x rank x initial point
-                            this_U = permute(this_U,[3 1 2]); % initial point x weights x rank
-                            obj(m).Weights(d).(fild) = this_U;
-                        otherwise
-                            error('incorrect field');
+                        end
                     end
-
-                    ii = ii + obj(m).rank*nW;
+                    ii = ii + rk*nW;
                 end
             end
             assert(ii==size(U,1), 'did not arrive to the end of the vector');
@@ -1303,6 +1295,44 @@ classdef regressor
 
             % we treated fixed weights apart, let's add them here
             Uconst(FixedWeight) = Uconst(FixedWeight) + UU(FixedWeight)';
+        end
+
+        %% SET POSTERIOR COVARIANCE (called by gum.infer)
+        function obj = set_posterior_covariance(obj, covb, lbl)
+            is_invHinvK = nargin>2 && strcmp(lbl, 'invHinvK'); % whether we fill in this field instead
+            if ~is_invHinvK
+                lbl = 'PosteriorCov';
+            end
+
+            midx = 0;
+            for m=1:numel(obj)
+                rk = obj(m).rank;
+
+                if is_invHinvK
+                    nWeight = obj(m).nFreeParameters(1,:);
+                else
+                    nWeight = [obj(m).Weights.nWeight];
+                end
+                for d=1:obj(m).nDim
+                    if ~is_invHinvK || any(strcmp(obj(m).Weights(d).type, {'continuous','periodic'}))
+                        nW = nWeight(d);
+                        this_cov =  zeros(nW, nW, obj(m).rank);
+                        for r=1:obj(m).rank
+                            idx = (1:nW) + (r-1)*nW + rk*sum([nWeight(1:d-1)]) + midx; % index of regressors in design matrix
+                            this_cov(:,:,r) = covb(idx,idx);
+                        end
+                                            obj(m).Weights(d).(lbl) = this_cov;
+                    end
+                end
+
+                if is_invHinvK
+                    midx = midx + obj(m).nTotalFreeParameters; % jump index by number of components in module
+                else
+                    midx = midx + obj(m).nTotalParameters; % jump index by number of components in module
+                end
+            end
+
+
         end
 
         %% %%%%%%%%%%%%
@@ -1592,23 +1622,23 @@ classdef regressor
         end
 
 
-%% projection matrix from free set of parameters to complete set of
-% parameters
-function PP = projection_matrix_multiple(obj, do_all)
-nMod = length(obj); % number of modules
-PP = cell(1,nMod);
+        %% projection matrix from free set of parameters to complete set of
+        % parameters
+        function PP = projection_matrix_multiple(obj, do_all)
+            nMod = length(obj); % number of modules
+            PP = cell(1,nMod);
 
-for m=1:nMod
-    PP{m} = ProjectionMatrix(obj(m));
-end
+            for m=1:nMod
+                PP{m} = ProjectionMatrix(obj(m));
+            end
 
-if nargin>1 && isequal(do_all,'all')
-    PP = cellfun(@(x) x(:)', PP,'unif',0);
-    PP = [PP{:}]; % concatenate over modules
-    PP = blkdiag(PP{:}); % global transformation matrix from full parameter set to free basis
-end
+            if nargin>1 && isequal(do_all,'all')
+                PP = cellfun(@(x) x(:)', PP,'unif',0);
+                PP = [PP{:}]; % concatenate over modules
+                PP = blkdiag(PP{:}); % global transformation matrix from full parameter set to free basis
+            end
 
-end
+        end
 
         %% COMPUTE DESIGN MATRIX
         function [Phi,nWeight, dims] = design_matrix(obj,subset, dims, init_weight)
@@ -2358,11 +2388,13 @@ end
             % returns the mean mu, standard deviation S and full covariance K of the posterior distribution
             % for values scale of transformation of regressor M.
             %
-            %  posterior_test_data(M, scale, d) to specify over which dimension of transformation (default:1).
+            %  posterior_test_data(M, scale, d) to specify over which dimension of transformation (default:first continuous variable).
             %
             % Use scale = {x1values, x2values...} to use meshgrid scales
             if nargin<3
-                d=1;
+                W = [obj.Weights];
+                d = find(ismember(W.type, {'continuous','periodic'}),1);
+                assert(~isempty(d), 'no continuous variable in this regressor');
             end
 
             assert(length(obj)==1);
@@ -2370,10 +2402,7 @@ end
 
             obj = obj.project_from_basis;
 
-            W = obj.Weights(d);
-            P = obj.Prior(d);
-
-            [mu,S,K] = computes_posterior_test_data(W,P,obj.HP(d),scale);
+            [mu,S,K] = computes_posterior_test_data(obj.Weights(d), obj.Prior(d), obj.HP(d),scale);
         end
 
         %% COMPUTE LOG-PRIOR (unnormalized)
@@ -2408,7 +2437,6 @@ end
 
                 end
             end
-
         end
 
         %% first dimension to be updated in IRLS
@@ -2507,7 +2535,7 @@ end
             end
 
             for i=1:numel(obj)
-                                    
+
                 for d=1:obj(i).nDim
                     W = obj(i).Weights(d);
                     B = W.basis;
@@ -2530,11 +2558,11 @@ end
                         end
 
                         if isfield(W.constraint,'P')
-                        Proj = W.constraint.P; % projection on unconstrainted space
+                            Proj = W.constraint.P; % projection on unconstrainted space
                         else
-                    Proj = 1; % no-constraint
+                            Proj = 1; % no-constraint
                         end
-                                                    PosteriorMean = W.PosteriorMean*(Proj'*Proj);
+                        PosteriorMean = W.PosteriorMean*(Proj'*Proj);
 
                         if gradLLH % multiply with weights (gradient of LLH)
                             gradB = tensorprod(gradB, {PosteriorMean,[],[]});
@@ -4092,9 +4120,7 @@ function [mu,S,K,scale] = computes_posterior_test_data(W,P,HP,scale)
 
 assert(  any(strcmp(W.type, {'continuous','periodic'})), 'test data only for continuous or periodic regressors');
 
-
 if iscell(scale) % define meshgrid
-
     % compose along n-dimensional grid
     GridCoords = cell(1,length(scale));
     [GridCoords{:}] = ndgrid(scale{:});
@@ -4102,7 +4128,6 @@ if iscell(scale) % define meshgrid
     % stores as matrix
     GridCoords = cellfun(@(x) x(:)', GridCoords, 'UniformOutput',0);
     scale = cat(1,GridCoords{:});
-
 end
 
 assert(size(scale,1)==size(W.scale,1), 'scale must has the same number of rows as the fitting scale data');
@@ -4118,19 +4143,43 @@ end
 if isempty(B) % no basis functions: use equation 15
     % evaluate prior covariance between train and test set
     isCovHP = contains(HP.type, "cov");
-    KK = P.CovFun({W.scale,scale},HP.HP(isCovHP), []);
-   % ProjK = Proj*KK;
+    nTest = size(scale,2); % number of test datapoints
+    Kfull = P.CovFun([W.scale,scale],HP.HP(isCovHP), []); % covariance prior for joint train and test data points together
+
+    % update constraint structure to incorporate test datapoints
+    ct = constraint_structure(W);
+    if ct.type=="custom"
+        error('cannot compute posterior over test data for custom constraint for weights ''%s''', W.label);
+    elseif ct.type~="free"
+        ct.V(:,end+1:end+nTest) = 0;
+        ct.P = blkdiag(ct.P, eye(nTest));
+        Kfull = covariance_free_basis(Kfull, ct);
+    end
+    nTrain = size(Kfull,1)-nTest;
+
+    KK = Kfull(1:nTrain, nTrain+1:end);
+    % KK = P.CovFun({W.scale,scale},HP.HP(isCovHP), []);
+    % ProjK = Proj*KK;
+    Ktrain = Kfull(1:nTrain,1:nTrain); % should be the same as P.PriorCovariance
 
     MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
-    mu = linsolve(full(P.PriorCovariance),Proj*W.PosteriorMean',MatOptions)' * Proj*KK;
+    %mu = linsolve(full(P.PriorCovariance),Proj*W.PosteriorMean',MatOptions)' * Proj*KK;
+    mean_train = Proj*(W.PosteriorMean-P.PriorMean)';
+    mu = linsolve(Ktrain,mean_train, MatOptions)' * KK;
+    if ct.type=="mean1" % add offset if prior mean is not null
+        mu = mu+1; 
+    elseif ct.type=="sum1"
+        mu = mu+1/W.nWeight;
+    end
 
     if nargout>1
-        Kin = P.CovFun(scale,HP.HP(isCovHP), []);
+        % Ktest = P.CovFun(scale,HP.HP(isCovHP), []);
+        Ktest = Kfull(nTrain+1:end, nTrain+1:end);
         rk = size(W.invHinvK,3); % rank
         K = zeros(nW, nW, rk);
         S = zeros(rk, nW);
         for r=1:rk
-            K(:,:,r) = Kin - KK'*W.invHinvK(:,:,r)*KK;
+            K(:,:,r) = Ktest - KK'*W.invHinvK(:,:,r)*KK;
             S(r,:) = sqrt(diag(K))';
         end
     end
@@ -4261,10 +4310,8 @@ for s=1:nSet
             error('covariance prior for weight ''%s'' should be square of size %d (was %d x %d)',W.label,nFW(d),size(SS,1),size(SS,2));
         end
 
-
         % project onto free basis (if constraint)
         SS= covariance_free_basis(SS, constraint_structure(W));
-
 
         % replicate covariance matrix if needed
         Sigma{s} = replicate_covariance(nRep, SS);

@@ -146,32 +146,20 @@ classdef gum
     % - 'plot_basis_functions': plot regressor basis functions
     %
     % See https://github.com/ahyafil/gum
-    % version 0.1.0. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
+    % version 0.1.1. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
 
     % TODO
-    % change covariance prior projected by constraint (formula is wrong)
-    % add initialize_weights w custom constraints
-    % DONE
-    % allow formula (x1+x2)|x3 and x1|(x2+x3)
-    % corrected bugs with basis functions for lagged regressors
-    % corrected many small bugs
-    % changed 'fourier_basis' to 'basis_fourier' (consistent w others)
-    % remove_constrained_rho for custom constraint
-    % compute matrix/array of weights for multidim regressor (TEST
-    % compose_weights)
-    % added property 'nTotalFreeParameters' to regressor object
-    % corrected computation of degree of freedom
-
     % - add more lines in design matrix plot if concatenated regressors or
     % sublevels
     % - improve indexing in sparsearray
+    % - plot: same color scheme if same variable (will have to add variable
+    % label in Weights)
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
     % - link functions as in glmfit
     % - test rank again
-    % - crossvalidation compatibility with matlab native (done?)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - add label on models
@@ -752,6 +740,18 @@ classdef gum
                 use_gradient = param.gradient;
                 assert(ischar(use_gradient) && any(strcmpi(use_gradient, {'on','off','check'})), 'incorrect value for field ''gradient''');
             end
+            if strcmp(HPfit, 'cv') && ismember(use_gradient,{'on','check'})
+                % check that there is no weights with basi functions and
+                % constraint (gradient not coded for this case, should
+                % change covariance_free_basis)
+                W = [M.Weights]; 
+                Basis_and_Constraint = ~cellfun(@isempty, {W.basis}) & ~cellfun(@(x) isequal(x,"free"), {W.constraint});
+                if any(Basis_and_Constraint)
+                    iW = find(Basis_and_Constraint,1);
+                    warning('Gradient of CVLL not coded for weights with basis functions and constraints (%s), switching to gradient-less optimization',W(iW).label);
+                    use_gradient = 'off';
+                end
+            end
 
             %%  check cross validation parameters
             if isfield(param, 'crossvalidation')
@@ -762,9 +762,7 @@ classdef gum
             end
             obj = check_crossvalidation(obj);
 
-            %% run optimization over hyperparameters
-
-            %if HPfit %% if fitting hyperparameters
+            %% process hyperparameters (which are to be fitted, bounds, initial values)
             HPall = [M.HP]; % concatenate HP structures across regressors
             HPini = [HPall.HP]; %hyperparameters initial values
             HP_LB = [HPall.LB]; % HP lower bounds
@@ -810,7 +808,7 @@ classdef gum
                 obj.param.initialpoints = param.initialpoints;
             end
 
-            %% optimize hyperparameters
+            %% apply fitting method
             switch lower(HPfit)
                 case 'basic' % grid search  hyperpameters that maximize marginal evidence
 
@@ -825,13 +823,10 @@ classdef gum
                     %% run estimation again with the optimized hyperparameters to retrieve weights
                     [~, obj] = errorscorefun(HP);
 
-
-                    %% expectation-maximization to find  hyperpameters that maximize marginal evidence
-                case 'em'
+                case 'em' % expectation-maximization to find  hyperpameters that maximize marginal evidence
                     obj = em(obj, HPini,HPidx, use_gradient, maxiter, HP_TolFun);
 
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
-
                     % clear persistent value for best-fitting parameters
                     cv_score();
 
@@ -984,7 +979,7 @@ classdef gum
                                             Bmat = B(1).B;
                                             this_mean = this_mean*Bmat;
                                             this_PriorMean = this_PriorMean*Bmat;
-                                            this_cov = Bmat' * this_cov *Bmat;
+                                            this_cov = Bmat' * W.constraint.P'* this_cov *W.constraint.P*Bmat;
 
                                             % define constraint in original
                                             % space
@@ -1318,9 +1313,9 @@ classdef gum
 
                         this_gradhp = zeros(1,size(CovJacob,3));
                         for q=1:size(CovJacob,3) % for each hyperparameter
-                         %   gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
-                           gradgrad = CovJacob(:,:,q)'*(PP*allU'); % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
-                           % gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
+                            %   gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+                            gradgrad = CovJacob(:,:,q)'*(PP*allU'); % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+                            % gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
                             gradgrad = gradgrad - gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
 
 
@@ -1422,7 +1417,7 @@ classdef gum
             %Covariance
             P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
             Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
-            invHinvK = P'*invHinvK*P;
+            % invHinvK = P'*invHinvK*P;
 
             % standard error of estimates
             all_se = sqrt(diag(Sfit.covb))';
@@ -1437,39 +1432,49 @@ classdef gum
             all_p = 2*normcdf(-abs(all_T));
 
             % distribute values of se, T, p and V to different regressors
-            % !! we should use set_weights method in regressor for that
-            midx = 0;
-            for m=1:obj.nMod
-                rr = rank(m);
+            M = M.set_weights(all_se,[],'PosteriorStd');
+            M = M.set_weights(all_T,[],'T');
+            M = M.set_weights(all_p,[],'p');
+            M = M.set_posterior_covariance(Sfit.covb);
+            M = M.set_posterior_covariance(invHinvK,'invHinvK');
 
-                for d=1:M(m).nDim
-                    W = M(m).Weights(d);
-                    nW = W.nWeight;
-                    nFW = M(m).nFreeParameters(d);
-                    W.PosteriorStd = zeros(M(m).rank, nW);
-                    W.T = zeros(M(m).rank,nW);
-                    W.p = zeros(M(m).rank, nW);
-                    W.PosteriorCov =  zeros(nW, nW, M(m).rank);
-                    if any(strcmp(W.type, {'continuous','periodic'}))
-                        W.invHinvK =  zeros(nW, nW, M(m).rank);
-                    end
-                    for r=1:M(m).rank
-                        idx = (1:nW) + (r-1)*nW + rr*sum([M(m).Weights(1:d-1).nWeight]) + midx; % index of regressors in design matrix
-                        W.PosteriorStd(r,:) = all_se(idx);
-                        W.T(r,:) = all_T(idx);
-                        W.p(r,:) = all_p(idx);
-                        W.PosteriorCov(:,:,r) = Sfit.covb(idx,idx);
-                        if any(strcmp(W.type, {'continuous','periodic'}))
-                            W.invHinvK(:,:,r) = invHinvK(idx,idx);
-                        end
-                    end
-                    M(m).Weights(d) = W;
-                end
-
-                midx = midx + M(m).nTotalParameters; % jump index by number of components in module
-             %   midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
-
-            end
+            %             midx = 0;
+            %             mfidx = 0;
+            %             for m=1:obj.nMod
+            %                 rr = rank(m);
+            %
+            %                 for d=1:M(m).nDim
+            %                     W = M(m).Weights(d);
+            %                     nW = W.nWeight;
+            %                     nFW = M(m).nFreeParameters(d);
+            %                   %  W.PosteriorStd = zeros(M(m).rank, nW);
+            %                   %  W.T = zeros(M(m).rank,nW);
+            %                   %  W.p = zeros(M(m).rank, nW);
+            %                     W.PosteriorCov =  zeros(nW, nW, M(m).rank);
+            %                     if any(strcmp(W.type, {'continuous','periodic'}))
+            %                         W.invHinvK =  zeros(nFW, nFW, M(m).rank);
+            %                     end
+            %                     for r=1:M(m).rank
+            %                         idx = (1:nW) + (r-1)*nW + rr*sum([M(m).Weights(1:d-1).nWeight]) + midx; % index of regressors in design matrix
+            %                       %  W.PosteriorStd(r,:) = all_se(idx);
+            %                       %  W.T(r,:) = all_T(idx);
+            %                       %  W.p(r,:) = all_p(idx);
+            %                         W.PosteriorCov(:,:,r) = Sfit.covb(idx,idx);
+            %                         if any(strcmp(W.type, {'continuous','periodic'}))
+            %                                                     fidx = (1:nFW) + (r-1)*nFW + rr*sum([M(m).nFreeParameters(1:d-1)]) + mfidx; % index of regressors in design matrix
+            %
+            %                             W.invHinvK(:,:,r) = invHinvK(fidx,fidx);
+            %                         end
+            %                     end
+            %                     M(m).Weights(d) = W;
+            %                 end
+            %
+            %                 midx = midx + M(m).nTotalParameters; % jump index by number of components in module
+            %                                 mfidx = mfidx + M(m).nTotalFreeParameters; % jump index by number of components in module
+            %
+            %              %   midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
+            %
+            %             end
 
             Sfit.exitflag = Sfit.exitflag;
             Sfit.exitflag_allstarting = Sfit.exitflag_allstarting;
@@ -3101,7 +3106,7 @@ classdef gum
             % we count parameter in projected space
             M = obj.regressor.project_to_basis;
 
-            obj.score.nParameters = sum([M.nTotalParameters]); % total number of parameters 
+            obj.score.nParameters = sum([M.nTotalParameters]); % total number of parameters
             obj.score.nFreeParameters = sum([M.nTotalFreeParameters]); % total number of free parameters
 
             if isempty(obj.ObservationWeight)
@@ -4597,10 +4602,10 @@ cnt = 1; % HP counter
 for p=find(HPs.fit) % for all fitted hyperparameter
     this_gK = gradK(:,:,p);
 
-%     if ~noConstraint
-%         gradJ = V/VKV*V'*this_gK*(V/VKV*V'*Kfull - eye(size(Kfull,1)));
-%         this_gK = P*(gradK(:,:,p)*J + Kfull*gradJ)*P';
-%     end
+    %     if ~noConstraint
+    %         gradJ = V/VKV*V'*this_gK*(V/VKV*V'*Kfull - eye(size(Kfull,1)));
+    %         this_gK = P*(gradK(:,:,p)*J + Kfull*gradJ)*P';
+    %     end
     KgK = linsolve(K,this_gK,MatOptions);
     grad(cnt) = -(  trace( KgK*(KinvSigma-eye(k))) + mdif*KgK*Kmdif )/2;
     cnt = cnt + 1;
