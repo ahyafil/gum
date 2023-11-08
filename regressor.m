@@ -4136,7 +4136,7 @@ nW = size(scale,2); % number of prediction data points
 
 B = W.basis;
 if constraint_type(W)=="free"
-    Proj = eye(W.nWeights);
+    Proj = eye(W.nWeight);
 else
     Proj = W.constraint.P;
 end

@@ -1416,8 +1416,11 @@ for d= prod_dims
         end
 
         X = X*u;
-
+        
     end
+    if ismatrix(X) && prod_dims(end)<=2 && issparse(u) % ideally we want the product of X*u to be directly sparse without having to go through the non-sparse version
+            X = sparse(X);
+        end
     S(d) = nrow;
 
 end
