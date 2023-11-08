@@ -886,7 +886,13 @@ classdef sparsearray
                 error('Arguments must be 2-D, or at least one argument must be scalar. Use TIMES (.*) for elementwise multiplication.');
 
             else
-                obj = matrix(obj1)*matrix(obj2);
+                if isa(obj1,'sparsearray')
+                    obj1 = matrix(obj1);
+                end
+                if isa(obj2,'sparsearray')
+                    obj2 = matrix(obj2);
+                end
+                obj = obj1*obj2;
             end
 
         end
@@ -1281,7 +1287,6 @@ if ~all(S1==S2 | S1==1 | S2==1)
 end
 
 %% replicate matrices along singleton dimensions to match size
-% D = max(ndims(obj1),ndims(obj2)); % number of dimensions
 D = length(S1); % number of dimensions
 R1 = ones(1,D); % replication number per dimension (default:1), for each object
 R2 = ones(1,D);
@@ -1328,11 +1333,11 @@ S = max(S1,S2); % size of the output array
 Snonsub = S;
 Snonsub(fc) = 1;
 
-if isequal(fun, @times) && all(obj1.value(:)==1)
+if isequal(fun, @times) && prod(Snonsub)==numel(obj2.value) && all(obj1.value(:)==1)
     % if pairwise multiplication and obj1 is pure one-hot encoding, values are simply inherited from obj2
     x = obj2.value;
 
-elseif isequal(fun, @times) && all(obj2.value(:)==1)
+elseif isequal(fun, @times) && prod(Snonsub)==numel(obj1.value) && all(obj2.value(:)==1) 
     % if pairwise multiplication and obj2 is pure one-hot encoding,
     % values are simply inherited from obj1
     x = obj1.value;

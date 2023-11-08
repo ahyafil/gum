@@ -148,6 +148,11 @@ classdef gum
     % See https://github.com/ahyafil/gum
     % version 0.1.1. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
 
+    %DONE
+    % - corrected a small bug in element-wise product for sparsearray
+    % - changed defcolors to beautiful colours
+    % - added automatic labelling to all figures
+        % - no intercept if model includes a dim1 polynomial
     % TODO
     % - add more lines in design matrix plot if concatenated regressors or
     % sublevels
@@ -170,6 +175,7 @@ classdef gum
 
     properties
         formula = ''
+        label = ''
         regressor
         T
         obs
@@ -506,14 +512,14 @@ classdef gum
                 if nReg>30
                     fprintf('\nToo many regressor values (%d) to print, use export_weights_to_table instead\n', nReg);
                 elseif isgam(obj)
-                    fprintf('%12s %10s %8s %8s %8s %8s\n', 'Regressor','Level','Mean','StdDev','T-stat','p-value');
+                    fprintf('%12s %12s %8s %8s %8s %8s\n', 'Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
-                        fprintf(['%12s %10' char_type(W.scale) ' %8f %8f %8f %8f\n'], label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                        fprintf(['%12s %12' char_type(W.scale) ' %8f %8f %8f %8f\n'], label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
                     end
                 else
-                    fprintf('%10s %12s %8s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','Mean','StdDev','T-stat','p-value');
+                    fprintf('%10s %12s %12s %8s %8s %8s %8s\n', 'RegressorId','Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
-                        fprintf(['%10s %12s %8' char_type(W.scale) ' %8f %8f %8f %8f\n'], string(W.regressor(r)), label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
+                        fprintf(['%10s %12s %12' char_type(W.scale) ' %8f %8f %8f %8f\n'], string(W.regressor(r)), label(r), W.scale(r), W.PosteriorMean(r), W.PosteriorStd(r), W.T(r), W.p(r));
                     end
                 end
 
@@ -768,9 +774,13 @@ classdef gum
             HP_LB = [HPall.LB]; % HP lower bounds
             HP_UB = [HPall.UB]; % HP upper bounds
             HP_fittable = logical([HPall.fit]);  % which HP are fitted
-            if strcmpi(HPfit,'em') &&  any(contains([HPall.type],'basis') & HP_fittable) % if  any fittable HP parametrizes basis functions
+            if strcmpi(HPfit,'em') 
+                W = [M.Weights];
+                basis = [W.basis];
+                if any(contains([HPall.type],'basis') & HP_fittable) && ~isempty(basis) && any([basis.fixed])% if  any fittable HP parametrizes basis functions
                 warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
-            end
+                end
+                end
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
@@ -979,7 +989,10 @@ classdef gum
                                             Bmat = B(1).B;
                                             this_mean = this_mean*Bmat;
                                             this_PriorMean = this_PriorMean*Bmat;
-                                            this_cov = Bmat' * W.constraint.P'* this_cov *W.constraint.P*Bmat;
+                                            if ~isequal(W.constraint,"free") && W.constraint.nConstraint>0
+                                                this_cov = W.constraint.P'* this_cov *W.constraint.P;
+                                            end
+                                            this_cov = Bmat' * this_cov *Bmat;
 
                                             % define constraint in original
                                             % space
@@ -1255,7 +1268,9 @@ classdef gum
                     end
 
                     %fit on training set
-                    obj_train = IRLS(extract_observations(obj,trainset));
+                    %obj_train = IRLS(extract_observations(obj,trainset));
+                    obj_train = obj.extract_observations(trainset).IRLS();
+
                     exitflag_CV(p) = obj_train.score.exitflag;
 
                     allU = concatenate_weights(obj_train);
@@ -1265,13 +1280,12 @@ classdef gum
                     s = score_train.scaling; % dispersion parameter
 
                     %compute score on testing set (mean log-likelihood per observation)
-                    obj_test = extract_observations(obj,validationset); % model with test set
-                    %obj_test.regressor = set_weights(obj_test.regressor, obj_train.regressor); % set weights computed from training data
+                    obj_test = obj.extract_observations(validationset); % model with test set
                     obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
                     obj_test.Predictions.rho = [];
                     obj_test.score.scaling = s; % dispersion parameter estimated in training set
 
-                    [obj_test,validationscore(p),grad_validationscore] = LogLikelihood(obj_test); % evaluate LLH, gradient of LLH
+                    [obj_test,validationscore(p),grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
                     accuracy(p) = Accuracy(obj_test); % and accuracy
 
                     nValidation = obj_test.score.nObservations; % number of observations in test set
@@ -3168,7 +3182,7 @@ classdef gum
             end
 
             if length(index) ==1
-                obj.formula = obj.regressor(index).formula + " knock-out";
+                obj.label = obj.regressor(index).formula + " knock-out";
             end
 
             % remove regressors
@@ -3438,7 +3452,11 @@ classdef gum
             for f = 1:length(fn) % make sure they're all row vectors
                 X = S.(fn{f});
                 if isvector(X) && ~ischar(X)
+                    if numel(X)==numel(S.nObservations)
                     S.(fn{f}) = X(:);
+                    else
+S = rmfield(S, fn{f});
+                    end
                 end
             end
             T = struct2table(S);
@@ -3878,6 +3896,8 @@ classdef gum
             % now plot
             obj.score.isEstimated = true; % to allow plotting
             h = obj.plot_weights(idx);
+
+            set_figure_name(gcf, obj, 'VIF'); % figure name
         end
 
         %% PLOT POSTERIOR COVARIANCE
@@ -3928,6 +3948,7 @@ classdef gum
             end
 
             axis off;
+            set_figure_name(gcf, obj, 'Posterior Covariance'); % figure name
         end
 
 
@@ -3972,7 +3993,7 @@ classdef gum
 
             end
 
-            if length(obj)>1
+            if length(obj)>1 % array of models
 
                 % first check that all models all have same number of
                 % subplots
@@ -4007,11 +4028,14 @@ classdef gum
                         xlabel(this_h, '');
                     end
                 end
+                set(gcf,'name',"Weights "+numel(obj)+ "models");
                 return;
             end
 
             % plot regressor weights
             h = plot_weights(obj.regressor,U2, varargin{:});
+
+            set_figure_name(gcf, obj, 'Weights');
         end
 
 
@@ -4052,15 +4076,22 @@ classdef gum
                 end
             end
 
+            set_figure_name(gcf, obj, 'Hyperparameters');
         end
 
         %% PLOT DATA GROUPED BY VALUES OF PREDICTOR
-        function h = plot_data_vs_predictor(obj, Q)
-            % h = plot_data_vs_predictor(M)
-            % h = plot_data_vs_predictor(M, Q)
+        function [h,Q] = plot_data_vs_predictor(obj, Q)
+            % h = plot_data_vs_predictor(M) plots the predicted vs actual
+            % average of the dependent variable per bins of the predictor
+            % rho (i.e. posterior predictive checks). For example for
+            % binary observations, the predicted relationship is the
+            % logistic sigmoid function, while the actual value is the
+            % number of observations equal to 1 in each bin of rho.
             %
-            % TODO: add raw plot
-
+            % h = plot_data_vs_predictor(M, Q) defines the number of
+            % quantiles Q used to group values of rho. Alternatively, Q can
+            % be a vector of cumulative probability values (increasing
+            % values between 0 and 1) - see function quantile.
             if length(obj)>1 % if more than one model, plot each model in different subplot
                 if nargin<2
                     Q = [];
@@ -4086,8 +4117,9 @@ classdef gum
             end
 
             H = quantile(rho,Q);
-
-            H = [-inf H inf];
+       
+            H = [-inf unique(H) inf];
+            nQ = length(H)-2;
 
             if isempty(obj.ObservationWeight)
                 w = ones(obj.nObs,1);
@@ -4095,9 +4127,9 @@ classdef gum
                 w = obj.ObservationWeight;
             end
 
-            M = zeros(1,Q+1);
-            sem = zeros(1,Q+1);
-            for q=1:Q+1
+            M = zeros(1,nQ+1);
+            sem = zeros(1,nQ+1);
+            for q=1:nQ+1
                 idx = rho>H(q) & rho<=H(q+1);
                 nobs = sum(w(idx));
                 M(q) = sum(obj.T(idx) .* w(idx)) /  nobs;
@@ -4110,7 +4142,6 @@ classdef gum
             end
 
             H = [H(2:end-1) max(rho)];
-
 
             h =  wu(H, M, sem);
             axis tight; hold on;
@@ -4130,7 +4161,7 @@ classdef gum
             xlabel('\rho');
             ylabel('dependent variable');
 
-
+            set_figure_name(gcf, obj, 'Data vs Model');
         end
 
 
@@ -4230,6 +4261,8 @@ classdef gum
             %
             %h = plot_basis_functions(...) provides graphical handles
             h = plot_basis_functions(obj.regressor, varargin{:});
+
+            set_figure_name(gcf, obj, 'basis functions');
         end
     end
     %%%% END OF METHODS
@@ -4883,13 +4916,13 @@ while ~isempty(fmla)
 
         V{end+1} = struct('variable',v, 'type','none');
 
-    else % variable name (linear weight)
+    else % variable name (default weight)
         [v, fmla] = starts_with_word(fmla, VarNames);
 
         if ~isempty(v) %% linear variable
 
             opts = struct;
-            if iscategorical(Tbl.(v))
+            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v)) 
                 type = 'categorical';
             else
                 type = 'linear';
@@ -5047,7 +5080,7 @@ for v=1:length(V)
     opts_values = struct2cell(V{v}.opts);
     opts_combined = [opts_fields opts_values]';
 
-    % condition regresor on value of split variable
+    % condition regressor on value of split variable
     if isfield(V{v}.opts, 'split')
         split_var =  V{v}.opts.split;
         opts_combined(:,strcmp(opts_fields,'split')) = []; % remove split (not an option to rgressor constructor method)
@@ -5066,7 +5099,7 @@ end
 %build predictor from operations between predictors
 [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct);
 
-if  withMixture
+if withMixture
     param.mixture = mixture_type;
     if ~all(idxC==1)
         param.indexComponent = idxC;
@@ -5085,6 +5118,13 @@ if  withMixture
     end
 end
 
+% do not include intercept if any dimension-1 polynomial included (because
+% it is the 0 order polynomial
+W = [M([M.nDim]==1).Weights]; % weights for dim1 regressors
+basis = [W.basis];
+if ~isempty(basis) && any(cellfun(@(f) isequal(f,@basis_poly), {basis.fun}))
+    param.constant = 'off';
+end
 end
 
 %% COMPOSE REGRESSORS WITH OPERATORS
@@ -5411,3 +5451,14 @@ function bool = isFreeStructure(ct)
 bool = isequal(ct,"free") || ct.type=="free";
 end
 
+%% figure name
+function set_figure_name(gcf, obj, str)
+if ~isempty(obj.label)
+    str = [str ' ' obj.label];
+end
+if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
+str = [str ' (' obj.score.Dataset ')'];
+end
+set(gcf, 'name',str);
+
+end

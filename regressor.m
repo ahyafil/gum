@@ -141,7 +141,6 @@ classdef regressor
             OneHotEncoding = [];
             scale = [];
             basis = 'auto';
-            %do_spectral =0;
             period = 2*pi;
             single_tau = false;
             HPfit = [];
@@ -150,6 +149,7 @@ classdef regressor
             constraint = [];
             binning = [];
             label = "";
+            dimensions = "";
             variance = [];
             tau = [];
             color = [];
@@ -190,8 +190,6 @@ classdef regressor
                         tau = varargin{v+1};
                     case 'period'
                         period = varargin{v+1};
-                        %   case 'condthresh'
-                        %       condthresh = varargin{v+1};
                     case 'singlescale'
                         single_tau = varargin{v+1};
                     case 'sum'
@@ -199,8 +197,6 @@ classdef regressor
                         %   assert(any(strcmp(summing, {'weighted','linear','continuous','equal','split','separate'})), 'incorrect value for option ''sum''');
                     case 'constraint'
                         constraint = varargin{v+1};
-
-                        % assert(ischar(constraint), 'constraint C should be a character array');
                     case 'binning'
                         binning = varargin{v+1};
                         if ~isempty(binning)
@@ -208,6 +204,8 @@ classdef regressor
                         end
                     case 'label'
                         label = string(varargin{v+1});
+                    case 'dimensions'
+                        dimensions = varargin{v+1};
                     case 'rank'
                         obj.rank = varargin{v+1};
                     case 'plot'
@@ -372,6 +370,8 @@ classdef regressor
             % labels
             if isempty(label)
                 label = "x" + (1:nD-1);
+            elseif isscalar(label)
+                label = [strings(1,nD-1) label];
             end
 
             %% build data and variables depending on coding type
@@ -1441,8 +1441,6 @@ classdef regressor
                     obj.Prior(d).CovFun = @covSquaredExp; % session covariance prior
                     obj.Prior(d).type = 'SquaredExponential';
                 end
-                %  obj.Weights(d).nFreeWeight = obj.Weights(d).nWeight;
-
             elseif length(basis)>=7 && strcmpi(basis(1:7), 'fourier')
 
                 if length(basis)>7 % 'fourierN'
@@ -1456,14 +1454,7 @@ classdef regressor
                 if any(strcmp(summing,{'split','separate'}))
                     error('spectral trick not coded for sum=''%s''', summing);
                 end
-                %if strcmpi(type,'periodic')
-                %    tau = period/4; % initial time scale: period/4
-                %else
-                %    tau = scale(end)-scale(1); % initial time scale: span of values
-                %end
-
                 obj.Prior(d).CovFun = @covSquaredExp_Fourier;
-                %   obj.Weights(d).nFreeWeight = nBasisFun;
 
                 B.fun = @basis_fourier;
                 B.fixed = true; % although the actual number of regressors do change
@@ -2999,7 +2990,7 @@ classdef regressor
                 if length(label) ~= length(scale)
                     error('length of label does not match number of values');
                 end
-            else
+            elseif isempty(label)
                 label = scale;
             end
 
@@ -3446,6 +3437,12 @@ classdef regressor
                 obj(1).Data = cat(2,obj.Data); % concatenate regressors
                 obj(1).Weights.scale = [W.label];
                 obj(1).Weights.nWeight = numel(obj);
+                if all([W.label] == erase(W(1).label,"1")+(1:length(W))) % in case variables are called x1 + x2 + x3...
+                    obj(1).Weights.label =  erase(W(1).label,"1"); % rename weight label as "x"
+                    obj(1).Weights.scale = erase(obj(1).Weights.scale,obj(1).Weights.label ); % and scale as 1,2,3...
+                else
+                    obj(1).Weights.label = "group";
+                end
                 %  obj(1).Weights.nFreeWeight = sum([W.nFreeWeight]);
                 obj = obj(1);
                 return;
@@ -3710,7 +3707,8 @@ classdef regressor
 
             only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
             cols = defcolor;
-            colmaps = {'jet','hsv','winter','automn'};
+            colmaps = {'jet','hsv','spring','summer','winter','automn','hot','parula','gray','bone','copper','pink',...
+'hot','lines','colorcube','prism','sky','abyss','flag'};
 
             NoFixedWeights = zeros(1,size(idx,2));
             for j=1:size(idx,2) % for each set of regressor
@@ -3790,6 +3788,9 @@ classdef regressor
             for f=1:length(filds)
                 ff =  concatenate_weights(obj,0,filds{f}); % concatenate values over all regressors
                 if length(ff) == height(T)
+                    if isstring(ff)
+                    ff(isnan(strlength(ff))) = "";
+                    end
                     T.(filds{f}) = ff';
                 elseif f==1 % scale
                     all_scale_string = [];
@@ -3936,8 +3937,7 @@ plot_opt{end+1} = 'Color';
 twodmap = size(scale{1},2)>1;
 nCurve = size(U,2);
 
-if nCurve<5 % different colors for each curve
-
+if nCurve<4 % different colors for each curve
     plot_opt{end+1} = cols(mod(c+(1:nCurve),length(cols))+1);
     if rk ==1
         c = c + nCurve;
@@ -3996,6 +3996,7 @@ else
 
     % cufve/bar plot with errors
     [~,~,h_nu] = wu([],U,se,scale,plot_opt{:});
+    ylabel('weights');
 end
 
 % add horizontal line for reference value
@@ -4151,7 +4152,7 @@ if isempty(B) % no basis functions: use equation 15
     if ct.type=="custom"
         error('cannot compute posterior over test data for custom constraint for weights ''%s''', W.label);
     elseif ct.type~="free"
-        ct.V(:,end+1:end+nTest) = 0;
+        ct.V(end+1:end+nTest,:) = 0;
         ct.P = blkdiag(ct.P, eye(nTest));
         Kfull = covariance_free_basis(Kfull, ct);
     end
@@ -4359,7 +4360,7 @@ end
 
 %% CREATE EMPTY WEIGHT STRUCTURE
 function W = empty_weight_structure(nD, DataSize, scale, color)
-W = struct('type','','label', '', 'nWeight',0, ...
+W = struct('type','','label', '', 'dimensions',[],'nWeight',0, ...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
     'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[],'U_allstarting',[]);

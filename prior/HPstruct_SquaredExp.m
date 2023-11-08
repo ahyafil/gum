@@ -43,7 +43,7 @@ else
     if ~isempty(binning)
         HH.LB = [log(binning)-2 -max_log_var];
     else
-        HH.LB = [max(-max_log_var,log(dt)-2) -max_log_var];  % to avoid exp(HP) = Inf
+        HH.LB = [max(-max_log_var,min(log(dt))-2) -max_log_var];  % to avoid exp(HP) = Inf
     end
     HH.type =repmat("cov",1,nScale+1);
 
