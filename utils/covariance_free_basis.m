@@ -17,7 +17,9 @@ if isequal(ct,"free") || ct.nConstraint==0
     return;
 elseif ct.type =="fixed"
     Kfree = [];
+    if nargout>1
     gradKfree = zeros(0,0,size(gradK,3));
+    end
     return;
 end
 n = size(K,1);
