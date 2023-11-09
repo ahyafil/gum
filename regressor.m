@@ -1272,7 +1272,9 @@ classdef regressor
                 nMultiConstraint = ct.nConstraint - sum(constrained_weight(W(m))); % constraints that apply on sets of weights (not individual ones, which have been dealt before hand)
                 if nMultiConstraint>0
                     if ct.nConstraint==1 && all(ct.V==ct.V(1)) % constraint applies equally to all weights (e.g. "sum1", "mean1") - same as below but easier
-                        if ct.u~=0
+                        if ct.u==0
+                            Ubase = zeros(1,nW(m)*obj(m).rank);
+                        else
                             U_const = ct.u / sum(ct.V); %
                             Ubase = U_const*ones(1,nW(m)*obj(m).rank);
 
