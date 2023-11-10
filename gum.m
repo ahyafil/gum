@@ -153,6 +153,7 @@ classdef gum
     % - changed defcolors to beautiful colours
     % - added automatic labelling to all figures
         % - no intercept if model includes a dim1 polynomial
+        % - improved computing time for IRLS w sparse matrix in some cases
     % TODO
     % - add more lines in design matrix plot if concatenated regressors or
     % sublevels
@@ -1639,7 +1640,7 @@ classdef gum
                 vbs = obj(i).param.verbose;
                 obj(i).param.verbose = 'off';
                 for i=1:numel(obj)
-                    obj_bt = IRLS(extract_observations(obj(i),bt_set));
+                    obj_bt = obj(i).extract_observations(bt_set).IRLS();
 
                     Ucat = concatenate_weights(obj_bt);
                     U_bt{i}(:,p) = Ucat;
@@ -1750,7 +1751,6 @@ classdef gum
 
             %  U_allstarting = zeros(obj.score.nParameters, initialpoints); % estimated weights for all starting points
             U_allstarting = zeros(length(concatenate_weights(M)), initialpoints); % estimated weights for all starting points
-
 
             logjoint_allstarting = zeros(1,initialpoints); % log-joint for all starting points
             exitflag_allstarting = zeros(1,initialpoints); % exitflag for all starting points
@@ -1990,7 +1990,14 @@ classdef gum
 
                                 % Hessian matrix on the free basis (eq. 12)
                                 if SpCode
+                                    sparseness = nnz(Phi)/numel(Phi);
+                                    if sparseness>.1 || (sparseness>.03 && size(Phi,2)<100)
+                                        % in this case this runs faster
+                                        % using full representations
+                                    PhiRPhi = full(Phi)'*(R.*full(Phi));
+                                    else
                                     PhiRPhi = Phi'*(R.*Phi);
+                                    end
                                     if ~inf_cov %finite covariance matrix
                                         H = KP{cc,d}*PhiRPhi*P{cc,d}' + s*eye(nFree(cc,d)); % should be faster this way
                                     else % any infinite covariance matrix (e.g. no prior on a weight)

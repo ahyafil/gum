@@ -12,9 +12,11 @@ else
     span = max(scale,[],2)' - min(scale,[],2)'; % total span in each dimension
     tau =  sqrt(dt.*span); % geometric mean between the two
     tau = max(tau,span/10);
+    log_dt = log(dt);
     if single_tau
         tau = mean(tau);
         span = max(span);
+        log_dt = min(log_dt);
     end
 end
 nScale = length(tau);
@@ -33,7 +35,7 @@ HH.fit = true(1,nScale+1);
 % upper and lower bounds on hyperparameters
 if strcmp(basis, 'fourier')
     HH.LB(1:nScale) = log(2*tau/length(scale)); % lower bound on log-scale: if using spatial trick, avoid scale smaller than resolution
-    HH.LB(nScale+1) = max(-max_log_var, log(dt)-3); % to avoid exp(HP) = 0
+    HH.LB(nScale+1) = max(-max_log_var, min(log_dt)-3); % to avoid exp(HP) = 0
     HH.UB = [log(span)+2 max_log_var];  % scale not much larger than overall span to avoid exp(HP) = Inf
 HH.type = repmat("basis_cov",1,nScale+1);
 
@@ -43,7 +45,7 @@ else
     if ~isempty(binning)
         HH.LB = [log(binning)-2 -max_log_var];
     else
-        HH.LB = [max(-max_log_var,min(log(dt))-2) -max_log_var];  % to avoid exp(HP) = Inf
+        HH.LB = [max(-max_log_var,log_dt-2) -max_log_var];  % to avoid exp(HP) = Inf
     end
     HH.type =repmat("cov",1,nScale+1);
 

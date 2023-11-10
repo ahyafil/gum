@@ -514,7 +514,7 @@ classdef regressor
 
                     % define continuous prior
                     obj = define_continuous_prior(obj,type, nD,this_scale, HP{nD}, basis{nD}, ...
-                        binning,summing, period, single_tau, condthresh);
+                        binning,summing, period, single_tau(nD), condthresh);
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
@@ -1698,28 +1698,55 @@ classdef regressor
                 obj = obj.initialize_weights();
             end
 
-            ii = 0; % index for regressors in design matrix
+%            ii = 0; % index for regressors in design matrix
 
-            % use sparse coding if any data array is sparse
-            SpCode = any(cellfun(@issparse, {obj.Data}));
-            if SpCode
-                Phi = sparse(obj(1).nObs,sum(nWeight));
-            else
-                Phi = zeros(obj(1).nObs,sum(nWeight));
-            end
+%             % use sparse coding if any data array is sparse
+%             SpCode = any(cellfun(@issparse, {obj.Data}));
+%             if SpCode
+%                 Phi = sparse(obj(1).nObs,sum(nWeight));
+%             else
+%                 Phi = zeros(obj(1).nObs,sum(nWeight));
+%             end
+%             for m=1:nM % for each module
+% 
+%                 % project on all dimensions except the dimension to optimize
+%                 for d=dims{m}
+%                     for r=1:obj(m).rank
+%                         idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
+%                         Phi(:,idx) = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
+%                         ii = idx(end); %
+%                     end
+%                 end
+%             end
+
+            % faster to not pre-allocate if mixes sparse and non-sparse
+            % coding
+            Phi = cell(1,length([dims{:}]));
+ii = 1;
+
             for m=1:nM % for each module
 
                 % project on all dimensions except the dimension to optimize
                 for d=dims{m}
                     for r=1:obj(m).rank
-                        idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
-                        Phi(:,idx) = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
-                        ii = idx(end); %
+                        %idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
+                        Phi{ii} = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
+                        if isrow(Phi{ii})
+                            Phi{ii} = Phi{ii}';
+                        end
+                        %ii = idx(end); %
+                        ii = ii+1;
                     end
                 end
             end
 
+            if any(~cellfun(@issparse,Phi)) && sum(cellfun(@nnz, Phi))/sum(cellfun(@numel, Phi))>.1 % if overall sparseness lower than .1
+                    % use non-sparse coding
+                    Phi = cellfun(@full, Phi, 'UniformOutput',false);
+            end
 
+            Phi = cat(2,Phi{:});
+            
         end
 
         %% CHECK PRIOR COVARIANCE and provide default covariance if needed
