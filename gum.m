@@ -3279,7 +3279,6 @@ classdef gum
             if nargin==1 % whether we put model index as first dimension in weights
                 place_first = false;
             end
-
             nObj = length(obj);
 
             %% concatenate weights
@@ -3321,7 +3320,7 @@ classdef gum
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x)), scale(:,d))); % if scale of nans
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x),'all'), scale(:,d))); % if scale of nans
                     if DifferentScale && isnumeric(scale{1,d})
 
                         % just in case same scale with some numerical imprecisions
@@ -3539,8 +3538,6 @@ classdef gum
                     obj.regressor(m).HP(d).std = std(HPHP,[],1);
                 end
             end
-
-
         end
 
         %% EXPORT WEIGHTS TO TABLE
