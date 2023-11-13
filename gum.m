@@ -14,6 +14,7 @@ classdef gum
     % define the formula.
     %
     % Possible fields in params are:
+    % - 'label': provide label to model
     % -'observations': 'binomial' (default), 'normal', 'poisson' or
     % 'neg-binomial'
     % - 'link': link function. Default is canonical link function ('logit'
@@ -152,14 +153,20 @@ classdef gum
     % - corrected a small bug in element-wise product for sparsearray
     % - changed defcolors to beautiful colours
     % - added automatic labelling to all figures
-        % - no intercept if model includes a dim1 polynomial
-        % - improved computing time for IRLS w sparse matrix in some cases
+    % - no intercept if model includes a dim1 polynomial
+    % - improved computing time for IRLS w sparse matrix in some cases
+    % - added 'dimensions' to weight fields, used for axis labels in
+    % plot_weights
+    % - shaded colours in bar plots (mybar)
+    % - corrected small bug in neg-entropy (em algo)
+    % - plot_weights: same color scheme if same dimension
+
     % TODO
+    % - allow for collapse of 2nd & 3rd dim in wu
+    % - 
     % - add more lines in design matrix plot if concatenated regressors or
     % sublevels
     % - improve indexing in sparsearray
-    % - plot: same color scheme if same variable (will have to add variable
-    % label in Weights)
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
@@ -224,6 +231,12 @@ classdef gum
 
             %  n = prod(n); % number of observations
 
+            % model label
+            if isfield(param,'label')
+                 obj.label = char(param.label);
+                 param = rmfield(param,'label');
+            end
+
             % compose formula
             if isempty(obj.formula)
                 for i=1:nMod
@@ -264,6 +277,7 @@ classdef gum
             end
             obj.score.isEstimated = 0;
             obj.score.isFitted = 0;
+            obj.score.Dataset = '';
 
             %% transform two-column dependent variable into one-column
             if BinaryCountCode % if binary observations with one column for counts of value 1 and one column for total counts
@@ -372,7 +386,6 @@ classdef gum
                 end
             end
 
-
             obj.param = param;
             obj.regressor = M;
 
@@ -420,6 +433,8 @@ classdef gum
             if isfield(param, 'split')
                 obj = split(obj, param.split);
             end
+
+            
         end
 
         %%% DISPLAY GUM OBJECT
@@ -435,8 +450,13 @@ classdef gum
             end
 
             fprintf([repmat('=',1,80) '\n']);
-            fprintf('Generalized Unrestricted Model (GUM) object\n');
-            fprintf('%s\n', obj.formula);
+            fprintf('Generalized Unrestricted Model (GUM) object');
+            if ~isempty(obj.label)
+                fprintf(': %s',obj.label);
+            else
+                fprintf(': unnamed model');
+            end
+            fprintf('\n%s\n', obj.formula);
             fprintf([repmat('-',1,80) '\n']);
 
             if isglm(obj)
@@ -751,7 +771,7 @@ classdef gum
                 % check that there is no weights with basi functions and
                 % constraint (gradient not coded for this case, should
                 % change covariance_free_basis)
-                W = [M.Weights]; 
+                W = [M.Weights];
                 Basis_and_Constraint = ~cellfun(@isempty, {W.basis}) & ~cellfun(@(x) isequal(x,"free"), {W.constraint});
                 if any(Basis_and_Constraint)
                     iW = find(Basis_and_Constraint,1);
@@ -775,13 +795,13 @@ classdef gum
             HP_LB = [HPall.LB]; % HP lower bounds
             HP_UB = [HPall.UB]; % HP upper bounds
             HP_fittable = logical([HPall.fit]);  % which HP are fitted
-            if strcmpi(HPfit,'em') 
+            if strcmpi(HPfit,'em')
                 W = [M.Weights];
                 basis = [W.basis];
                 if any(contains([HPall.type],'basis') & HP_fittable) && ~isempty(basis) && any([basis.fixed])% if  any fittable HP parametrizes basis functions
-                warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
+                    warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
                 end
-                end
+            end
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
@@ -1994,9 +2014,9 @@ classdef gum
                                     if sparseness>.1 || (sparseness>.03 && size(Phi,2)<100)
                                         % in this case this runs faster
                                         % using full representations
-                                    PhiRPhi = full(Phi)'*(R.*full(Phi));
+                                        PhiRPhi = full(Phi)'*(R.*full(Phi));
                                     else
-                                    PhiRPhi = Phi'*(R.*Phi);
+                                        PhiRPhi = Phi'*(R.*Phi);
                                     end
                                     if ~inf_cov %finite covariance matrix
                                         H = KP{cc,d}*PhiRPhi*P{cc,d}' + s*eye(nFree(cc,d)); % should be faster this way
@@ -3251,8 +3271,7 @@ classdef gum
         %% CONCATENATE WEIGHTS OVER POPULATION
         function obj = concatenate_over_models(obj, place_first)
             % M = concatenate_over_models(M)
-            % concatenates weights from array of models (e.g. created by
-            % splitting a model) into a single model (usually for plotting
+            % concatenates weights from array of models (e.g. same model for different datasets) into a single model object (usually for plotting
             % and storing)
             %
             % M = concatenate_over_models(M, true) to place model index as
@@ -3298,10 +3317,11 @@ classdef gum
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
+                    obj(1).regressor(m).Weights(d).dimensions(end+1) = ""; % dataset
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x)), scale)); % if scale of nans
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x)), scale(:,d))); % if scale of nans
                     if DifferentScale && isnumeric(scale{1,d})
 
                         % just in case same scale with some numerical imprecisions
@@ -3425,10 +3445,14 @@ classdef gum
                     for m=1:n
                         all_score{m}.Dataset = string(all_score{m}.Dataset);
                     end
+  % pre-allocate values for each model
+                X = strings(length(all_score{1}.(mt)),length(obj));
+                else
+                      % pre-allocate values for each model
+                X = nan(length(all_score{1}.(mt)),length(obj));
                 end
 
-                % pre-allocate values for each model
-                X = nan(length(all_score{1}.(mt)),length(obj));
+              
 
                 % add values from each model where value is present
                 for m=1:n
@@ -3460,9 +3484,9 @@ classdef gum
                 X = S.(fn{f});
                 if isvector(X) && ~ischar(X)
                     if numel(X)==numel(S.nObservations)
-                    S.(fn{f}) = X(:);
+                        S.(fn{f}) = X(:);
                     else
-S = rmfield(S, fn{f});
+                        S = rmfield(S, fn{f});
                     end
                 end
             end
@@ -3838,6 +3862,8 @@ S = rmfield(S, fn{f});
             % plot_design_matrix(M,subset,dims, init_weight)
             %
             % h = plot_design_matrix(...) provide graphic handles
+            %
+            % See gum.plot_vif
 
             h.Axes = [];
             h.Objects = {};
@@ -3978,7 +4004,6 @@ S = rmfield(S, fn{f});
                 error('weights have not been estimated or set');
             end
 
-
             if nargin<2 || isequal(U2, 'nsubplot') || isempty(U2)
                 if nargin>=2 && isequal(U2, 'nsubplot')
                     varargin = {U2};
@@ -3993,11 +4018,9 @@ S = rmfield(S, fn{f});
                 % only providing index of regressor without dimensionality
                 nDim = [obj.regressor(U2).nDim];
                 U2 = repelem(U2 ,1, nDim);
-
                 for i=1:obj.nMod
                     U2(2,U2(1,:)==i) = 1:obj.regressor(i).nDim;
                 end
-
             end
 
             if length(obj)>1 % array of models
@@ -4037,6 +4060,12 @@ S = rmfield(S, fn{f});
                 end
                 set(gcf,'name',"Weights "+numel(obj)+ "models");
                 return;
+            end
+
+            % if more than one dataset, pass it as extra possible label
+            if length(string(obj.score.Dataset))>1
+                varargin{end+1} = 'Dataset';
+                varargin{end+1} = string(obj.score.Dataset);
             end
 
             % plot regressor weights
@@ -4124,7 +4153,7 @@ S = rmfield(S, fn{f});
             end
 
             H = quantile(rho,Q);
-       
+
             H = [-inf unique(H) inf];
             nQ = length(H)-2;
 
@@ -4181,11 +4210,12 @@ S = rmfield(S, fn{f});
             % It can also be a cell array, in which case each score is
             % plotted in a different subplot
             %
-            % plot_score(M, score, ref, labels)
+            % plot_score(M, score, ref)
             % ref provides an index to the reference model (its value is set to 0)
             %
             % plot_score(M, score, ref, labels)
-            % provides labels to each model
+            % provides labels to each model - if not provided during model
+            % definition
             %
             % plot_score(M, score, ref, 'scatter') to use scatter plot
             % instead of bar plots
@@ -4197,7 +4227,14 @@ S = rmfield(S, fn{f});
             end
 
             if nargin<4
-                labels = {};
+                labels = {obj.label};
+                cnt = 1;
+                for m=1:numel(obj)
+                    if isempty(labels{m})
+                        labels{m} = ['unnamed' num2str(cnt)];
+                        cnt = cnt+1;
+                    end
+                end
             end
 
             if nargin<5
@@ -4433,7 +4470,6 @@ if negME < fval
     fval = negME;
     UU = concatenate_weights(M);
 end
-
 end
 
 
@@ -4562,7 +4598,7 @@ for s=1:nSet
     else
         this_B = B(s);
     end
-    this_scale = scale(index_weight==s);
+    this_scale = scale(:,index_weight==s);
 
     nW = sum(index_weight==s);
     gradK{s} = zeros(nW, nW, sum(HPs.index==s));
@@ -4768,7 +4804,6 @@ while ~isempty(fmla)
         fmla = trimspace(fmla(2:end));
     end
 
-
     % if starting with minus
     if fmla(1)=='-'
         V{end+1} = struct('variable',-1, 'type','constant','opts',struct());
@@ -4929,7 +4964,7 @@ while ~isempty(fmla)
         if ~isempty(v) %% linear variable
 
             opts = struct;
-            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v)) 
+            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v))
                 type = 'categorical';
             else
                 type = 'linear';
@@ -5463,8 +5498,8 @@ function set_figure_name(gcf, obj, str)
 if ~isempty(obj.label)
     str = [str ' ' obj.label];
 end
-if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
-str = [str ' (' obj.score.Dataset ')'];
+if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset) && isscalar(obj.score.Dataset)
+    str = [str ' (' char(obj.score.Dataset) ')'];
 end
 set(gcf, 'name',str);
 

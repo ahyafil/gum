@@ -30,6 +30,8 @@ function h = mybar(ref, centers, E, varargin)
 % 'BaseValue': baseline location for bars (scalar, default:0).
 % 'Barwidth' : relative width of individual bars (scalar between 0 and 1, default 0.8)
 % 'FaceColor': Bar fill color, can take values: 'flat' (default) | 'none' | RGB triplet | color string
+% 'Shades': boolean [default:true], whether face color within each bar
+% series uses different shades of the same colour
 % 'LineStyle' : line style of bar edges
 % 'LineColor': Defines color for all lines: bar outlines, error bars and
 % ticks. Can take values: 'flat' | 'none' | RGB triplet | color string.
@@ -62,9 +64,6 @@ function h = mybar(ref, centers, E, varargin)
 % !! allow  values to be cell
 % add exampe in help
 % deal with colors
-
-
-
 
 %% parse X, Y, L and U
 
@@ -106,6 +105,7 @@ end
 
 % default value
 vertical = true; % be default plot vertical error bars
+shades = true; % shades of same color
 linestyle = 'none'; % line style for bars
 linecolor = ''; % color for all lines
 linewidth = []; % line width for all ines
@@ -157,6 +157,9 @@ while v<=length(varargin)
                 'tickcolor','ticklength', 'tickwidth','errorbar'}
             errorbarpars(end+1:end+2) = varargin(v:v+1);
             v = v + 1;
+        case 'shades'
+            v = v + 1;
+            shades = varargin{v};
         otherwise
             % check whether it is line specification
             [XL,XC,XM,MSG] = colstyle(varg);
@@ -178,23 +181,7 @@ while v<=length(varargin)
     v = v+1;
 end
 
-%%  plot error bar
-
-% % whether error bars modulate values along centers defined by Y or X
-% if vertical
-%     centers = centers;
-%     ref = ref;
-% else
-%     centers = ref;
-%     ref = centers;
-% end
-
 %% check sizes
-
-% % ! from barweb, not too sure that this is necessary
-if size(centers,2) == 1
-    %  centers = centers';
-end
 
 [numbars, numgroups] = size(centers); % number of bars in a group (group=same color) and number of groups
 
@@ -225,23 +212,8 @@ end
     if ~isequal(size(L),[numbars, numgroups]) || ~isequal(size(U),[numbars, numgroups])
         error('error bars matrix must have the same size as %s', ctstr);
     end
-% else
-%     if ~isvector(centers)
-%         error('Y should be a vector (horizontal bars)');
-%     end
-%     if length(centers) ~=numbars
-%         error('The length of Y must match the number of rows of X (horizontal bars)'),
-%     end
-%     if ~isequal(size(L),[numbars, numgroups]) || ~isequal(size(U),[numbars, numgroups])
-%         error('error bars matrix must have the same size as X');
-%     end
-% end
 
-
-
-%% plot bars
-
-
+%% PLOT BARS
 if vertical
     ref_field = 'XData';
     ref_offset = 'XOffset';
@@ -256,8 +228,6 @@ end
 if numbars==1 && numgroups>1
     ref = [ref ref+1];
     centers = [centers; zeros(1,numgroups)];
-    % E = [E; zeros(1,numbars)];
-    %  change_axis = 1;
 end
 
 % which parameter/value pairs to add
@@ -265,20 +235,12 @@ barpars = {};
 if ~isempty(basevalue)
     barpars = [barpars {'basevalue',basevalue}];
 end
-%if ~isempty(facecolor),
-%    barpars = [barpars {'facecolor',facecolor}];
-%end
 if ~isempty(edgestyle)
     barpars = [barpars {'edgestyle',edgestyle}];
 end
 if isempty(edgecolor) && ~isempty(linecolor)
     edgecolor = linecolor;
 end
-% if ~isempty(edgecolor),
-%     barpars = [barpars {'edgecolor',edgecolor}];
-% elseif ~isempty(linecolor),
-%     barpars = [barpars {'edgecolor',linecolor}];
-% end
 if ~isempty(linewidth)
     barpars = [barpars {'linewidth',linewidth}];
 end
@@ -290,19 +252,30 @@ end
 if vertical
     h.bar = bar(ref, centers, barwidth,barpars{:});
 else
-  %  h.bar = barh(centers, ref, barwidth,barpars{:});
      h.bar = barh( ref, centers,barwidth,barpars{:});
 end
 
 % set face color for each series
 if ~isempty(facecolor)
+    within_series_color = numgroups==1 && size(facecolor,1)>1; % different colours within same group;
     if size(facecolor,1) == 1 % if same color for each series
         facecolor = repmat(facecolor,numgroups,1);
     end
     for b=1:numgroups
+        if shades && ~within_series_color && numbars>1
+            % use different shades of same color
+                        nShades = length(ref);
+                        towards_light = .1*min(nShades,6);
+            lighter = (1-towards_light)*facecolor(b,:)+ towards_light; % lightest shade
+            towards_dark = .05*min(nShades,6);
+            darker = (1-towards_dark)*facecolor(b,:); % darkest shade
+            this_cmap = lighter + (0:nShades-1)'.*(darker-lighter)./(nShades-1);
+            set(h.bar(b), 'FaceColor','flat','CData',this_cmap);
+        else
         set(h.bar(b), 'facecolor', facecolor(b,:));
+        end
     end
-    if numgroups==1 && size(facecolor,1)>1 % different colours within same group
+    if within_series_color
            if size(facecolor,1)>length(ref)
                facecolor = facecolor(1:length(ref),:);
            end
@@ -310,7 +283,7 @@ if ~isempty(facecolor)
     end
 end
 
-% set face color for each series
+% set edge color for each series
 if ~isempty(edgecolor)
     if size(edgecolor,1) == 1 % if same color for each series
         edgecolor = repmat(edgecolor,numgroups,1);
@@ -319,7 +292,6 @@ if ~isempty(edgecolor)
         set(h.bar(b), 'edgecolor', edgecolor(b,:));
     end
 end
-
 
 % if just one group, remove zeros created at point 2
 if numbars==1 && numgroups>1
@@ -381,10 +353,9 @@ for i = 1:numgroups
         colorpars = {'color',linecolor};
     else % different colors for each series
                 colorpars = {'color',linecolor(i,:)};
-  %  errorbarpars = [{'color',linecolor} errorbarpars];
     end
     
-    
+    % add error bars
     if vertical
         h.error(i) = myerrorbar(R_eb, centers(:,i), L(:,i),U(:,i), 'vertical',errorbarpars{:},colorpars{:},'none');
     else

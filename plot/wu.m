@@ -55,7 +55,8 @@ function varargout = wu(varargin)
 % wu(..., {variablename1 variablename2 ...}) specifies labels for the
 % independent factors in matrix Y (or M and E), i.e. labels for dimension
 % 1, 2, etc. in matrix M. This is used to label X-axis, add legend and
-% title. Use '' for a variablename to avoid naming it.
+% title. Use '' for a variablename to avoid naming it. Accepts also string
+% arrays
 %
 % wu(...., { {v1label1 v1label2...},{v2label1 v2label2...}) specifies labels for
 % the different levels within each variable, i.e. for the different rows,
@@ -118,6 +119,8 @@ function varargout = wu(varargin)
 % 'BaseValue': baseline location for bars (scalar, default:0).
 % 'Barwidth' : relative width of individual bars (scalar between 0 and 1, default 0.8)
 % 'FaceColor': Bar fill color, can take values: 'flat' (default) | 'none' | RGB triplet | color string
+% 'Shades': boolean [default:true], whether face color within each bar
+% series uses different shades of the same colour
 % 'LineColor': Defines color for all lines: bar outlines, error bars and
 % ticks. Can take values: 'flat' | 'none' | RGB triplet | color string.
 % 'LineWidth': Scalar defining width for all lines: bar outlines, error bars and
@@ -172,13 +175,11 @@ function varargout = wu(varargin)
 %'pvalue'    : p-values, same size as Ymean
 %'permute'   : a vector to permute the dimensions for plotting (deprecated)
 
-
-
 %default values
 X = [];
 L = [];
 U = [];
-cor =  []; %{'b', 'g', 'r', 'k', 'm', 'c', 'y'};
+cor =  []; 
 clim = 'auto';
 linestyle = '';
 marker = '.';
@@ -488,6 +489,8 @@ while v<=length(varargin)
                         marker = XM;
                     end
             end
+        case 'string'
+            varnames = cellstr(varg);
         case 'cell'
             if ~isempty(varg) && ischar(varg{1})  % labels for variables
                 %varnames = varg;
@@ -679,7 +682,13 @@ if isempty(cor)
     cor = defcolor;
     cor = cor(1+mod(0:nVar-1,length(cor)));
 end
+if strcmp(plottype, 'bar') && ischar(cor) && any(strcmp(cor, colormapstrings)) && nVar==1
+    % in case bar plot with single series and colormap, use different color
+    % for each x
+cor = color2mat(cor,nPar);
+else
 cor = color2mat(cor,nVar);
+end
 if ~isempty(edgecolor)
     edgecolor = color2mat(edgecolor,nVar);
     errorbarpars(end+1:end+2) = {'EdgeColor',edgecolor};

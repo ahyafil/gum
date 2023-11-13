@@ -300,6 +300,7 @@ classdef regressor
                 scale = tocell(scale);
             end
             summing = tocell(summing);
+            dimensions = tocell(string(dimensions));
 
             % we perform one-hot-encoding for all regressor types except
             % linear - except for continuous var if scale is provided, which means the tensor
@@ -329,6 +330,7 @@ classdef regressor
             prior = tocell(prior);
             basis = [cell(1,nD-length(basis)) basis];
             prior = [cell(1,nD-length(prior)) prior];
+            dimensions = [repmat({""},1,nD-length(dimensions)) dimensions];
             summing = [repmat({''},1,nD-length(summing)) summing];
             single_tau = [false(1,nD-length(single_tau)) single_tau];
 
@@ -382,7 +384,9 @@ classdef regressor
                     obj.nDim = 1;
                     obj.Weights(1).constraint = 'fixed';
                     obj.formula = string(label(1));
-                    %obj.Prior(1).type = 'none';
+                    if size(X,2)>1 && isempty(dimensions{1})
+                        dimensions{1} = string(label(1));
+                    end
 
                     %% linear regressor
                 case 'linear'
@@ -404,6 +408,9 @@ classdef regressor
                         end
                         obj.Weights(nD).scale = scale{nD};
                     end
+                    if nWeight>1 && dimensions{nD}==""
+                        dimensions{nD} = string(label(nD));
+                    end
 
                     % hyperpameters for first dimension
                     switch prior{nD}
@@ -422,7 +429,7 @@ classdef regressor
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh);
+                    obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh,dimensions);
                     % !!! seems to overwrite all commands before, maybe we
                     % can just remove them?
 
@@ -448,6 +455,9 @@ classdef regressor
                         end
                     else
                         obj.Weights(nD).scale = this_scale'; % convert to row vector
+                    end
+                    if dimensions{nD}==""
+                        obj.Weights(nD).dimensions = string(label(nD));
                     end
 
                     % use one-hot encoding
@@ -475,7 +485,7 @@ classdef regressor
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh);
+                    obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
 
                     obj.formula = "cat("+label(nD)+ ")";
 
@@ -514,11 +524,11 @@ classdef regressor
 
                     % define continuous prior
                     obj = define_continuous_prior(obj,type, nD,this_scale, HP{nD}, basis{nD}, ...
-                        binning,summing, period, single_tau(nD), condthresh);
+                        binning,summing, period, single_tau(nD), condthresh, dimensions{nD});
                     obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
-                    obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh);
+                    obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
 
                     obj.formula = "f(" + label(nD)+ ")";
 
@@ -746,12 +756,22 @@ classdef regressor
             Dims = [Dims{:}];
             RD = [Ridx;Dims]; % first row: regressor index; second row: dimension
 
-            if nargin==1 % select all weights
+            if nargin==1 || isempty(label) % select all weights
                 I = RD;
                 return;
             end
 
             label = string(label);
+
+            %if length(label)==1
+            lbl = char(label(1));
+            if lbl(1) == '-' % all weights but this one
+                Inot = find_weights(obj,lbl(2:end)); % index of the weights we don't want to include
+                Iall = find_weights(obj, label(2:end)); % all weights (or could be all but ones if excluding more than one)
+                I = setdiff(Iall',Inot','rows')';
+                return;
+            end
+            % end
 
             Wlbl = weight_labels(obj); % label for all set of weights
 
@@ -1162,10 +1182,11 @@ classdef regressor
                 W(1).PosteriorStd = std(Ws);
                 W(1).PosteriorMean = Wm;
 
-                % compose labels
+                % compose labels and dimensions
                 for d=2:obj(i).nDim
                     W(1).scale = interaction_levels(W(1).scale, W(d).scale);
                 end
+                W(1).dimensions = [W.dimensions];
                 W(1).nWeight = new_nWeight;
 
                 % empty other fields, basis, etc.
@@ -1323,7 +1344,7 @@ classdef regressor
                             idx = (1:nW) + (r-1)*nW + rk*sum([nWeight(1:d-1)]) + midx; % index of regressors in design matrix
                             this_cov(:,:,r) = covb(idx,idx);
                         end
-                                            obj(m).Weights(d).(lbl) = this_cov;
+                        obj(m).Weights(d).(lbl) = this_cov;
                     end
                 end
 
@@ -1341,7 +1362,7 @@ classdef regressor
         %%%% 2. OPERATIONS ON PRIOR, BASIS FUNCTIONS, PROJECTIONS
 
         %% DEFINE PRIOR FOR ARRAY DIMENSIONS
-        function  obj = define_priors_across_dims(obj, dims, summing, prior, HP, scale, basis, single_tau, condthresh)
+        function  obj = define_priors_across_dims(obj, dims, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions)
             % make sure these options are in cell format and have minimum
             % size
 
@@ -1364,6 +1385,11 @@ classdef regressor
                     obj.Weights(d).nWeight = size(scale{d},2);
                 else
                     obj.Weights(d).scale = 1:obj.Weights(d).nWeight;
+                end
+
+                if ~isempty(dimensions{d})
+                    assert(length(dimensions{d})==size(obj.Weights(d).scale,1),'length of ''dimensions'' does not match dimensionality of scale');
+                    obj.Weights(d).dimensions = dimensions{d};
                 end
 
                 % what type of prior are we using for this dimension
@@ -1401,13 +1427,13 @@ classdef regressor
                         end
 
                         % define continuous prior
-                        obj = define_continuous_prior(obj,summing{d}, d,scl,HP{d}, basis{d}, [],[],2*pi, single_tau(d), condthresh);
+                        obj = define_continuous_prior(obj,summing{d}, d,scl,HP{d}, basis{d}, [],[],2*pi, single_tau(d), condthresh, dimensions{d});
                 end
             end
         end
 
         %% DEFINE PRIOR OVER CONTINUOUS FUNCTION
-        function obj = define_continuous_prior(obj, type, d, scale, HP, basis, binning, summing, period, single_tau, condthresh)
+        function obj = define_continuous_prior(obj, type, d, scale, HP, basis, binning, summing, period, single_tau, condthresh, dimensions)
 
             if nargin<4
                 HP = [];
@@ -1416,6 +1442,24 @@ classdef regressor
             obj.HP(d) = HPstruct; % initialize HP structure
             obj.Weights(d).scale = scale; % values
             obj.Weights(d).type = type; % 'continuous';
+
+            % name of dimensions
+            nScaleDim = size(scale,1);
+            if ~isempty(dimensions) && (length(dimensions)>1 || dimensions~="")
+                assert(length(dimensions)==nScaleDim,'length of ''dimensions'' does not match with dimensionality of scale');
+                obj.Weights(d).dimensions = dimensions;
+            else
+                switch nScaleDim
+                    case 1
+                        obj.Weights(d).dimensions = obj.Weights(d).label;
+                    case 2
+                        obj.Weights(d).dimensions = ["x","y"];
+                    case 3
+                        obj.Weights(d).dimensions = ["x","y","z"];
+                    otherwise
+                        obj.Weights(d).dimensions = "x"+(1:nScaleDim);
+                end
+            end
 
             if nargin<6 || strcmp(basis,'auto')
                 if size(scale,2)>100 && ~any(strcmp(summing{d},{'split','separate'})) && size(scale,1)==1
@@ -1698,31 +1742,31 @@ classdef regressor
                 obj = obj.initialize_weights();
             end
 
-%            ii = 0; % index for regressors in design matrix
+            %            ii = 0; % index for regressors in design matrix
 
-%             % use sparse coding if any data array is sparse
-%             SpCode = any(cellfun(@issparse, {obj.Data}));
-%             if SpCode
-%                 Phi = sparse(obj(1).nObs,sum(nWeight));
-%             else
-%                 Phi = zeros(obj(1).nObs,sum(nWeight));
-%             end
-%             for m=1:nM % for each module
-% 
-%                 % project on all dimensions except the dimension to optimize
-%                 for d=dims{m}
-%                     for r=1:obj(m).rank
-%                         idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
-%                         Phi(:,idx) = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
-%                         ii = idx(end); %
-%                     end
-%                 end
-%             end
+            %             % use sparse coding if any data array is sparse
+            %             SpCode = any(cellfun(@issparse, {obj.Data}));
+            %             if SpCode
+            %                 Phi = sparse(obj(1).nObs,sum(nWeight));
+            %             else
+            %                 Phi = zeros(obj(1).nObs,sum(nWeight));
+            %             end
+            %             for m=1:nM % for each module
+            %
+            %                 % project on all dimensions except the dimension to optimize
+            %                 for d=dims{m}
+            %                     for r=1:obj(m).rank
+            %                         idx = ii + (1:obj(m).Weights(d).nWeight); % index of regressors
+            %                         Phi(:,idx) = ProjectDimension(obj(m),r,d); % tensor product, and squeeze into observation x covariate matrix
+            %                         ii = idx(end); %
+            %                     end
+            %                 end
+            %             end
 
             % faster to not pre-allocate if mixes sparse and non-sparse
             % coding
             Phi = cell(1,length([dims{:}]));
-ii = 1;
+            ii = 1;
 
             for m=1:nM % for each module
 
@@ -1741,12 +1785,12 @@ ii = 1;
             end
 
             if any(~cellfun(@issparse,Phi)) && sum(cellfun(@nnz, Phi))/sum(cellfun(@numel, Phi))>.1 % if overall sparseness lower than .1
-                    % use non-sparse coding
-                    Phi = cellfun(@full, Phi, 'UniformOutput',false);
+                % use non-sparse coding
+                Phi = cellfun(@full, Phi, 'UniformOutput',false);
             end
 
             Phi = cat(2,Phi{:});
-            
+
         end
 
         %% CHECK PRIOR COVARIANCE and provide default covariance if needed
@@ -2953,7 +2997,7 @@ ii = 1;
         end
 
         %% SPLIT/CONDITION ON REGRESSORS
-        function obj = split(obj,X, scale, label)
+        function obj = split(obj,X, scale, label, split_var)
             % R = split(R, X)
             % splits regressor R for each value for categorical variable X.
             % X should be a column vector with as many observations as in
@@ -2965,6 +3009,9 @@ ii = 1;
             % split(R, X, [], label) or split(R, X, scale, label) to provide labels for levels of
             % X
             %
+            % split(R, X, scale, label, split_variable_label) to provide
+            % label for splitting variable
+            %
             % split(R,R2) where R2 is a categorical regressor
             if nargin<3
                 scale = [];
@@ -2972,7 +3019,11 @@ ii = 1;
             if nargin<4
                 label = [];
             end
+            if nargin<5
+                split_var = "split variable";
+            end
             if isa(X,'regressor')
+
                 % R = R.split(R2)
 
                 if length(X)>1 % of split with more than one regressors, do it recursively
@@ -2981,6 +3032,7 @@ ii = 1;
                     return;
                 end
                 assert(X.nDim==1, 'cannot split with regressor of dimension>1');
+                split_var = X.Weights.dimensions;
                 if strcmp(X.Weights.type,'categorical')
                     label = X.Weights.scale;
                     scale = 1:X.Weights.nWeight;
@@ -3015,11 +3067,9 @@ ii = 1;
             end
 
             % add label if required
-            if nargin>=4
-                if length(label) ~= length(scale)
-                    error('length of label does not match number of values');
-                end
-            elseif isempty(label)
+            assert( nargin<4 || isempty(label) || length(label)==length(scale),...
+                    'length of label does not match number of values');
+            if isempty(label)
                 label = scale;
             end
 
@@ -3060,9 +3110,12 @@ ii = 1;
                 %% update scale
                 W = obj.Weights(dd);
                 W.scale = interaction_levels(W.scale, label);
-                if all(ismissing(W.scale(1,:)))
+                W.dimensions = [W.dimensions split_var];
+                if all(ismissing(W.scale(1,:))) % splitting a no-scale variable
                     W.scale(1,:) = [];
+                    W.dimensions(1) = [];
                 end
+                W.label = W.label+ "|"+ split_var;
 
                 %% update constraint
                 if ~any(constraint_type(W)==["free","fixed"])
@@ -3123,6 +3176,8 @@ ii = 1;
 
                 obj.Weights(1).nWeight = W(1).nWeight*W(2).nWeight; % one set of weights in dim 1 for each level of dim 2
                 obj.Weights(1).scale = interaction_levels(W(1).scale, W(2).scale);
+                obj.Weights(1).dimensions = [obj.Weights(1:2).dimensions];
+                obj.Weights(1).label = W(2).label;
             else
 
                 for d=SplitDims
@@ -3180,6 +3235,7 @@ ii = 1;
                         end
 
                         obj.Weights(dd).scale = interaction_levels(W(dd).scale, W(d).scale);
+                        obj.Weights(dd).dimensions = [obj.Weights([dd d1:2]).dimensions];
 
                         % build covariance function as block diagonal
                         obj.Prior(dd).replicate = nRep * obj.Prior(dd).replicate;
@@ -3302,12 +3358,7 @@ ii = 1;
             end
 
             D = obj.Data;
-            %if issparse(D) && ~isvector(D) % if two-d we'll convert to 3 d so use sparsearray format
-            %    D = sparsearray(D);
-            %end
-
             S = size(D);
-
             nLag = length(Lags); % number of lags
 
 
@@ -3338,7 +3389,6 @@ ii = 1;
                 Cin{d} =1:S(d);
                 Cout{d} =1:S(d);
             end
-
 
             for l=1:nLag % for each lag group
                 Cout{end} = l; % position in last dimension of output array
@@ -3389,6 +3439,8 @@ ii = 1;
             nDim_new = ndims(Dlag)-1;
             obj.nDim = nDim_new;
             scale = {obj.Weights.scale};
+            dimensions = {obj.Weights.dimensions};
+            dimensions{nDim_new} = "lag";
             scale{nDim_new} = LagLevels;
             summing  = cell(1,nDim_new);
             if ~isempty(basis)
@@ -3396,7 +3448,7 @@ ii = 1;
             end
             basis = [cell(1,nDim_new-1) {basis}];
 
-            obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, []);
+            obj = define_priors_across_dims(obj, nDim_new, summing, {}, [], scale, basis, true, [], dimensions);
             obj.Weights(nDim_new).label = "lag";
             if any(SplitValue) || isempty(SplitValue)
                 obj.Weights(nDim_new).constraint = "free";
@@ -3469,8 +3521,10 @@ ii = 1;
                 if all([W.label] == erase(W(1).label,"1")+(1:length(W))) % in case variables are called x1 + x2 + x3...
                     obj(1).Weights.label =  erase(W(1).label,"1"); % rename weight label as "x"
                     obj(1).Weights.scale = erase(obj(1).Weights.scale,obj(1).Weights.label ); % and scale as 1,2,3...
+                    obj(1).Weights.dimensions = obj(1).Weights.label;
                 else
                     obj(1).Weights.label = "group";
+                    obj(1).Weights.label = "";
                 end
                 %  obj(1).Weights.nFreeWeight = sum([W.nFreeWeight]);
                 obj = obj(1);
@@ -3558,12 +3612,15 @@ ii = 1;
                 end
             end
 
-            % deal with scale
+            % deal with scale and dimensions
             F = {allWeights.scale};
-            scale_dim = max(cellfun(@(x) size(x,1),F));
+            all_scale_dim = cellfun(@(x) size(x,1),F);
+            [scale_dim,imax] = max(all_scale_dim);
+            scale_dim2 = max(all_scale_dim(setdiff(1:n,imax))); % max dimension after this one
+            W.dimensions = [repmat("",1,scale_dim2) allWeights{imax}.dimensions(scale_dim2+1:scale_dim) "index"]; % keep dimension labels from regressor with more dimensions, leave common ones empty
             for i=1:n
                 if isempty(F{i})
-                    F{i} = 1:obj(i).nWeight(D);
+                    F{i} = 1:allWeights{i}.nWeight;
                 end
                 F{i}(end+1:scale_dim,:) = nan; % fill extra dimensions with nan if needed
                 F{i}(scale_dim+1,:) = i; % add extra dimension with group index
@@ -3710,12 +3767,15 @@ ii = 1;
             % R.plot_weights()
             % R.plot_weights("regressor1")
             % R.plot_weights(["regressor1","regressor2",...])
+            % R.plot_weights("-regressor1" to plot all weights except
+            % regressor1.
             %
             % R.plot_weights(..., h); to use subplots defined by handles
             %
             % nSub = M.plot_weights(..., 'nsubplot') to have number of
             % subplots
 
+            Dataset = [];
 
             if nargin<2 || isequal(U2, 'nsubplot') || isempty(U2)
                 if nargin>=2 && isequal(U2, 'nsubplot')
@@ -3736,8 +3796,9 @@ ii = 1;
 
             only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
             cols = defcolor;
+            cols{1,2} = ''; % add variable column
             colmaps = {'jet','hsv','spring','summer','winter','automn','hot','parula','gray','bone','copper','pink',...
-'hot','lines','colorcube','prism','sky','abyss','flag'};
+                'hot','lines','colorcube','prism','sky','abyss','flag'};
 
             NoFixedWeights = zeros(1,size(idx,2));
             for j=1:size(idx,2) % for each set of regressor
@@ -3755,7 +3816,7 @@ ii = 1;
             end
 
             % check if subplots are assigned
-            if ~isempty(varargin) && ~isequal(varargin{1}, 'nsubplot')
+            if ~isempty(varargin) && ~isequal(varargin{1}, 'nsubplot') && ~isequal(varargin{1}, 'Dataset')
                 h.Axes = varargin{1};
                 varargin(1) = [];
             else % otherwise define a grid of subplots in current figure
@@ -3764,10 +3825,14 @@ ii = 1;
                 end
             end
 
+            % check if extra argument with dataset
+            if length(varargin)>=2 && isequal(varargin{end-1},'Dataset')
+                Dataset = varargin{end};
+            end
+
             i = 1; % subplot counter
-            c = -1; % color counter
+            % c = -1; % color counter
             cm = 1; % colormap counter
-            % h.Axes = [];
             h.Objects = {};
 
             for j=1:size(idx,2) % loop between subpots
@@ -3790,7 +3855,7 @@ ii = 1;
                 for s=1:length(W)
                     axes(h.Axes(i)); % set as active subplot
 
-                    [h_nu, c, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, c, cm, cols, colmaps);
+                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, colmaps, Dataset);
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
@@ -3818,7 +3883,7 @@ ii = 1;
                 ff =  concatenate_weights(obj,0,filds{f}); % concatenate values over all regressors
                 if length(ff) == height(T)
                     if isstring(ff)
-                    ff(isnan(strlength(ff))) = "";
+                        ff(isnan(strlength(ff))) = "";
                     end
                     T.(filds{f}) = ff';
                 elseif f==1 % scale
@@ -3918,7 +3983,7 @@ end
 
 
 %% PLOT SINGLE WEIGHTS
-function [h_nu, c, cm] = plot_single_weights(W, P, HP, rk, c, cm, cols, colmaps)
+function [h_nu, cols, cm] = plot_single_weights(W, P, HP, rk, cols, cm, colmaps, Dataset)
 if isa(W.plot, 'function_handle')
     %% custom-defined plot
     h_nu = W.plot(W);
@@ -3927,10 +3992,12 @@ end
 
 title(W.label);
 
+% scales and dimension labels
 if isempty(W.scale)
     W.scale = 1:W.nWeight;
 end
 scale = W.scale';
+dim_label = W.dimensions;
 
 % error bar values
 U = W.PosteriorMean'; % concatenate over ranks
@@ -3950,7 +4017,9 @@ end
 if ~iscell(scale)
     scale = {scale};
 end
-
+if ~isempty(Dataset)
+    scale{end+1} = Dataset;
+end
 
 %% plotting options
 plot_opt = {};
@@ -3965,17 +4034,29 @@ plot_opt{end+1} = 'Color';
 % select color map
 twodmap = size(scale{1},2)>1;
 nCurve = size(U,2);
+imageplot = nCurve>9;
 
-if nCurve<4 % different colors for each curve
-    plot_opt{end+1} = cols(mod(c+(1:nCurve),length(cols))+1);
-    if rk ==1
-        c = c + nCurve;
-    end
-else % use color map
+if  twodmap || imageplot || nCurve>=6
+    % use color map
     plot_opt{end+1} = colmaps{cm};
     cm = cm + 1;
+else
+    % different colors for each curve
+    if any(strcmp(dim_label(end), cols(:,2)))
+        % use same colour as used for same variable name
+        iCol = find(strcmp(dim_label(end), cols(:,2)),1);
+    else
+        iCol = find(cellfun(@isempty,cols(:,2)),1); % first not-used colour
+        cols(iCol+(0:nCurve-1),2) = {dim_label(end)}; % assign this variable for all colour used
+        if isempty(cols{end,1}) % already used all colours
+            iMissing = find(cellfun(@isempty, cols(:,1)),1);
+            cols(iMissing+(0:length(defcolor)-1),1) = defcolor; % assign same colours again
+        end
+    end
+    this_col = cols(iCol+(0:nCurve-1),1);
+    plot_opt{end+1} = this_col;
+
 end
-imageplot = nCurve>9;
 
 if ~isempty(W.plot)
     plot_opt = [plot_opt W.plot];
@@ -4014,17 +4095,20 @@ if twodmap
         % add black dots representing data points in trained dataset
         h_nu(2) =plot(sc(:,1),sc(:,2),'k.', 'MarkerSize',2);
     end
+    xlabel(dim_label(1));  ylabel(dim_label(2));
 
 elseif imageplot
     % image plot
     h_nu = imagescnan(scale{2},scale{1}, U);
+    xlabel(dim_label(1));  ylabel(dim_label(2));
 else
+    % curves / bar plots
     if isscalar(scale{1}) && isnan(scale{1})
-        scale{1} = 1;
+        scale{1} = '';
     end
 
     % cufve/bar plot with errors
-    [~,~,h_nu] = wu([],U,se,scale,plot_opt{:});
+    [~,~,h_nu] = wu([],U,se,scale,plot_opt{:},dim_label);
     ylabel('weights');
 end
 
@@ -4078,14 +4162,20 @@ if ratio>cutoff
     return;
 end
 
-U2 = nan(nX,nY);
-se2 = nan(nX,nY);
+if ~isvector(U)
+nDataset = size(U,2);
+else
+nDataset = 1;
+end
+
+U2 = nan(nX,nY,nDataset);
+se2 = nan(nX,nY,nDataset);
 for iX=1:nX
     for iY=1:nY
         bool = equal_numeric_or_cell(S1,x_unq(iX)) & equal_numeric_or_cell(S2,y_unq(iY));
         if any(bool)
-            U2(iX,iY) = U(find(bool,1));
-            se2(iX,iY) = se(find(bool,1));
+            U2(iX,iY,:) = U(find(bool,1),:);
+            se2(iX,iY,:) = se(find(bool,1),:);
         end
     end
 end
@@ -4197,7 +4287,7 @@ if isempty(B) % no basis functions: use equation 15
     mean_train = Proj*(W.PosteriorMean-P.PriorMean)';
     mu = linsolve(Ktrain,mean_train, MatOptions)' * KK;
     if ct.type=="mean1" % add offset if prior mean is not null
-        mu = mu+1; 
+        mu = mu+1;
     elseif ct.type=="sum1"
         mu = mu+1/W.nWeight;
     end
@@ -4389,7 +4479,7 @@ end
 
 %% CREATE EMPTY WEIGHT STRUCTURE
 function W = empty_weight_structure(nD, DataSize, scale, color)
-W = struct('type','','label', '', 'dimensions',[],'nWeight',0, ...
+W = struct('type','','label', '', 'dimensions',"",'nWeight',0, ...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
     'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[],'U_allstarting',[]);
@@ -4518,6 +4608,7 @@ for s=1:nSet
     W(s).T = Wc.T(:,index_weight);
     W(s).p = Wc.p(:,index_weight);
     W(s).scale = Wc.scale(1:end-1,index_weight); % remove last dim (set index)
+    W(s).dimensions = Wc.dimensions(1:end-1); % remove last label ("index")
     dummy_scale_dim = all(isnan(W(s).scale),2); % dimensions for scale that are not used for this set
     W(s).scale(dummy_scale_dim,:) = [];
     if isempty(Wc.basis) || isequal(Wc.basis(s).fun,'none')
