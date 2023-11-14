@@ -3124,7 +3124,7 @@ classdef gum
 
             % check that covariance is symmetric
             if norm(V-V')>1e-3*norm(V)
-                if any(cellfun(@(MM) any(sum(isFreeWeight(MM),2)>1), num2cell(M)))
+                if any(cellfun(@(MM) any(sum(isFreeWeightSet(MM),2)>1), num2cell(M)))
                     warning('posterior covariance is not symmetric - this is likely due to having two free dimensions in our regressor - try adding constraints');
                 else
                     warning('posterior covariance is not symmetric - dont know why');
@@ -4735,11 +4735,11 @@ if isempty(target)
     error('formula should start with dependent variable from the list of table variables');
 end
 
-
 T = Tbl.(target);
 nObs = length(T);
 
 % check if splitting model
+T_fmla = trimspace(T_fmla);
 if ~isempty(T_fmla)
     if ~T_fmla(1) == '|'
         error('dependent variable in formula should be followed either by ''~'' or ''|'' symbol');
@@ -5160,9 +5160,11 @@ end
 % do not include intercept if any dimension-1 polynomial included (because
 % it is the 0 order polynomial
 W = [M([M.nDim]==1).Weights]; % weights for dim1 regressors
+if ~isempty(W)
 basis = [W.basis];
 if ~isempty(basis) && any(cellfun(@(f) isequal(f,@basis_poly), {basis.fun}))
     param.constant = 'off';
+end
 end
 end
 

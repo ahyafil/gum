@@ -11,8 +11,11 @@ else
     H.HP = zeros(1,nReg);
 end
     H.label = "log \lambda" +d+"_"+ (1:nReg);  % HP labels
-if nargin>3
+if nargin>3 && ~isempty(HPfit)
     H.fit = HPfit; % if HP is fittable
+    if isscalar(HPfit)
+        H.fit = repmat(HPfit,1,nReg);
+    end
 else
     H.fit = true(1,nReg);
 end

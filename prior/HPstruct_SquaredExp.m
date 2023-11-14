@@ -2,6 +2,7 @@ function HH = HPstruct_SquaredExp(HH, scale, HP, type, period, single_tau, basis
 
 if strcmpi(type,'periodic')
     tau = period/4; % initial time scale: period/4
+    assert(isrow(scale),'periodic functions only defined over one dimension scales');
 else
     % data point resolution (mean difference between two points)
     dt = zeros(1,size(scale,1));
@@ -40,7 +41,11 @@ if strcmp(basis, 'fourier')
 HH.type = repmat("basis_cov",1,nScale+1);
 
 else
+    if ~strcmpi(type,'periodic')
     HH.UB(1:nScale) = min(log(101*tau),log(span)+2); %log(5*tau); % if not using spatial trick, avoid too large scale that renders covariance matrix singular
+    else
+        HH.UB(1:nScale) = log(period)+2;
+    end
     HH.UB(nScale+1) = max_log_var;
     if ~isempty(binning)
         HH.LB = [log(binning)-2 -max_log_var];

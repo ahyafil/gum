@@ -281,10 +281,10 @@ classdef regressor
                 assert(~is_covfun, 'cannot define names of hyperparameters to be fitted for custom covariance function')
                 HPfit = ismember(HPfit, HPfit_lbl);
 
-            elseif isempty(HPfit)
-                HPfit = HPfit_def;
-            elseif length(HPfit)==1
-                HPfit = HPfit*ones(size(HPfit_def));
+         %   elseif isempty(HPfit)
+         %       HPfit = HPfit_def;
+         %   elseif length(HPfit)==1
+         %       HPfit = HPfit*ones(size(HPfit_def));
             end
 
             HPfit = logical(HPfit);
@@ -385,7 +385,7 @@ classdef regressor
                     obj.Weights(1).constraint = 'fixed';
                     obj.formula = string(label(1));
                     if size(X,2)>1 && isempty(dimensions{1})
-                        dimensions{1} = string(label(1));
+                        obj.Weights(1).dimensions = string(label(1));
                     end
 
                     %% linear regressor
@@ -426,7 +426,7 @@ classdef regressor
                     end
                     obj.Prior(nD).type = prior{nD};
 
-                    obj.HP(nD).fit = HPfit;
+                   % obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh,dimensions);
@@ -482,7 +482,7 @@ classdef regressor
 
 
                     obj.HP(nD) = HPstruct_L2(nD, HP_L2, HPfit);
-                    obj.HP(nD).fit = HPfit;
+                 %   obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
@@ -514,6 +514,7 @@ classdef regressor
                         obj.Data = X;
                     end
                     obj.Weights(nD).nWeight = nVal;
+                    dimensions{nD} = split(label(nD),',')';
 
                     % initial value of hyperparameters
                     if ~iscell(HP)
@@ -525,7 +526,10 @@ classdef regressor
                     % define continuous prior
                     obj = define_continuous_prior(obj,type, nD,this_scale, HP{nD}, basis{nD}, ...
                         binning,summing, period, single_tau(nD), condthresh, dimensions{nD});
+                   if ~isempty(HPfit)
+                       assert(length(HPfit)==length(obj.HP(nD).fit), 'length of HPfit does not match number of hyperparameters');
                     obj.HP(nD).fit = HPfit;
+                   end
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
@@ -765,7 +769,7 @@ classdef regressor
 
             %if length(label)==1
             lbl = char(label(1));
-            if lbl(1) == '-' % all weights but this one
+            if ~isempty(lbl) && lbl(1)=='-' % all weights but this one
                 Inot = find_weights(obj,lbl(2:end)); % index of the weights we don't want to include
                 Iall = find_weights(obj, label(2:end)); % all weights (or could be all but ones if excluding more than one)
                 I = setdiff(Iall',Inot','rows')';
@@ -1310,8 +1314,6 @@ classdef regressor
                         rho = rho - Phi(:,idx)*Ubase';
                     end
                     Uconst(idx) = Ubase;
-
-
                 end
                 ii =idx(end);
             end
@@ -1354,8 +1356,6 @@ classdef regressor
                     midx = midx + obj(m).nTotalParameters; % jump index by number of components in module
                 end
             end
-
-
         end
 
         %% %%%%%%%%%%%%
@@ -1390,6 +1390,8 @@ classdef regressor
                 if ~isempty(dimensions{d})
                     assert(length(dimensions{d})==size(obj.Weights(d).scale,1),'length of ''dimensions'' does not match dimensionality of scale');
                     obj.Weights(d).dimensions = dimensions{d};
+                else
+                    obj.Weights(d).dimensions = "";
                 end
 
                 % what type of prior are we using for this dimension
@@ -1451,7 +1453,7 @@ classdef regressor
             else
                 switch nScaleDim
                     case 1
-                        obj.Weights(d).dimensions = obj.Weights(d).label;
+                        obj.Weights(d).dimensions = string(obj.Weights(d).label);
                     case 2
                         obj.Weights(d).dimensions = ["x","y"];
                     case 3
@@ -1481,7 +1483,7 @@ classdef regressor
 
                 % prior covariance function
                 if strcmpi(type,'periodic')
-                    obj.Prior(d).CovFun = @(s,x) cov_periodic(s, x, period); % session covariance prior
+                    obj.Prior(d).CovFun = @(x,HP,B) cov_periodic(x,HP,B,period); % session covariance prior
                     obj.Prior(d).type = 'periodic';
                 else
                     obj.Prior(d).CovFun = @covSquaredExp; % session covariance prior
@@ -1605,7 +1607,7 @@ classdef regressor
             %% define hyperparameters
             HH = obj.HP(d);
             switch obj.Prior(d).type
-                case 'SquaredExponential'
+                case {'SquaredExponential','periodic'}
                     HH = HPstruct_SquaredExp(HH, scale, HP, type, period, single_tau, basis, binning);
                 case 'L2_polynomial'
                     HH = HPstruct_L2(nBasisFun+1, HP);
@@ -2508,13 +2510,18 @@ classdef regressor
             % start update with first free dimension
             d = find(any(isFreeWeightSet(obj),1),1);
 
-            % if no one then start with first dim not completely fixed
-            d = find(any(~isFixedWeightSet(obj),1),1);
+            if ~isempty(d)
+                return;
+            end
+
+                        % if no one then start with first dim not completely fixed
+                        d = find(any(~isFixedWeightSet(obj),1),1);
+if ~isempty(d)
+                return;
+end
 
             % if still no one then first dim
-            if isempty(d)
                 d = 1;
-            end
         end
 
         %% COMPUTE PREDICTOR (RHO)
@@ -3998,6 +4005,9 @@ if isempty(W.scale)
 end
 scale = W.scale';
 dim_label = W.dimensions;
+if isempty(dim_label)
+    dim_label = "";
+end
 
 % error bar values
 U = W.PosteriorMean'; % concatenate over ranks
@@ -4094,6 +4104,7 @@ if twodmap
 
         % add black dots representing data points in trained dataset
         h_nu(2) =plot(sc(:,1),sc(:,2),'k.', 'MarkerSize',2);
+        axis xy; box off;
     end
     xlabel(dim_label(1));  ylabel(dim_label(2));
 
@@ -4101,6 +4112,7 @@ elseif imageplot
     % image plot
     h_nu = imagescnan(scale{2},scale{1}, U);
     xlabel(dim_label(1));  ylabel(dim_label(2));
+    axis xy; box off;
 else
     % curves / bar plots
     if isscalar(scale{1}) && isnan(scale{1})
@@ -4415,9 +4427,13 @@ for s=1:nSet
         for l=1:nHP
             % freeW = ~constrained_weight(W); % exclude fixed weights
             %freeSigma = Sigma{s}(freeW,freeW);
+            try
             MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
             SigmaInvGrad = linsolve(Sigma{s},  gg(:,:,l),MatOptions);
             grad{s}(:,:,l) = - linsolve(Sigma{s}, SigmaInvGrad,MatOptions )';
+            catch % if not definite positive- shouldn't happen if HPs have nice values
+grad{s}(:,:,l) = - (Sigma{s} \ gg(:,:,l)) / Sigma{s};% gradient of precision matrix
+            end
         end
 
         % select gradient only for fittable HPs

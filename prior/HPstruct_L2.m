@@ -11,7 +11,7 @@ else
     S.HP = 0;
 end
 S.label = {['log \lambda' num2str(d)]};  % HP labels
-if nargin>2
+if nargin>2 && ~isempty(HPfit)
     S.fit = HPfit; % if HP is fittable
 else
     S.fit = true;
