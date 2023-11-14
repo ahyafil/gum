@@ -160,6 +160,7 @@ classdef gum
     % - shaded colours in bar plots (mybar)
     % - corrected small bug in neg-entropy (em algo)
     % - plot_weights: same color scheme if same dimension
+    % - added sameaxis (plot folder)
 
     % TODO
     % - allow for collapse of 2nd & 3rd dim in wu
@@ -3316,6 +3317,7 @@ classdef gum
                 % check that scale is the same, and if not add nans where
                 % appropriate
                 for d=1:nD(1)
+                    obj(1).regressor(m).Weights(d).dimensions = string(obj(1).regressor(m).Weights(d).dimensions); % shouldn't be useful
                     obj(1).regressor(m).Weights(d).dimensions(end+1) = ""; % dataset
 
                     % check if different scales used across models
@@ -4768,7 +4770,6 @@ FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for '
 basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier('}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
 
-is_null_regressor = false;
 inLag = false; % if we're within a lag operator
 LagStruct = {};
 CloseBrackPos = [];
@@ -4793,6 +4794,8 @@ end
 
 % parse the formula until there's nothing left to parse...
 while ~isempty(fmla)
+
+is_null_regressor = false;
 
     % check for opening bracket
     if fmla(1)=='('
@@ -4842,17 +4845,25 @@ while ~isempty(fmla)
         end
         v = string(v); % string array
 
-        % check for multiple variables (i.e f(x,y)
+        % check for multiple variables, i.e f(x,y)
         while fmla(1)==','
             fmla(1) = [];
 
             [new_v, fmla] = starts_with_word(fmla, VarNames);
-            if isempty(new_v)
-                error('''%s'' in formula must be followed by variable name',transfo);
-            end
+            assert(~isempty(new_v), ', in formula of type f(x,y) must be followed by a valid variable name');
             v(end+1) = string(new_v);
 
             opts.sum = 'joint';
+        end
+
+        % check for splitting variable, i.e. f(x|y)
+        if fmla(1)=='|'
+            fmla(1) = [];
+
+            [new_v, fmla] = starts_with_word(fmla, VarNames);
+            assert(~isempty(new_v),'| in formula f(x|y) must be followed by a valid variable name');
+            opts.split = string(new_v);
+
         end
 
         %% process regressor options
@@ -4874,7 +4885,6 @@ while ~isempty(fmla)
             end
             fmla(1:i) = [];
             fmla = trimspace(fmla);
-
 
             switch lower(option)
                 case {'tau','variance','binning'}
@@ -4913,6 +4923,7 @@ while ~isempty(fmla)
                         error('incorrect fit option for variable ''%s''', v);
                     end
                 case 'period' % define period
+                    type = 'periodic';
                     i = find(fmla==')' | fmla==separator,1); % find next coma or parenthesis
                     if isempty(i)
                         error('incorrect formula, could not parse the value of period')
@@ -4955,7 +4966,7 @@ while ~isempty(fmla)
 
         V{end+1} = struct('variable',v, 'type','none');
 
-    else % variable name (default weight)
+    else % variable name (linear/categ)
         [v, fmla] = starts_with_word(fmla, VarNames);
 
         if ~isempty(v) %% linear variable
@@ -5069,7 +5080,6 @@ while ~isempty(fmla)
         error('Was expecting an operator (%s) in formula at point ''%s''', OperatorChars, fmla);
     end
 
-
     if ~is_null_regressor || ~any(fmla(1)=='+-') % unless it's a plus or minus coming after 0, add operation
         O(end+1) = fmla(1);
         fmla(1) = [];
@@ -5130,10 +5140,9 @@ for v=1:length(V)
     V{v} = regressor(x, V{v}.type, 'label',label, opts_combined{:});
 
     if ~isempty(split_var)
-        V{v} = split(V{v}, Tbl.(split_var));
+        V{v} = split(V{v}, Tbl.(split_var),[],[],split_var);
     end
 end
-
 
 %build predictor from operations between predictors
 [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct);
@@ -5281,7 +5290,6 @@ while length(V)>1
     elseif any(O==':' | O=='^') % then process interaction
 
         v = find(O==':' || O=='^',1);
-
         if O(v) == ':'
             V{v} = V{v} : V{v+1}; % compose interaction
         else
@@ -5294,6 +5302,7 @@ while length(V)>1
     elseif any(O=='|') % then perform splitting
         v = find(O=='|',1);
 
+        V{v+1}.Weights.dimensions = V{v+1}.Weights.label;
         V{v} = V{v}.split(V{v+1}); % compose product
 
         % remove regressor and operation

@@ -535,24 +535,20 @@ if use_reg
 
         % create other regressor object without modulation just to get
         % weights properties
-        Rdummy = regressor(DM_dummy, 'linear','scale',scale,'sum',summing, 'basis', basis,'hyperparameter',HP,'label',label);
+        Rdummy = regressor(DM_dummy, 'linear','scale',scale,'sum',summing, 'basis', basis,...
+            'hyperparameter',HP,'label',label, 'dimensions',"time");
 
         R.Weights(1) = Rdummy.Weights;
         R.Prior(1) = Rdummy.Prior;
         R.HP(1) = Rdummy.HP;
 
-        %  W = R.Weights;
-        %  W(1).nWeight = nK;
-        %  W(1).scale = scale;
-        %          R.Weights = W;
-
-        if any([R.Weights.constraint]=='f') % if any other dimension is without constraint
-            R.Weights(1).constraint = 'm'; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
+        if any([R.Weights.constraint]=="free") % if any other dimension is without constraint
+            R.Weights(1).constraint = "mean1"; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
         end
     end
 else
     % create regressor object
-    R = regressor(DM, 'linear','scale',scale,'sum',summing, 'basis', basis,'hyperparameter',HP,'label',label);
+    R = regressor(DM, 'linear','scale',scale,'sum',summing, 'basis', basis,'hyperparameter',HP,'label',label, 'dimensions',"time");
 
     if doSplit && ~isempty(split_label)
         if length(split_label)~=nSplit

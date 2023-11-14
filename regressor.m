@@ -527,8 +527,9 @@ classdef regressor
                     obj = define_continuous_prior(obj,type, nD,this_scale, HP{nD}, basis{nD}, ...
                         binning,summing, period, single_tau(nD), condthresh, dimensions{nD});
                    if ~isempty(HPfit)
-                       assert(length(HPfit)==length(obj.HP(nD).fit), 'length of HPfit does not match number of hyperparameters');
-                    obj.HP(nD).fit = HPfit;
+                       assert(isscalar(HPfit) || length(HPfit)==length(obj.HP(nD).fit), ...
+                           'length of HPfit does not match number of hyperparameters');
+                    obj.HP(nD).fit(:) = HPfit;
                    end
 
                     % prior for other dimensions
@@ -1447,8 +1448,7 @@ classdef regressor
 
             % name of dimensions
             nScaleDim = size(scale,1);
-            if ~isempty(dimensions) && (length(dimensions)>1 || dimensions~="")
-                assert(length(dimensions)==nScaleDim,'length of ''dimensions'' does not match with dimensionality of scale');
+            if ~isempty(dimensions) && length(dimensions)==nScaleDim
                 obj.Weights(d).dimensions = dimensions;
             else
                 switch nScaleDim
@@ -3093,7 +3093,10 @@ end
                 if isa(obj.Data,'sparsearray') && subcoding(obj.Data,dd+1) %obj.sparse(dd)
 
                     shift = (X-1)*obj.Weights(dd).nWeight;  % shift in each dimension (make sure we use a different set of indices for each value along dimension d
-                    obj.Data.sub{dd+1} = obj.Data.sub{dd+1} +  uint8(shift);
+                    maxval = nVal*obj.Weights(dd).nWeight + size(obj.Data,dd+1);
+                    int_fun = int_code(maxval); % which integer coding
+                    obj.Data.sub{dd+1} = int_fun(obj.Data.sub{dd+1}) +  int_fun(shift);
+                   
                     obj.Data.siz(dd+1) = obj.Data.siz(dd+1)*nVal;
                 else
                     VV = obj.Data;
@@ -4005,7 +4008,7 @@ if isempty(W.scale)
 end
 scale = W.scale';
 dim_label = W.dimensions;
-if isempty(dim_label)
+if isempty(dim_label) || (isnumeric(dim_label)&&isnan(dim_label)) % shouldn't happen but let's make sure
     dim_label = "";
 end
 
@@ -4104,15 +4107,15 @@ if twodmap
 
         % add black dots representing data points in trained dataset
         h_nu(2) =plot(sc(:,1),sc(:,2),'k.', 'MarkerSize',2);
-        axis xy; box off;
+        axis xy; axis tight; box off;
     end
     xlabel(dim_label(1));  ylabel(dim_label(2));
 
 elseif imageplot
     % image plot
-    h_nu = imagescnan(scale{2},scale{1}, U);
+    h_nu = imagescnan(scale{2},scale{1}, U');
     xlabel(dim_label(1));  ylabel(dim_label(2));
-    axis xy; box off;
+        axis xy; axis tight; box off;
 else
     % curves / bar plots
     if isscalar(scale{1}) && isnan(scale{1})
@@ -4237,7 +4240,8 @@ else % non-sparse
         idx{i} = 1:siz(i);
     end
 
-    val = zeros(siz,'uint8'); % use integer coding
+    int_class = class(int_code(nVal*nFun,[]));
+    val = zeros(siz,int_class); % use integer coding - w appropriate bits
     for u=1:nVal % one column for each value
         for w=1:nFun
             idx{end} = u + nVal*(w-1);
@@ -4840,5 +4844,20 @@ n = ones(size(P)); % by default one
 isCellCovFun = cellfun(@iscell, {P.CovFun});
 for i=find(isCellCovFun) % if basis is cell array, then these are concatenated regressors
     n(i) = length(P(i).CovFun);
+end
+end
+
+%% integer coding - chooses the minimal number of bits for integer coding
+function fun = int_code(maxVal, x)
+if maxVal>65535 % using the lightest encoding possible
+                    fun = @uint32;
+                    elseif maxVal>255
+                    fun = @uint16;
+                    else
+                    fun = @uint8;
+end
+
+if nargin>1
+    fun = fun(x);
 end
 end

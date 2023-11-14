@@ -976,6 +976,9 @@ classdef sparsearray
 
         %% SUM OVER DIMENSION
         function obj = sum(obj,d)
+            if nargin==1 % default sum over dim 1
+                d = 1;
+            end
             if ischar(d) && strcmp(d, 'all')
                 obj = sum(allvalues(obj));
             else
