@@ -4,6 +4,12 @@ function       [M,c] = force_definite_positive(M, c)
 % M = force_definite_positive(M, c) ensures that all eigenvalues are larger
 % or equal to c (default: c=1e3*eps)
 
+if any(isnan(M(:)))
+    warning('cannot force matrix with nan to be definite positive');
+    c = nan;
+    return;
+end
+
 assert(isreal(M),'matrix should be real');
 
 if nargin<2 || isempty(c)

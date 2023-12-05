@@ -1,16 +1,18 @@
-function S = HPstruct_L2(d, HP, HPfit)
-% S = HPstruct_L2(d, HP, HPfit)
+function S = HPstruct_L2(HP, HPfit)
+% S = HPstruct_L2(HP, HPfit)
 % HP structure for L2 regularization
 
 S = HPstruct();
 
 % value of hyperparameter
-if nargin>1
-    S.HP = HPwithdefault(HP, 0); % default value if not specified
-else
-    S.HP = 0;
+S.HP = 0;
+if nargin>1 && isfield(HP, 'value')
+    S.HP = HP.value(1); %if value is specified
+elseif nargin>1 && isfield(HP, 'variance')
+    S.HP = log(HP.variance)/2; % if variance is specified
 end
-S.label = {['log \lambda' num2str(d)]};  % HP labels
+
+S.label = "log \lambda";  % HP labels
 if nargin>2 && ~isempty(HPfit)
     S.fit = HPfit; % if HP is fittable
 else

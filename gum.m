@@ -2,7 +2,7 @@ classdef gum
 
     % Defines a Generalized Unrestricted Model (GUM). Two possible
     % syntaxes:
-    % * function M = gum(X, T, param)
+    % * function M = gum(X, y, param)
     %
     % where X is a regressor, a vector of regressors (type "help regressor" for more information) or a numerical array.
     % Param is a structure with optional parameters (see below).
@@ -22,7 +22,8 @@ classdef gum
     % Poisson and neg-binomial observations). The other possible value is 'probit' for
     % binomial observations.
     % -'w': is a weighting vector with length equal to the number of training examples
-    % - 'split': add
+    % - 'split': splitting the model into an array of models for subset of
+    % data based on the value of a categorical variable
     % - 'constant': whether a regressor of ones is included (to capture the
     % intercept). Possible values: 'on' [default], 'off'
     %
@@ -98,8 +99,11 @@ classdef gum
     % covariance (i.e. no prior)
     % - 'number_of_regressors': number of regressors
     % - 'concatenate_weights': concatenates model weights into vector
+    % - 'get_weight_structure': get structure for weight data
+ % - 'get_hyperparameter_structure': get structure for hyperparameter data
     % - 'freeze_weights': freezes weights and parameters in the model
-    % - 'clear_data'
+    % - 'knockout': remove set of regressors from model
+    % - 'clear_data': clear raw data to make lighter object
     % - 'save': save model into .mat file
     %
     % DEALING WITH MULTIPLE MODELS
@@ -147,26 +151,11 @@ classdef gum
     % - 'plot_basis_functions': plot regressor basis functions
     %
     % See https://github.com/ahyafil/gum
-    % version 0.1.1. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
-
-    %DONE
-    % - corrected a small bug in element-wise product for sparsearray
-    % - changed defcolors to beautiful colours
-    % - added automatic labelling to all figures
-    % - no intercept if model includes a dim1 polynomial
-    % - improved computing time for IRLS w sparse matrix in some cases
-    % - added 'dimensions' to weight fields, used for axis labels in
-    % plot_weights
-    % - shaded colours in bar plots (mybar)
-    % - corrected small bug in neg-entropy (em algo)
-    % - plot_weights: same color scheme if same dimension
-    % - added sameaxis (plot folder)
+    % version 0.1.2. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
 
     % TODO
-    % - allow for collapse of 2nd & 3rd dim in wu
-    % - 
-    % - add more lines in design matrix plot if concatenated regressors or
-    % sublevels
+    % - wu: automatic permute of dimensions
+    % - basis functions: change prior to ARD? allow for chnge (L2/ARD/none)
     % - improve indexing in sparsearray
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
@@ -176,7 +165,6 @@ classdef gum
     % - test rank again
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
-    % - add label on models
     % - reset: weights for gum, clearing all scores and predictions
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
@@ -199,12 +187,10 @@ classdef gum
         mixture = []
     end
 
-
     methods
 
         %% %%%%%% CONSTRUCTOR %%%%%
-        function obj = gum(M, T, param)
-
+        function obj = gum(M, y, param)
             if nargin==0
                 %% empty class
                 return;
@@ -216,8 +202,8 @@ classdef gum
             end
 
             if istable(M)
-                fmla = T;% formula
-                [M, T, param] = parse_formula(M,fmla, param); % parse formula
+                fmla = y;% formula
+                [M, y, param] = parse_formula(M,fmla, param); % parse formula
                 obj.formula = fmla;
             end
 
@@ -234,8 +220,8 @@ classdef gum
 
             % model label
             if isfield(param,'label')
-                 obj.label = char(param.label);
-                 param = rmfield(param,'label');
+                obj.label = char(param.label);
+                param = rmfield(param,'label');
             end
 
             % compose formula
@@ -247,14 +233,14 @@ classdef gum
             end
 
             %% check dependent variable
-            if isvector(T)
-                n = length(T);
-                T = T(:);
+            if isvector(y)
+                n = length(y);
+                y = y(:);
                 BinaryCountCode = 0;
-            elseif ~ismatrix(T) || size(T,2)~=2
+            elseif ~ismatrix(y) || size(y,2)~=2
                 error('T should be a column vector or a matrix of two columns');
             else
-                n = size(T,1);
+                n = size(y,1);
                 BinaryCountCode = 1;
             end
             obj.nObs = n;
@@ -278,25 +264,25 @@ classdef gum
             end
             obj.score.isEstimated = 0;
             obj.score.isFitted = 0;
-            obj.score.Dataset = '';
+            obj.score.Dataset = "";
 
             %% transform two-column dependent variable into one-column
             if BinaryCountCode % if binary observations with one column for counts of value 1 and one column for total counts
-                if any(T(:,1)<0)
+                if any(y(:,1)<0)
                     error('counts should be non-negative values');
                 end
-                if any(T(:,1)>T(:,2))
+                if any(y(:,1)>y(:,2))
                     error('values in the second column should be larger or equal to values in the first');
                 end
                 if ~isempty(obj.ObservationWeight)
                     error('two-column dependent variable is not compatible with observation weights');
                 end
 
-                w = [T(:,1) T(:,2)-T(:,1)]'; % first row: value 1, then value 0
+                w = [y(:,1) y(:,2)-y(:,1)]'; % first row: value 1, then value 0
                 nRep = sum(w>0,1); % if there is observation both for 0 and/or for 1 (needs to replicate rows)
 
-                T = repmat([1;0],1, n); % observation for each
-                T = T(w>0); % only keep
+                y = repmat([1;0],1, n); % observation for each
+                y = y(w>0); % only keep
                 obj.ObservationWeight = w(w>0);
 
                 n = sum(nRep);
@@ -306,13 +292,13 @@ classdef gum
                     for d=2:ndims(M(m).Data)
                         RR{d} = 1;
                     end
-                    M(m).Data =repelem(M(m).Data,RR{:});
+                    M(m).Data = repelem(M(m).Data,RR{:});
                     M(m).nObs = n;
                 end
                 obj.nObs = n;
 
             end
-            obj.T = T;
+            obj.T = y;
 
             %% parse parameters
             if isfield(param,'observations')
@@ -327,12 +313,12 @@ classdef gum
             else
                 obs = 'binomial';
             end
-            if strcmp(obs,'binomial') && any(T~=0 & T~=1)
+            if strcmp(obs,'binomial') && any(y~=0 & y~=1)
                 error('for binomial observations, T values must be 0 or 1');
-            elseif ismember(obs, {'poisson','neg-binomial'}) && any(T<0)
+            elseif ismember(obs, {'poisson','neg-binomial'}) && any(y<0)
                 error('for count observations, all values must be non-negative');
             end
-            if all(T==0) || all(T==1)
+            if all(y==0) || all(y==1)
                 warning('T values are all 0 or 1, may cause problem while fitting');
             end
             obj.obs = obs;
@@ -356,14 +342,17 @@ classdef gum
 
             end
 
+            %% check if prior none
+            if isfield(param, 'prior') && any(strcmpi(param.prior, {'none','off'}))
+                M = M.disable_prior(); % disable prior
+            end
+
             %% add constant bias ('on' by default)
             if ~isfield(param,'constant') || strcmpi(param.constant, 'on')
                 % let's see whether we should add a prior or not on this
                 % extra weight
                 GCov = global_prior_covariance(compute_prior_covariance(M));
                 if  isempty(GCov) || any(isinf(diag(GCov))) % if any other regressor has infinite variance
-                    % Mconst.HP.HP = Inf;
-                    % Mconst.HP.fit = false;
                     const_prior_type = 'none';
                 else
                     const_prior_type = 'L2';
@@ -434,15 +423,12 @@ classdef gum
             if isfield(param, 'split')
                 obj = split(obj, param.split);
             end
-
-            
         end
 
         %%% DISPLAY GUM OBJECT
         function print(obj)
             disp(obj);
         end
-
 
         function disp(obj)
             if numel(obj)>1 || isempty(obj)
@@ -1108,7 +1094,7 @@ classdef gum
 
         function   obj = infer(obj, param)
             % M = M.infer(); or M = M.infer(param);
-            % INFERS (ESTIMATES) WEIGHTS OF GUM USING LAPLACE APPROXIMATION.
+            % INFERS (ESTIMATES) WEIGHTS OF GUM USING THE LAPLACE APPROXIMATION.
             % Optional parameters are passed as fiels in structure param:
             %- 'maxiter': maximum number of iterations of IRLS estimation algorithm
             %(default 100)
@@ -1260,7 +1246,8 @@ classdef gum
                     variance{m} = zeros(nSet,M(m).rank); % variance across observations for each component
 
                 end
-                validationscore = zeros(1,nSet); % score for each (LLH per observation)
+                CVLL = zeros(1,nSet); % CVLL for each
+                validationscore = zeros(1,nSet); % score for each (CVLL normalized by number of observations)
                 accuracy = zeros(1,nSet); % proportion correct
                 exitflag_CV = zeros(1,nSet); % exit flag (converged or not)
                 U_CV = zeros(obj.score.nParameters,nSet);
@@ -1307,12 +1294,12 @@ classdef gum
                     obj_test.Predictions.rho = [];
                     obj_test.score.scaling = s; % dispersion parameter estimated in training set
 
-                    [obj_test,validationscore(p),grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
+                    [obj_test,CVLL(p),grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
                     accuracy(p) = Accuracy(obj_test); % and accuracy
 
                     nValidation = obj_test.score.nObservations; % number of observations in test set
 
-                    validationscore(p) = validationscore(p)/ nValidation; % normalize by number of observations
+                    validationscore(p) = CVLL(p)/ nValidation; % normalize by number of observations
 
                     % compute gradient of score over hyperparameters
                     if do_grad_hyperparam
@@ -1389,6 +1376,8 @@ classdef gum
                     warning('gum:notconverged', 'Failed to converge for %d/%d permutations', n_nonconverged, nSet);
                 end
 
+                Sfit.CrossValidatedLogLikelihood = mean(CVLL);
+                Sfit.CrossValidatedLogLikelihood_all = CVLL;
                 Sfit.validationscore = mean(validationscore);
                 Sfit.validationscore_all = validationscore;
                 Sfit.accuracy_validation = mean(accuracy);
@@ -1864,10 +1853,8 @@ classdef gum
                 end
                 [~,logprior] = LogPrior(obj);
 
-
                 % initial value of log-joint
-                obj = Predictor(obj);
-                obj = LogJoint(obj,[],true);
+                obj = obj.Predictor().LogJoint([],true);
                 logjoint = obj.score.LogJoint;
 
                 iter = 1;
@@ -2385,7 +2372,6 @@ classdef gum
             %Predictor(obj, cc) only for component cc (for mixture models)
 
             assert(obj.is_weight_set,'model weights are not defined/set/estimated');
-
 
             if isempty(obj.mixture)
                 nC = 1;
@@ -3167,6 +3153,42 @@ classdef gum
             obj.score.nFreeHyperparameters = sum(isFreeHP);
         end
 
+        %% GET WEIGHT STRUCTURE
+        function W = get_weight_structure(obj,label)
+            % W = get_weight_structure(M) or
+            % W = get_weight_structure(M, label) to get weight structure.
+            % If label is a non-scalar string or label is not specified, W
+            % is a structure column array with one element for each set of
+            % weight.
+            % If M is an array of GUM objects, W is a 2D structure array
+            % where each row is for a different model.
+            for i=1:numel(obj)
+                if nargin>1
+                    W(i,:) = get_weight_structure(obj.regressor,label);
+                else
+                    W(i,:) = get_weight_structure(obj.regressor);
+                end
+            end
+        end
+
+        %% GET HYPERPARAMETER STRUCTURE
+        function H = get_hyperparameter_structure(obj,label)
+            % H = get_hyperparameter_structure(M) or
+            % H = get_hyperparameter_structure(M, label) to get hyperparameter structure.
+            % If label is a non-scalar string or label is not specified, H
+            % is a structure column array with one element for each set of
+            % hyperparameters.
+            % If M is an array of GUM objects, H is a 2D structure array
+            % where each row is for a different model.
+            for i=1:numel(obj)
+                if nargin>1
+                    H(i,:) = get_hyperparameter_structure(obj.regressor,label);
+                else
+                    H(i,:) = get_hyperparameter_structure(obj.regressor);
+                end
+            end
+        end
+
         %% FREEZE WEIGHTS
         function obj = freeze_weights(obj, varargin)
             %  M = freeze_weights(M) freezes all weights and
@@ -3222,8 +3244,6 @@ classdef gum
             obj.score.isFitted = 0;
             obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
             obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
-
-
         end
 
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
@@ -3275,10 +3295,10 @@ classdef gum
             % concatenates weights from array of models (e.g. same model for different datasets) into a single model object (usually for plotting
             % and storing)
             %
-            % M = concatenate_over_models(M, true) to place model index as
-            % first dimension in weights
+            % M = concatenate_over_models(M, false) to place model index as
+            % last dimension in weights (default: first dimension)
             if nargin==1 % whether we put model index as first dimension in weights
-                place_first = false;
+                place_first = true;
             end
             nObj = length(obj);
 
@@ -3413,6 +3433,9 @@ classdef gum
             %% concatenate predictions
             obj(1).Predictions = [obj.Predictions];
 
+            %% concatenate labels
+            obj(1).label = {obj.label};
+
             %% keep only first model
             obj(2:end) = [];
 
@@ -3446,14 +3469,14 @@ classdef gum
                     for m=1:n
                         all_score{m}.Dataset = string(all_score{m}.Dataset);
                     end
-  % pre-allocate values for each model
-                X = strings(length(all_score{1}.(mt)),length(obj));
+                    % pre-allocate values for each model
+                    X = strings(length(all_score{1}.(mt)),length(obj));
                 else
-                      % pre-allocate values for each model
-                X = nan(length(all_score{1}.(mt)),length(obj));
+                    % pre-allocate values for each model
+                    X = nan(length(all_score{1}.(mt)),length(obj));
                 end
 
-              
+
 
                 % add values from each model where value is present
                 for m=1:n
@@ -3641,7 +3664,6 @@ classdef gum
             % computes estimated variance of predictor for each datapoint.
 
             n = obj.nObs;
-            % M = obj.regressor;
             sigma = obj.score.covb;
 
             if any(isinf(sigma(:))) % if no prior defined on any dimension, cannot compute it
@@ -3650,9 +3672,6 @@ classdef gum
             end
 
             nSample = 1000; % number of sample to compute variance
-
-            %full_idx = [0 cumsum([M.nParameters])]; % position for full parameter in each dimension
-
             U = concatenate_weights(obj);             % vector of posterior weights mean
             rho_sample = zeros(n,nSample);
 
@@ -3673,17 +3692,6 @@ classdef gum
 
                 %place it in model
                 obj.regressor = obj.regressor.set_weights(Us);
-                %                 midx = 0;
-                %                 for m=1:obj.nMod
-                %                     rr = M(m).rank;
-                %                     for d=1:obj.regressor(m).nDim
-                %                         for r=1:rr
-                %                             fdx = full_idx( midx+(d-1)*rr+r ) + 1 : full_idx( midx+(d-1)*rr+r+1 ); % index for full parameter set
-                %                             obj.regressor(m).Weights(d).PosteriorMean(r,:) = Us(fdx);
-                %                         end
-                %                     end
-                %                     midx = midx + obj.regressor(m).nDim * rr; % jump index by number of components in module
-                %                 end
 
                 % compute predictor and store it
                 obj = Predictor(obj);
@@ -3878,26 +3886,55 @@ classdef gum
             h.Objects = [h.Objects h_im];
             axis tight;
 
+            % add vertical lines between sets of regressor
             nRegCum = cumsum([0 nReg]);
             for m=1:obj.nMod-1
-                plot((nRegCum(m+1)+.5)*[1 1], ylim, 'b','linewidth',2);
+                h.Objects(end+1) = plot((nRegCum(m+1)+.5)*[1 1], ylim, 'b','linewidth',2);
             end
 
             set(gca, 'ydir','reverse');
             f = 1;
+            with_subsets = false;
             for m=1:obj.nMod
                 h_txt = [];
-                lbl = [M(m).Weights(dims{m}).label];
-                for d=1:length(lbl)
-                    if ~isempty(lbl(d))
-                        h_txt(d) = text( mean(nRegCum(m:m+1))+1, 0.5, lbl(d),...
+                W = [M(m).Weights(dims{m})]; %weights structure
+                for d=1:length(W)
+                    if isscalar(W(d).label)
+                        % add regressor label (unless there are more than
+                        % one -> concatenated regressors)
+                        h_txt(d) = text( mean(nRegCum(m:m+1))+.5, 0.5, W(d).label,...
                             'verticalalignment','bottom','horizontalalignment','center');
                         if nReg(f)<.2*sum(nReg)
                             set(h_txt(d),'Rotation',90,'horizontalalignment','left');
                         end
                     end
+
+                    scl = W(d).scale;
+                    if ~isrow(scl) && length(unique(scl(2,:)))<=size(scl,2)/2
+                        % add thiner vertical lines between subsets of regressors
+                        subset_change = find(scl(2,1:end-1)~=scl(2,2:end));
+                        xval = nRegCum(f)+ .5 + subset_change'; % find changes of values in second line
+                        plot(xval*[1 1], ylim, 'b','linewidth',1);
+
+                        if length(h_txt)>=d
+                            set(h_txt(d),'Position', get(h_txt(d),'Position') - [0 diff(ylim)/30 0]); % move main text vertically
+                        end
+
+                        subset_label = unique(scl(2,:));
+                        if W(d).dimensions(end)=="index" % concatenated regressors
+                            subset_label = W(d).label(subset_label);
+                        end
+                        xxval = [nRegCum(f)+.5 xval nRegCum(f+1)+.5];
+                        for ss=1:length(subset_label)
+                            text( mean(xxval(ss:ss+1)), 0.5, string(subset_label(ss)),...
+                                'verticalalignment','bottom','horizontalalignment','center');
+                        end
+
+                    end
                     f = f+1;
                 end
+
+
                 h.Objects = [h.Objects h_txt];
             end
 
@@ -4062,9 +4099,13 @@ classdef gum
             end
 
             % if more than one dataset, pass it as extra possible label
-            if length(string(obj.score.Dataset))>1
+            Dataset = string(obj.score.Dataset);
+            if length(Dataset)>1 && ~all(Dataset=="")
                 varargin{end+1} = 'Dataset';
                 varargin{end+1} = string(obj.score.Dataset);
+            elseif iscell(obj.label)
+                varargin{end+1} = 'Dataset';
+                varargin{end+1} = string(obj.label);
             end
 
             % plot regressor weights
@@ -4299,8 +4340,11 @@ classdef gum
         function h = plot_basis_functions(obj, varargin)
             % plot_basis_functions(M) plots basis functions in regressor
             %
-            %plot_basis_functions(M, dims) to specify which regressor to
+            %plot_basis_functions(M, label) to specify which regressor to
             %select
+            %
+            % plot_basis_functions(M, label,'normalize') or plot_basis_functions(M, [],'normalize')
+            % normalizes basis functions
             %
             %h = plot_basis_functions(...) provides graphical handles
             h = plot_basis_functions(obj.regressor, varargin{:});
@@ -4732,6 +4776,7 @@ end
 T_fmla = trimspace(fmla(1:i-1)); % characters before ~
 
 [target, T_fmla] = starts_with_word(T_fmla, VarNames);
+T_fmla = trimspace(T_fmla);
 
 if isempty(target)
     error('formula should start with dependent variable from the list of table variables');
@@ -4740,11 +4785,21 @@ end
 T = Tbl.(target);
 nObs = length(T);
 
+% check if binary model with 'success / failure ~ ...' syntax
+if ~isempty(T_fmla) && T_fmla(1) == '/'
+    T_fmla = trimspace(T_fmla(2:end)); % remove / and subsequent spaces
+    [target_total, T_fmla] = starts_with_word(T_fmla, VarNames);
+    if isempty(target_total)
+        error('incorrect variable name for cumulative number of observations in syntax '' success / total ~...''');
+    end
+    T = [T Tbl.(target_total)]; % add as second column
+    T_fmla = trimspace(T_fmla);
+end
+
 % check if splitting model
-T_fmla = trimspace(T_fmla);
 if ~isempty(T_fmla)
     if ~T_fmla(1) == '|'
-        error('dependent variable in formula should be followed either by ''~'' or ''|'' symbol');
+        error('dependent variable in formula should be followed either by ''~'',''/'' or ''|'' symbol');
     end
 
     SplitVar = trimspace(T_fmla(2:end));
@@ -4767,6 +4822,8 @@ CloseBracketPos = []; % position of closing brackets
 option_list = {'sum','mean','tau','variance','basis','binning','constraint', 'type', 'period','fit','prior'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
+FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
+
 basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier('}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
 
@@ -4795,7 +4852,7 @@ end
 % parse the formula until there's nothing left to parse...
 while ~isempty(fmla)
 
-is_null_regressor = false;
+    is_null_regressor = false;
 
     % check for opening bracket
     if fmla(1)=='('
@@ -4820,13 +4877,13 @@ is_null_regressor = false;
         LS.ini = length(O); % position of start of lag operator
     end
 
-    transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+('};
+    transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'gamma[\d]+(',};
     [transfo, fmla, transfo_no_number] = starts_with_word(fmla,transfo_label);
     if ~isempty(transfo) % for syntax f(..) or cat(...)
 
         opts = struct();
         switch transfo_no_number
-            case {'f(', 'poly(','exp(', 'raisedcosine('}
+            case {'f(', 'poly(','exp(', 'raisedcosine(','gamma('}
                 type = 'continuous';
                 if ~strcmp(transfo, 'f(')
                     opts.basis = transfo(1:end-1);
@@ -4841,7 +4898,7 @@ is_null_regressor = false;
         fmla = trimspace(fmla);
         [v, fmla] = starts_with_word(fmla, VarNames);
         if isempty(v)
-            error('''%s'' in formula must be followed by variable name',transfo);
+            error('''%s'' in formula must be followed by variable name',transfo_no_number);
         end
         v = string(v); % string array
 
@@ -4869,7 +4926,7 @@ is_null_regressor = false;
         %% process regressor options
         while fmla(1)~=')'
             if fmla(1) ~= separator
-                error('incorrect character in formula (should be comma or closing parenthesis) at ''%s''', fmla);
+                error('incorrect character in formula (should be semicolon or closing parenthesis) at ''%s''', fmla);
             end
             fmla(1) = [];
             fmla = trimspace(fmla);
@@ -4888,7 +4945,7 @@ is_null_regressor = false;
 
             switch lower(option)
                 case {'tau','variance','binning'}
-                    [Num, fmla] = starts_with_number(fmla);
+                    [Num, fmla] = starts_with_number(fmla, strcmpi(option,'tau'));
                     if isnan(Num)
                         error('Value for option ''%s'' should be numeric',option);
                     end
@@ -4924,7 +4981,7 @@ is_null_regressor = false;
                     end
                 case 'period' % define period
                     type = 'periodic';
-                    i = find(fmla==')' | fmla==separator,1); % find next coma or parenthesis
+                    i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
                     if isempty(i)
                         error('incorrect formula, could not parse the value of period')
                     end
@@ -4936,7 +4993,7 @@ is_null_regressor = false;
                     opts.constraint = fmla(1);
                     fmla = trimspace(fmla(2:end));
                 case 'prior'
-                    i = find(fmla==')' | fmla==separator,1); % find next coma or parenthesis
+                    i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
                     if isempty(i)
                         error('incorrect formula, could not parse the value of prior');
                     end
@@ -4961,10 +5018,10 @@ is_null_regressor = false;
         if isempty(i)
             error('incorrect formula: bracket ] was not found');
         end
-        v = trimspace(fmla(1:i-1));
-        fmla = trimspace(fmla(2:end));
+        v = trimspace(fmla(2:i-1));
+        fmla = trimspace(fmla(i+1:end));
 
-        V{end+1} = struct('variable',v, 'type','none');
+        V{end+1} = struct('variable',v, 'type','constant', 'opts',struct());
 
     else % variable name (linear/categ)
         [v, fmla] = starts_with_word(fmla, VarNames);
@@ -4978,6 +5035,56 @@ is_null_regressor = false;
                 type = 'linear';
             end
             fmla = trimspace(fmla);
+
+            %%%%%%
+            if ~isempty(fmla) && fmla(1)=='('
+                %% process regressor options 'e.g. x(prior=none)'
+                fmla(1) = ';';
+                while fmla(1)~=')'
+                    if fmla(1) ~= separator
+                        error('incorrect character in formula (should be semicolon or closing parenthesis) at ''%s''', fmla);
+                    end
+                    fmla(1) = [];
+                    fmla = trimspace(fmla);
+
+                    i = find(fmla=='=',1);
+                    if isempty(i)
+                        error('missing ''='' sign for option in formula at ''%s''', fmla);
+                    end
+
+                    option = trimspace(fmla(1:i-1));
+                    if ~any(strcmpi(option, option_list))
+                        error('incorrect option type: %s',option);
+                    end
+                    fmla(1:i) = [];
+                    fmla = trimspace(fmla);
+
+                    switch lower(option)
+                        case 'variance'
+                            [Num, fmla] = starts_with_number(fmla,1);
+                            if isnan(Num)
+                                error('Value for option ''%s'' should be numeric',option);
+                            end
+                            opts.variance = Num;
+
+                        case 'fit'
+                            [opts.HPfit, fmla] = starts_with_word(fmla, FitNamesLinear);
+                            if isempty(opts.HPfit)
+                                error('incorrect fit option for variable ''%s''', v);
+                            end
+                        case 'prior'
+                            i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
+                            if isempty(i)
+                                error('incorrect formula, could not parse the value of prior');
+                            end
+                            opts.prior = fmla(1:i-1);
+                            fmla(1:i-1) = [];
+                    end
+                end
+                fmla = trimspace(fmla(2:end));
+
+            end
+            %%%%%%
 
             V{end+1} = struct('variable',v, 'type',type, 'opts', opts);
 
@@ -4995,7 +5102,6 @@ is_null_regressor = false;
 
         else
             error('could not parse formula at point ''%s''', fmla);
-
         end
     end
 
@@ -5170,10 +5276,10 @@ end
 % it is the 0 order polynomial
 W = [M([M.nDim]==1).Weights]; % weights for dim1 regressors
 if ~isempty(W)
-basis = [W.basis];
-if ~isempty(basis) && any(cellfun(@(f) isequal(f,@basis_poly), {basis.fun}))
-    param.constant = 'off';
-end
+    basis = [W.basis];
+    if ~isempty(basis) && any(cellfun(@(f) isequal(f,@basis_poly), {basis.fun}))
+        param.constant = 'off';
+    end
 end
 end
 
@@ -5408,7 +5514,32 @@ end
 end
 
 %% check if string starts with a number
-function  [Num, fmla] = starts_with_number(fmla)
+function  [Num, fmla] = starts_with_number(fmla, useVector)
+if nargin<2
+    useVector = false;
+end
+
+% if accepts various values, e.g. '2,5,10'
+NumVec = [];
+fmla2 = fmla;
+while useVector && any(fmla2==',')
+    i = find(fmla2==',',1); % first coma
+    Num = str2double(fmla2(1:i-1)); % try to convert to number what comes before first coma
+    if isnan(Num) % failed -> forget about that come
+        useVector = false;
+    else
+        NumVec(end+1) = Num; % append to list
+        fmla2(1:i) = []; % remove all list before
+    end
+end
+if ~isempty(NumVec) % if we've seen digits before comas
+    [Num, fmla2] = starts_with_number(fmla2); % process what comes after the last valid coma
+    if ~isnan(Num)% if also valid number after last coma
+        Num = [NumVec Num];
+        fmla = fmla2;
+    end
+    return;
+end
 
 % find longest string that corresponds to numeric value
 Num = nan(1,length(fmla));
@@ -5417,14 +5548,12 @@ for i=1:length(fmla)
         Num(i) = str2double(fmla(1:i));
     end
 end
-%i = find(~isnan(Num) & ~(fmla==','),1,'last');
 i = find(~isnan(Num),1,'last');
 
 if isempty(i)
     Num = nan;
 else
     Num = Num(i);
-
 
     fmla(1:i) = [];
     fmla = trimspace(fmla);
@@ -5503,7 +5632,7 @@ end
 
 %% figure name
 function set_figure_name(gcf, obj, str)
-if ~isempty(obj.label)
+if ~isempty(obj.label) && ~iscell(obj.label)
     str = [str ' ' obj.label];
 end
 if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset) && isscalar(obj.score.Dataset)

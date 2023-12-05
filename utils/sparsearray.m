@@ -477,7 +477,7 @@ classdef sparsearray
                     end
                     ind = ind + sb;
                 end
-                
+
                 obj.value = obj.value(ind);
                 obj.value = reshape(obj.value,prod(new_sz),1);
 
@@ -1199,7 +1199,7 @@ classdef sparsearray
 end
 %% PRIVATE FUNCTIONS
 
-
+%% get indices
 function [ind,nsub] = get_indices(siz, subs)
 subs = check_subs(siz, subs);
 
@@ -1226,11 +1226,13 @@ end
 function  subs = check_subs(siz, subs)
 
 D = length(siz); % array dimension
-if length(subs)>D
+nSubs = length(subs);
+if nSubs>D 
     error('sparse tensor does not have so many dimensions');
-elseif length(subs)<D
+elseif nSubs<D && ~all(siz(nSubs+1:end)==1)
     error('provide indices for all dimensions (or just one to get column output)');
 else
+    subs(nSubs+1:D) = {1};
     for d=1:D
         if ischar(subs{d}) && subs{d}==':'
             subs{d} = 1:siz(d);
@@ -1340,7 +1342,7 @@ if isequal(fun, @times) && prod(Snonsub)==numel(obj2.value) && all(obj1.value(:)
     % if pairwise multiplication and obj1 is pure one-hot encoding, values are simply inherited from obj2
     x = obj2.value;
 
-elseif isequal(fun, @times) && prod(Snonsub)==numel(obj1.value) && all(obj2.value(:)==1) 
+elseif isequal(fun, @times) && prod(Snonsub)==numel(obj1.value) && all(obj2.value(:)==1)
     % if pairwise multiplication and obj2 is pure one-hot encoding,
     % values are simply inherited from obj1
     x = obj1.value;
@@ -1419,11 +1421,11 @@ for d= prod_dims
         end
 
         X = X*u;
-        
+
     end
     if ismatrix(X) && prod_dims(end)<=2 && issparse(u) % ideally we want the product of X*u to be directly sparse without having to go through the non-sparse version
-            X = sparse(X);
-        end
+        X = sparse(X);
+    end
     S(d) = nrow;
 
 end

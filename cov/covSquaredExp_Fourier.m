@@ -13,6 +13,7 @@ function [K, grad] = covSquaredExp_Fourier(scale, HP, B)
 % hyperparameters, incl is a vector of three booleans indicating which
 % hyperparameter to optimize
 
+scale = double(scale);
 
 tau = exp(HP(1:end-1));
 rho = exp(HP(end));

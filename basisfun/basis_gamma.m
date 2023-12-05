@@ -46,7 +46,6 @@ if size(X,1)>1
     return;
 end
 
-
 X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
 
 B = zeros(nFun,length(X));

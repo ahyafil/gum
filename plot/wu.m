@@ -153,7 +153,6 @@ function varargout = wu(varargin)
 %TODO:
 % check help for options
 % add check for xy ( just 2 variables)
-% use wu(X, M,U,D) for asymetric error bars
 % add parameters for myerrorbar and mybar
 % error bars for binary data : http://stats.stackexchange.com/questions/11541/how-to-calculate-se-for-a-binary-measure-given-sample-size-n-and-known-populati
 % change names for nbp and nbv
@@ -179,10 +178,10 @@ function varargout = wu(varargin)
 X = [];
 L = [];
 U = [];
-cor =  []; 
+cor =  [];
 clim = 'auto';
-linestyle = '';
-marker = '.';
+linestyle = "";
+marker = ".";
 markersize = 6;
 linewidth = 2;
 %ticklength = [];
@@ -206,6 +205,7 @@ VerticalLabel = 0; % places labels for first variable as vertical text above bar
 legend_style = 'standard';
 IdentityLine = 0; % identity line for 'xy' plot
 shiftrange = 0; % shift in X axis for different curves
+collapse = 0; % whether to collapse second & third dimension
 
 %% determine syntax
 numargs = cellfun(@isnumeric, varargin) | cellfun(@islogical, varargin) | cellfun(@isdatetime, varargin);  %which arguments are numeric
@@ -243,7 +243,7 @@ switch syntax
             X = varargin{1};
             Yraw = varargin{2};
             M = cellfun(avg_fun, Yraw); %N-D cell array : mean within cells
-            
+
         elseif isequal(size(varargin{1}), size(varargin{2}))  % wu(Ymean, Yerror, ...)
             M = varargin{1};
             L = varargin{2};
@@ -334,7 +334,7 @@ for d = 1:nDim
         if isdatetime(X)
             levels{d} = X;
         else
-         %   levels{d} = num2strcell(X);
+            %   levels{d} = num2strcell(X);
         end
     elseif siz(d)>1 && d>1
         levels{d} = num2strcell(1:siz(d));
@@ -351,7 +351,7 @@ while v<=length(varargin)
     varg = varargin{v};
     switch class(varg)
         case 'char'
-            switch(lower(varg))
+            switch lower(varg)
                 case {'mean','median'}
                     % already processed before
                 case {'color','facecolor'}
@@ -359,12 +359,12 @@ while v<=length(varargin)
                     cor = varargin{v};
                 case 'style'
                     v = v + 1;
-                    marker = varargin{v};
+                    marker = string(varargin{v});
                 case 'linewidth' % can be used both for bars and lines
                     errorbarpars(end+1:end+2) = {'ErrorBarWidth',varargin{v+1}};
                     v = v+1;
                     linewidth = varargin{v};
-                    
+
                     %                 case 'ticklength',
                     %                     v = v+1;
                     %                     ticklength = varargin{v};
@@ -413,7 +413,7 @@ while v<=length(varargin)
                     errorstyle = varargin{v};
                 case 'marker'
                     v = v+1;
-                    marker = varargin{v};
+                    marker = string(varargin{v});
                 case 'markersize'
                     v = v+1;
                     markersize = varargin{v};
@@ -423,14 +423,14 @@ while v<=length(varargin)
                 case 'linestyle'
                     errorbarpars(end+1:end+2) = varargin(v:v+1); % if 'bar' type
                     v = v+1;
-                    linestyle = varargin{v}; % if 'curve' type
-                    
+                    linestyle = string(varargin{v}); % if 'curve' type
+
                     %                 case defcolor,
                     %                     cor = {varg};
                 case {'-',':','-.','--','none'}
-                    linestyle = varg;
+                    linestyle = string(varg);
                 case {'.','o','x','+','*','s','d','v','^','<','>','p','h'}
-                    marker = varg;
+                    marker = string(varg);
                 case {'ste', 'std', 'correctedste', 'quartile','noerror'}
                     errorbars = varg;
                 case {'curve', 'bar', 'xy', 'imagesc'}  %'noplot'
@@ -459,7 +459,7 @@ while v<=length(varargin)
                     else
                         errorbarpars{end+1} = 'vertical';
                     end
-                    
+
                 case 'xtickrotate'
                     v = v +1;
                     xtickangle = varargin{v};
@@ -472,6 +472,10 @@ while v<=length(varargin)
                 case 'shift'
                     v = v +1;
                     shiftrange = varargin{v};
+                case 'collapse'
+v = v +1;
+collapse = logical(varargin{v});
+                    
                 otherwise
                     % check whether it is line specification
                     [XL,XC,XM,MSG] = colstyle(varg);
@@ -480,13 +484,13 @@ while v<=length(varargin)
                     end
                     % fill in non empty line specs
                     if ~isempty(XL)
-                        linestyle = XL;
+                        linestyle = string(XL);
                     end
                     if ~isempty(XC)
                         cor = XC;
                     end
                     if ~isempty(XM)
-                        marker = XM;
+                        marker = string(XM);
                     end
             end
         case 'string'
@@ -520,8 +524,6 @@ else
     faxis = 'x';
 end
 
-
-
 %% process error bar values
 if strcmp(plottype, 'imagesc')
     errorbars = 'noerror';
@@ -536,7 +538,7 @@ if isempty(L)
                 else
                     L = nanste(Yraw,1);
                 end
-                
+
             case 'std'
                 if islogical(L)
                     nobs = sum(~isnan(Yraw),1);
@@ -600,26 +602,21 @@ if length(levels)>nDim
     nDim = newdimm;
 end
 if strcmpi(plottype, 'xy') && nDim>2 % X-Y plot
-   nDim =  nDim-1;
+    nDim =  nDim-1;
 end
 
 %labels for levels
 for i=1:length(levels)
     %check size
-    assert(isempty(levels{i}) || length(levels{i})==siz(i),'Numbers of labels for variable along dimension %d (%d) does not match number of levels (%d)',i, length(levels{i}),siz(i));
+    assert(isempty(levels{i}) || length(levels{i})==siz(i),...
+        'Numbers of labels for variable along dimension %d (%d) does not match number of levels (%d)',i, length(levels{i}),siz(i));
     %     if  size(levels{i})>siz(i),
     %         warning('labels for variable along dim %d is %d, higher than number of levels (%d); extra ones will not be used',i, length(levels{i}),siz(i));
     %     end
-    
-    %if level array is numeric array, turn into cell array of strings
-    if isnumeric(levels{i})
-        levels{i} = num2strcell(levels{i});
-    end
-    
-    if iscategorical(levels{i})
-        levels{i} = string(levels{i});
-    end
-    
+
+    % turn to string
+levels{i} = string(levels{i});
+
     % replace '_' chars
     if removeunderscore
         levels{i} = strrep(levels{i}, '_', ' ');
@@ -657,16 +654,39 @@ end
 y_pval = ymax + (.05 + .02*(0:nVar-1)/max(nVar-1,1))*(ymax-ymin); % vertical positioning of significance lines
 
 %% default linestyle
-if isempty(linestyle)
+def_linestyle = strlength(linestyle)==0; 
     if strcmp(plottype, 'xy')
-        linestyle = 'none';
+        linestyle(def_linestyle) = "none";
     else
-        linestyle = '-';
+        linestyle(def_linestyle) = "-";
+    end
+
+    %% one property for each level of dim2
+    collapse = collapse && nDim>2;
+
+if isscalar(linestyle)
+    if collapse && isscalar(linewidth) && isscalar(markersize) && isscalar(marker) && strcmp(plottype,'curve')
+        % if we collapse over dim 2 and 3, by default we will vary
+        % linestyle over dim 3
+        linestyle = [linestyle ':' '-.' '--'];
+            linestyle = linestyle(1+mod(0:siz(3)-1,length(linestyle)));
+    else
+    linestyle = repmat(linestyle, nVar,1);
     end
 end
-if ~iscell(linestyle)
-   linestyle = repmat( {linestyle}, 1, nVar);
+if isscalar(linewidth)
+ linewidth = repmat(linewidth, nVar,1);
 end
+if isscalar(markersize)
+ markersize = repmat(markersize, nVar,1);
+end
+if isscalar(marker)
+ marker = repmat(marker, nVar,1);
+end
+
+%if ~iscell(linestyle)
+%    linestyle = repmat( {linestyle}, 1, nVar);
+%end
 
 %% parse error style
 if isempty(errorstyle)
@@ -685,10 +705,11 @@ end
 if strcmp(plottype, 'bar') && ischar(cor) && any(strcmp(cor, colormapstrings)) && nVar==1
     % in case bar plot with single series and colormap, use different color
     % for each x
-cor = color2mat(cor,nPar);
+    cor = color2mat(cor,nPar);
 else
-cor = color2mat(cor,nVar);
+    cor = color2mat(cor,nVar);
 end
+
 if ~isempty(edgecolor)
     edgecolor = color2mat(edgecolor,nVar);
     errorbarpars(end+1:end+2) = {'EdgeColor',edgecolor};
@@ -707,6 +728,48 @@ end
 % compute light colours for margin
 if strcmp(plottype, 'curve') && any(strcmp(errorstyle, {'fill', 'area', 'marge'}))
     lightcolour = .8+.2*cor; %light colors
+lightcolour = num2cell(lightcolour,2); % turn into cell array
+end
+cor = num2cell(cor,2); % turn into cell array
+
+
+%% collapse 2nd and 3rd dimension
+if collapse 
+    new_size = [siz(1) siz(2)*siz(3) siz(4:end)]; % new shape
+    M = reshape(M, new_size);
+    L = reshape(L, new_size);
+    U = reshape(U, new_size);
+    
+    cor = repmat(cor(:),1,siz(3));
+    lightcolour = repmat(cor,1,siz(3));
+   marker = rep_for_collapse(marker,siz);
+      markersize = rep_for_collapse(markersize,siz);
+   linestyle = rep_for_collapse(linestyle,siz);
+   linewidth = rep_for_collapse(linewidth,siz);
+   if ~isempty(varnames{2}) && ~isempty(varnames{3})
+       new_varname = [varnames{2} ',' varnames{3}]; 
+   else
+new_varname = "";
+   end
+    varnames = [varnames(1) new_varname varnames(4:end)];
+        levels = [levels(1) {interaction_levels(levels{2},levels{3})} levels(4:end)];
+
+        if strcmp(plottype,'bar') % encode dim3 as shade of bar facecolor
+            errorbarpars(end+1:end+2)= {'shades',0};
+
+            for v=1:nVar
+            towards_light = .2*min(siz(3),3);
+            lighter = (1-towards_light)*cor{v,1}+ towards_light; % lightest shade
+            towards_dark = .1*min(siz(3),3);
+            darker = (1-towards_dark)*cor{v,1}; % darkest shade
+            this_cmap = lighter + (0:siz(3)-1)'.*(darker-lighter)./(siz(3)-1);
+            cor(v,:) = num2cell(this_cmap,2);
+            end
+        end
+
+       nDim = nDim-1;
+    nVar = nVar*siz(3);
+        siz = new_size;
 end
 
 if isempty(errorlinestyle)
@@ -780,15 +843,15 @@ is_xy = strcmp(plottype,'xy');
 switch nDim %number of dimension
     case 1  % just one curve/bar series
         setclim(clim); titl = '';
-        
+
         plothandle = pcurve(X(:), M(:), L(:), U(:), pval, [varnames {''}], levels);  %works without ' for curve/errorbars (maybe depends also if Ymean is row or column)
-        
+
         % legend off;
-        
+
     case 2  % multiple curve/bars in same panel
         setclim(clim); titl = '';
-        plothandle = pcurve(X, M, L, U, pval,   varnames, levels);
-        
+        plothandle = pcurve(X, M, L, U, pval, varnames, levels);
+
     case 3 % different panels
         dd = 3+is_xy;
         for s = 1:siz(dd)
@@ -798,9 +861,9 @@ switch nDim %number of dimension
                 titl = shortlabel(varnames{dd}, levels{dd}{s}); %title
             end
             if strcmpi(plottype,'xy')
-                         ph = pcurve(X, M(:,:,:,s), L(:,:,:,s), U(:,:,:,s),pval(:,:,:,s), varnames(1:3), levels(1:3));   
+                ph = pcurve(X, M(:,:,:,s), L(:,:,:,s), U(:,:,:,s),pval(:,:,:,s), varnames(1:3), levels(1:3));
             else
-            ph = pcurve(X, M(:,:,s), L(:,:,s), U(:,:,s),pval(:,:,s), varnames(1:2), levels(1:2));
+                ph = pcurve(X, M(:,:,s), L(:,:,s), U(:,:,s),pval(:,:,s), varnames(1:2), levels(1:2));
             end
             % if ~all(isnan(Yerr(:))) && all(all(isnan(Yerr(:,:,s)))),
             %     ph.error = [];
@@ -812,7 +875,7 @@ switch nDim %number of dimension
             if mod(s,nColSubplot)~=1
                 ylabel('');
                 set(gca, 'yticklabel',{});
-                
+
             end
             if ceil(s/nColSubplot)<nRowSubplot
                 xlabel('');
@@ -821,9 +884,9 @@ switch nDim %number of dimension
             axis tight;
         end
         sameaxis;
-        
+
     case 4 % different panels
-                dd = 3+is_xy;
+        dd = 3+is_xy;
         ee = 4+is_xy;
 
         for s1 = 1:siz(dd)
@@ -831,14 +894,14 @@ switch nDim %number of dimension
                 subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
                 setclim(clim)
                 titl = [shortlabel(varnames{dd}, levels{dd}{s1}) ', ' shortlabel(varnames{ee}, levels{ee}{s2})];
-                
+
                 % plot
                 if is_xy
-                     plothandle(:,s1,s2) = pcurve(X, M(:,:,:,s1,s2), L(:,:,:,s1,s2), U(:,:,:,s1,s2), pval(:,:,:,s1, s2), ...
-                    varnames(1:3), levels(1:3));
+                    plothandle(:,s1,s2) = pcurve(X, M(:,:,:,s1,s2), L(:,:,:,s1,s2), U(:,:,:,s1,s2), pval(:,:,:,s1, s2), ...
+                        varnames(1:3), levels(1:3));
                 else
-                plothandle(:,s1,s2) = pcurve(X, M(:,:,s1,s2), L(:,:,s1,s2), U(:,:,s1,s2), pval(:,:,s1, s2), ...
-                    varnames(1:2), levels(1:2));
+                    plothandle(:,s1,s2) = pcurve(X, M(:,:,s1,s2), L(:,:,s1,s2), U(:,:,s1,s2), pval(:,:,s1, s2), ...
+                        varnames(1:2), levels(1:2));
                 end
                 if s1>1 || s2>1
                     legend off;
@@ -846,7 +909,7 @@ switch nDim %number of dimension
                 if s1>1
                     ylabel('');
                     set(gca, 'yticklabel',{});
-                    
+
                 end
                 if s2<siz(4)
                     xlabel('');
@@ -881,12 +944,9 @@ end
 
 %% plotting subfunction
     function phandle = pcurve(X, MM, LL, UU, PP, vnames, labelz)
-        
-        X = X(:)';
-        
-        hold on;
 
-        
+        X = X(:)';
+        hold on;
 
         %% compute probability values to display
         %         if isnumeric(PP),
@@ -913,7 +973,7 @@ end
         %         if nbp == 2,
         %             PP.FF1 = reshape(PP.FF1, [1 1 nbv]);
         %         end
-        
+
         %% lables for legend
         add_legend = length(labelz)>1  && ~isempty(labelz{2}) && ~all(cellfun(@isempty, labelz{2})); %except when only one curve and no attached label
         if  add_legend
@@ -924,16 +984,15 @@ end
             %   legend_labels{w} = labelz{2}{w};
             %end
         end
-        
-        
+
         %%%%%%%%%  BARS %%%%%%
         switch plottype
             case 'bar'
-                
+
                 phandle = mybar(X(:), MM, LL, UU, 'facecolor', cor, errorbarpars{:});
                 phandle.mean = phandle.bar;
                 phandle = rmfield(phandle, 'bar');
-                
+
                 %                 %display probability values
                 %                 if nbv ==2 && all(~isinf(PP.FF2))  % same x-values
                 %                     phandle.signif = [];
@@ -959,7 +1018,7 @@ end
                 %                         end
                 %                     end
                 %                 end
-                
+
                 %                 if add_legend
                 %                     if strcmpi(legend_style, 'standard')
                 %                         hleg = legend(legend_labels{:}, 'Location', 'Best');
@@ -976,21 +1035,21 @@ end
                 %                     set(hlegtitle, 'HorizontalAlignment', 'left');
                 %                 end
                 %legend boxoff
-                
-                
+
+
                 %% %%%% LINES %%%%%%%%%
             case 'curve'
                 %                 if nbp==2 && all(~isinf(PP.FF1)),
                 %                     phandle.pvalue = [];
                 %                 end
-                
-                
+
+
                 % 'fill' option: compute vector for surface
                 if any(strcmp(errorstyle, {'fill', 'area', 'marge'}))
                     Xfill = [X X(end:-1:1)];                                                %abscissa for the surface
                     Yfill = [ MM-LL ; flipud(MM+UU) ]; % ordinates for the surface
                 end
-                
+
                 % plot errors
                 if ~all(isnan(LL(:))) || ~all(isnan(UU(:)))
                     for w=1:nVar  % corresponding to each different curve
@@ -998,11 +1057,11 @@ end
                         switch lower(errorstyle)
                             case {'bar', 'bars', 'errorbar', 'errorbars'} %error bars
                                 if strcmp(maxis, 'y') % vertical bars
-                                    phandle.error(:,w) = myerrorbar(XX, MM(:,w), LL(:,w), UU(:,w),'vertical', 'color', cor(w,:), errorbarpars{:},'none');
+                                    phandle.error(:,w) = myerrorbar(XX, MM(:,w), LL(:,w), UU(:,w),'vertical', 'color', cor{w}, errorbarpars{:},'none');
                                 else % horizontal bars
-                                    phandle.error(:,w) = myerrorbar(MM(:,w), XX,  LL(:,w), UU(:,w),'horizontal', 'color', cor(w,:), errorbarpars{:},'none');
+                                    phandle.error(:,w) = myerrorbar(MM(:,w), XX,  LL(:,w), UU(:,w),'horizontal', 'color', cor{w}, errorbarpars{:},'none');
                                 end
-                                
+
                             case  {'fill', 'area', 'marge'} %error areas
                                 nonnan = ~isnan(Yfill(:,w));
                                 XY = {Xfill(nonnan)+shift(w), Yfill(nonnan,w)};
@@ -1010,7 +1069,7 @@ end
                                     XY = XY([2 1]);
                                 end
                                 if any(nonnan)
-                                    phandle.error(:,w) = fill( XY{:}, lightcolour(w,:), 'LineStyle', errorlinestyle);
+                                    phandle.error(:,w) = fill( XY{:}, lightcolour{w}, 'LineStyle', errorlinestyle);
                                     set(phandle.error(:,w),'FaceAlpha',.5);
                                 else
                                     phandle.error(:,w) = gobjects(1);
@@ -1022,12 +1081,12 @@ end
                                 end
                                 %    phandle.error(:,w) = plot( XX, [MM(:,w)-LL(:,w) MM(:,w)+UU(:,w)], 'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
                                 % else
-                                phandle.error(:,w) = plot( XY{:} ,'LineWidth', linewidth/2, 'Color', cor(w,:), 'LineStyle', errorlinestyle );
+                                phandle.error(:,w) = plot( XY{:} ,'LineWidth', linewidth(w)/2, 'Color', cor{w}, 'LineStyle', errorlinestyle );
                                 % end
                         end
                     end
                 end
-                
+
                 for w = 1:nVar % for each variable
                     XX = X + shift(w);
                     XY = {XX, MM(:,w)};
@@ -1037,10 +1096,10 @@ end
 
                     %plot curve
                     %  if strcmp(maxis, 'y')
-                    phandle.mean(w) = plot(XY{:}, 'Color', cor(w,:), 'Marker',marker, 'markersize', markersize, ...
-                        'Linestyle', linestyle{w}, 'linewidth', linewidth);
+                    phandle.mean(w) = plot(XY{:}, 'Color', cor{w}, 'Marker', marker(w), 'markersize', markersize(w), ...
+                        'Linestyle', linestyle(w), 'linewidth', linewidth(w));
                     % end
-                    
+
                     %                     %plot significances character between 2 x-values
                     %                     if nbp==2 && PP.FF1(1,1,w)<.1
                     %                         phandle.signif(w) = text(mean(X(1:2)), max(MM(:,w)), signifchar(PP.FF1(1,1,w)), 'FontSize', 24, ...
@@ -1051,7 +1110,7 @@ end
                     %                         labelz{2}{w} = [labelz{2}{w} '(' signifchar(PP.FF1(1,1,w)) ')' ];
                     %                     end
                 end
-                
+
                 %                 % add legend
                 %                 if add_legend
                 %                     if strcmp(legend_style, 'standard')
@@ -1060,28 +1119,30 @@ end
                 %                         legend_color(phandle.M, legend_labels); %, 'Location', 'Best');
                 %                     end
                 %                 end
-                
+
                 %%%%%%%%%% XY TYPE
             case 'xy'
-                
+
                 %add vertical and horizontal error bars
                 %  barwidd = ticklength;
                 for w=1:size(MM,3)
-                phandle.error(:,1,w) = myerrorbar(MM(1,:,w), MM(2,:,w), LL(2,:,w),UU(2,:,w), 'vertical','color',cor(w,:), errorbarpars{:},'linestyle',linestyle{w});
-                phandle.error(:,2,w) = myerrorbar(MM(1,:,w), MM(2,:,w), LL(1,:,w),UU(1,:,w), 'horizontal', 'color',cor(w,:), errorbarpars{:},'linestyle',linestyle{w});
+                    phandle.error(:,1,w) = myerrorbar(MM(1,:,w), MM(2,:,w), LL(2,:,w), UU(2,:,w), ...
+                        'vertical','color',cor{w}, errorbarpars{:},'linestyle',linestyle(w));
+                    phandle.error(:,2,w) = myerrorbar(MM(1,:,w), MM(2,:,w), LL(1,:,w), UU(1,:,w),...
+                        'horizontal', 'color',cor{w}, errorbarpars{:},'linestyle',linestyle(w));
                 end
                 %horizontal error bar (add bar width property)
                 %                 dem = herrorbar(MM(1,:), MM(2,:), EE(1,:), EE(1,:));
                 %                 delete(dem(2)); %remove the line
                 %                 set(dem(1), 'Color', cor(1,:));
                 %                 phandle.E(2) = dem(1);
-                
+
                 %plot curve
                 for w=1:size(MM,3)
-                phandle.mean(w) = plot(MM(1,:,w), MM(2,:,w), 'Color', cor(w,:), 'Marker',marker, ...
-                    'MarkerSize', markersize, 'Linestyle', linestyle{w}, 'linewidth', linewidth);
+                    phandle.mean(w) = plot(MM(1,:,w), MM(2,:,w), 'Color', cor{w}, 'Marker',marker(w), ...
+                        'MarkerSize', markersize(w), 'Linestyle', linestyle(w), 'linewidth', linewidth(w));
                 end
-                
+
                 % plot identity line
                 if IdentityLine
                     xl = xlim; yl = ylim;
@@ -1089,7 +1150,7 @@ end
                     phandle.identityline = plot(xx,xx,'color',.5*[1 1 1]);
                     uistack(phandle.identityline, 'bottom');
                 end
-                
+
                 %%%%%%%%%% IMAGESC TYPE
             case 'imagesc'
                 ylabl = cellfun(@str2double, labelz{2});
@@ -1099,7 +1160,7 @@ end
                 phandle = imagesc(X, ylabl, MM');
                 axis tight;
         end
-        
+
         %% plot significance lines
         stats_symbols = {'*','**','***'};
         if ~all(isnan(PP(:)))
@@ -1109,11 +1170,11 @@ end
             else % if just one point
                 Xord = Xord + (-1:1);
             end
-            
+
             phandle.signif = [];
             for w=1:nVar % for each line/bar series
                 sig = (PP(:,w)<threshold)'; % values that reach significance
-                
+
                 if strcmpi(statsstyle, 'symbol')
                     n_threshold = length(threshold);
                     sigsum = sum(sig); %
@@ -1122,10 +1183,10 @@ end
                         idx = sigsum==tt;
                         if any(idx)
                             if strcmp(maxis, 'y')
-                                hh = text(X(idx), y_pval(w)*ones(1,sum(idx)), stats_symbols{tt},  'color', cor(w,:),...
+                                hh = text(X(idx), y_pval(w)*ones(1,sum(idx)), stats_symbols{tt},  'color', cor{w},...
                                     'horizontalalignment','center','verticalalignment','middle');
                             else
-                                hh = text(y_pval(w)*ones(1,sum(idx)), X(idx),  stats_symbols{tt},  'color', cor(w,:),...
+                                hh = text(y_pval(w)*ones(1,sum(idx)), X(idx),  stats_symbols{tt},  'color', cor{w},...
                                     'horizontalalignment','center','verticalalignment','middle');
                             end
                             phandle.signif = [phandle.signif hh(:)'];
@@ -1141,11 +1202,11 @@ end
                         Xsig = [Xsig(1:ss-1) Xsig(ss)-.1*diff(Xsig(ss-1:ss)) Xsig(ss)+.1*diff(Xsig(ss:ss+1)) Xsig(ss+1:end)]; % create a short segment around that point
                         Ysig = [Ysig(1:ss-1) 1                               1                               Ysig(ss+1:end)];
                     end
-                    
+
                     if strcmp(maxis, 'y')
-                        phandle.signif(w) = plot(Xsig, y_pval(w)*Ysig, statsstyle, 'color', cor(w,:));
+                        phandle.signif(w) = plot(Xsig, y_pval(w)*Ysig, statsstyle, 'color', cor{w});
                     else
-                        phandle.signif(w) = plot(y_pval(w)*Ysig, Xsig, statsstyle, 'color', cor(w,:));
+                        phandle.signif(w) = plot(y_pval(w)*Ysig, Xsig, statsstyle, 'color', cor{w});
                     end
                 end
                 set( phandle.signif, 'Tag', 'Significant');
@@ -1157,17 +1218,17 @@ end
         if isfield(phandle, 'error')
             %   set( phandle.error, 'Tag', 'error');
         end
-        
-        
+
+
         %% add legend
         if add_legend
             if strcmpi(legend_style, 'standard')
                 hleg = legend(phandle.mean, legend_labels{:}, 'Location', 'Best','AutoUpdate','off');
             elseif strcmpi(legend_style, 'color')
                 hleg = legend_color(phandle.mean, legend_labels{:}, 'Location', 'Best','AutoUpdate','off');
-                
+
             end
-            
+
             if ~isempty(vnames{2})
                 hlegtitle = get(hleg,'title');
                 set(hlegtitle,'string',vnames{2});
@@ -1176,7 +1237,7 @@ end
                 %      set(hlegtitle, 'HorizontalAlignment', 'left');
             end
         end
-        
+
         %% axis labels and tick labels
         if strcmp(plottype, 'xy')
             if ~isempty(labelz{1}) && ~isempty(labelz{1}{1}) && ~isequal(str2double(labelz{1}{1}),1)
@@ -1200,7 +1261,7 @@ end
                     ylabel(vnames{1});
                 end
             end
-            
+
             %% place labels for x axis
             if VerticalLabel % if vertical labels over bars
                 y_vertlabels =  MM + 1.1*UU;
@@ -1208,9 +1269,9 @@ end
                 if nPar>1 && nVar>1
                     y_vertlabels = nanmax(y_vertlabels,[],2);
                 end
-                
+
                 if nPar>1
-                    
+
                     for p=1:nPar
                         if strcmp(maxis, 'y')
                             phandle.label(p) = text(X(p),y_vertlabels(p), labelz{1}(p), 'rotation',90);
@@ -1218,14 +1279,14 @@ end
                             phandle.label(p) = text(y_vertlabels(p), X(p), labelz{1}(p));
                         end
                     end
-                    
+
                 else % bars
                     legend off;
                     for vv=1:nVar
                         if verLessThan('matlab', '8.4')
                             R_eb =get(get(phandle.M(vv),'children'),ref_field);
                             this_x = mean(R_eb([1 3],1));
-                            
+
                         else
                             this_x = X(1) + phandle.mean(vv).([upper(faxis) 'Offset']);
                         end
@@ -1234,20 +1295,20 @@ end
                         else
                             phandle.label(vv) = text(y_vertlabels(vv), this_x, labelz{2}(vv));
                         end
-                        
+
                     end
                 end
-                
+
             elseif (~isempty(labelz{1}) && ~isdatetime(X) && ~isequal(num2strcell(X), labelz{1}(:)')) || nPar < 10 %length(labelz{2})<10,
                 %% labels as ticklabels
-                
+
                 [xtickval,xorder] = unique(X);
                 set(gca, [faxis 'Tick'], unique(xtickval(~isnan(xtickval))));
                 if ~isempty(labelz{1})
                     set(gca, [faxis 'TickLabel'], labelz{1}(xorder));
                 end
             end
-            
+
             % rotate xtick labels by specified angle
             if xtickangle ~=0
                 if verLessThan('matlab', '8.4') % use user-supplied function
@@ -1255,11 +1316,11 @@ end
                 else   % use built-in property
                     set(gca, 'XTickLabelRotation', xtickangle);
                 end
-                
+
             end
-            
+
         end
-        
+
         %add title
         if isfield(PP, 'interaction')
             title([titl ' p=' num2str(PP.interaction)]);
@@ -1269,51 +1330,7 @@ end
     end
 
 %%%%%%%%%%%%%
-% convert color argument into n-by-3 RGB matrix
-    function   C = color2mat(C, nbv)
-        if ischar(C)
-            switch lower(C)
-                case  colormapstrings()
-                    C = eval(C);
-                    if nbv>1
-                        corvec = 1 + (size(C,1)-1) * (0:nbv-1)/(nbv-1);
-                    else
-                        corvec = 1;
-                    end
-                    C = C(floor(corvec),:);
-                case {'flat','colormap'} %interpolate colors from colormap
-                    C = colormap;  %current colormap
-                    if nbv>1
-                        corvec = 1 + (size(C,1)-1) * (0:nbv-1)/(nbv-1);
-                    else
-                        corvec = 1;
-                    end
-                    C = C(floor(corvec),:);
-                otherwise
-                    if all(ismember(lower(C),'ymcrgbwk'))  %colour symbols (e.g. 'k')
-                        C = num2cell(C);
-                    else
-                        error('incorrect colour string:%s',C);
-                    end
-                    
-            end
-        end
-        
-        % if cell array, convert to matrix of RGB values
-        if iscell(C)
-            cor_mat = zeros(length(C),3);
-            for c=1:length(C)
-                if isnumeric(C{c}) % RGB value
-                    cor_mat(c,:) = C{c};
-                elseif ischar(C{c}) % letter (e.g. 'k', 'b', etc.)
-                    cor_mat(c,:) = rem(floor((strfind('kbgcrmyw', C{c}) - 1) * [0.25 0.5 1]), 2);
-                else
-                    error('incorrect value for colour: should be vector of RGB value or single character');
-                end
-            end
-            C = cor_mat;
-        end
-    end
+
 %%%%
 
     function str = shortlabel(fname, vname)
@@ -1353,32 +1370,47 @@ else
 end
 end
 
-% list of all colormapstrings
+%% list of all colormapstrings
 function C = colormapstrings()
 C =  {'parula','jet', 'gray', 'pink', 'hsv', 'hot', 'cool', 'copper', 'flag', 'prism',...
     'spring','autumn','summer','winter', 'bone','lines','flag'};
 end
 
-% get values for xticks from xticlabels, if relevant
+%% get values for xticks from xticlabels, if relevant
 function X = get_xtick(X, Lvl,nPar, xtick)
 
 if strcmp(xtick, 'normal') && ~isempty(Lvl) && isempty(X)
-    
+
     if ~any(cellfun(@iscell, Lvl))
-    % try to convert all labels into X value
-    X = cellfun(@str2double, Lvl(:)');
-    nanValues = isnan(X) & ~strcmpi(Lvl(:)','nan');
-    if any(nanValues) || isempty(X) % if its fails, simply use first integers
-        X = 1:nPar;
-    end
+        % try to convert all labels into X value
+        X = cellfun(@str2double, Lvl(:)');
+        nanValues = isnan(X) & ~strcmpi(Lvl(:)','nan');
+        if any(nanValues) || isempty(X) % if its fails, simply use first integers
+            X = 1:nPar;
+        end
     else % if cell array
-         X = 1:nPar;
+        X = 1:nPar;
     end
 
 elseif isempty(X)
     X = 1:nPar;
 end
+end
+
+%% modify vectors of linespecs when collapsing 2nd and 3rd dim
+function x = rep_for_collapse(x, siz)
+if isrow(x) % changes along dim2
+    x = repmat(x,siz(3));
+else % changes along dim3
+    x = repelem(x,siz(2));
+end
+end
+
+%% interaction levels when collapsing 2nd and 3rd dim
+    function str =interaction_levels(str1,str2)
+    n1 = numel(str1);
+str1 = repmat(str1(:),numel(str2),1);
+str2 = repelem(str2(:),n1,1);
+str = str1 + ", " + str2; %concatenate
     end
-
-
 

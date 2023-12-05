@@ -542,9 +542,13 @@ if use_reg
         R.Prior(1) = Rdummy.Prior;
         R.HP(1) = Rdummy.HP;
 
-        if any([R.Weights.constraint]=="free") % if any other dimension is without constraint
-            R.Weights(1).constraint = "mean1"; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
-        end
+     %     constraint all set of weights (except temporal one) to be be mean-1 to make sure our model is identifiable
+     freeRegressor = [R.Weights.constraint]=="free";
+     freeRegressor(1) = false;
+     R.Weights(freeRegressor).constraint = "mean1";
+     %   if any([R(2:end).Weights.constraint]=="free") % if any other dimension is without constraint
+     %       R.Weights(1).constraint = "mean1"; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
+     %   end
     end
 else
     % create regressor object

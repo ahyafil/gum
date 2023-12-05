@@ -21,6 +21,13 @@ elseif ct.type =="fixed"
     gradKfree = zeros(0,0,size(gradK,3));
     end
     return;
+elseif all(isinf(diag(K)))
+    nFree = size(ct.V,1) - ct.nConstraint; % size of Kfree
+    Kfree = diag(inf(1,nFree));
+    if nargout>1
+    gradKfree = nan(nFree,nFree,size(gradK,3));
+    end
+    return;
 end
 n = size(K,1);
 V = ct.V;

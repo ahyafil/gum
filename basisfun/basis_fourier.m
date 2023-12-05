@@ -30,6 +30,9 @@ if size(X,1)>1
             [this_B, scale{i}, params] = basis_fourier(X(:,this_level),HP, params);
         end
 
+        if isstring(unq)
+            scale{i} = string(scale{i});
+        end
         scale{i}(end+1,:) = unq(i);
         B{i} = zeros(size(this_B,1),length(levels));
         B{i}(:,this_level) = this_B;
@@ -51,6 +54,7 @@ end
 
 minl = exp(HP(1)); % length hyperparameter
 assert(minl>=0,'length scale must be positive');
+X = double(X);
 
 if params.padding
     range = max(X) - min(X);  % range of values for given component

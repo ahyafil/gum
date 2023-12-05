@@ -262,6 +262,9 @@ if ~isempty(facecolor)
         facecolor = repmat(facecolor,numgroups,1);
     end
     for b=1:numgroups
+        if iscell(facecolor)
+            facecolor = cat(1,facecolor{:});
+        end
         if shades && ~within_series_color && numbars>1
             % use different shades of same color
                         nShades = length(ref);

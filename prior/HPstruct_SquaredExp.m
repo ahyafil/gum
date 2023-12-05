@@ -16,8 +16,6 @@ if strcmpi(type,'periodic')
     tau = period/4; % initial time scale: period/4
     assert(isrow(scale),'periodic functions only defined over one dimension scales');
 else
-
-    % tau = dt; % initial time scale: mean different between two points
     tau =  sqrt(dt.*span); % geometric mean between the two
     tau = max(tau,span/10);
     if single_tau
@@ -28,8 +26,21 @@ else
 end
 nScale = length(tau);
 
-HP = HPwithdefault(HP, [log(tau) 0]); % default values for log-scale and log-variance [tau 1 1];
-HH.HP = HP;
+%% set value of hyperparameters
+HH.HP = [log(tau) 0]; % default values for log-scale and log-variance [tau 1 1];
+if isfield(HP, 'value')
+    assert(length(HP.value)==length(HH.HP), 'incorrect number of hyperparameters for Squared Exponential kernel');
+    HH.HP = HP.value;
+else
+    if isfield(HP,'tau')
+        HH.HP(1:nScale) = log(HP.tau);
+    end
+    if isfield(HP,'variance')
+        HH.HP(end) =log(HP.variance)/2;
+    end
+end
+
+%% labels
 if nScale>1
     HH.label = num2cell("log \tau"+(1:nScale));
 else
@@ -38,8 +49,7 @@ end
 HH.label{end+1} = 'log \alpha';
 HH.fit = true(1,nScale+1);
 
-
-% upper and lower bounds on hyperparameters
+%% upper and lower bounds on hyperparameters
 if strcmp(basis, 'fourier')
     HH.LB(1:nScale) = log(2*tau/length(scale)); % lower bound on log-scale: if using spatial trick, avoid scale smaller than resolution
     HH.LB(nScale+1) = max(-max_log_var, min(log_dt)-3); % to avoid exp(HP) = 0
