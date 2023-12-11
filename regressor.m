@@ -395,6 +395,11 @@ classdef regressor
                     obj.Data = X;
                     obj.nDim = 1;
                     obj.Weights(1).constraint = 'fixed';
+                    if iscolumn(X)
+             obj.Weights(1).scale = nan;
+                    else
+                    obj.Weights(1).scale = 1:size(X,2);
+                    end
                     obj.formula = string(label(1));
                     if size(X,2)>1 && isempty(dimensions{1})
                         obj.Weights(1).dimensions = string(label(1));
@@ -1660,7 +1665,7 @@ classdef regressor
                 end
 
                 % if hyperparameter values are directly provided, overwrite default values
-                if isfield(HP, 'value')
+                if isfield(HP, 'value') && ~isempty(HP.value)
                     assert(length(HP.value)==length(HH.HP), 'vector of hyperparameters does not have the correct length');
                     HH.HP = HP.value;
                 end

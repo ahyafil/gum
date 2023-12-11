@@ -25,8 +25,6 @@ a = (nCos-1+k_end-k_ini)*pi/2/log(1+Ttot/dt);  % time power, this formula is to 
 
 Phi_1 = a*log(dt) - k_ini*pi/2; % angle for first basis function
 
-alpha = 0; % half log-variance
-
 % check if values for some hyperparameters are provided
 if isfield(HP, 'a')
     a = HP.a;
@@ -38,7 +36,7 @@ if isfield(HP, 'Phi')
     Phi_1 = HP.Phi;
 end
 
-HH.HP = [a c Phi_1 alpha];
+HH.HP = [a c Phi_1];
 
 % upper and lower bounds
 HH.LB = [a-2 -max(scale)  Phi_1-pi];

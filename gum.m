@@ -3084,11 +3084,13 @@ classdef gum
 
 
             % compute posterior covariance
-            if inf_terms || all([M.nFreeDimensions]<2) || withScaling
+            compute_posterior_covariance = inf_terms || all([M.nFreeDimensions]<2) || withScaling;
+            if compute_posterior_covariance
 
                 % use this if no prior on some variable, or if non convex
                 % likelihood, or if includes scaling parameter
 
+                wrn = warning('off', 'MATLAB:singularMatrix');
                 HH = H + inv(K);
 
                 % extend matrix to include dispersion parameter
@@ -3100,9 +3102,7 @@ classdef gum
                     HH = [HH -d2logjoint_ds_dU'; -d2logjoint_ds_dU -d2logjoint_ds2]; % add to Hessian matrix
                 end
 
-                wrn = warning('off', 'MATLAB:singularMatrix');
                 V = inv(HH);
-                warning(wrn.state, 'MATLAB:singularMatrix');
             else
                 V = B \ K; %inv(W + inv(Kfree));
                 %  V = Kfree - Kfree*Wsqrt /inv(B)*Wsqrt*Kfree; % Rasmussen 3.27
@@ -3123,6 +3123,9 @@ classdef gum
             if nargout>2
                 %% compute inv(Hinv+K) - used for predicted covariance for test datapoints
                 invHinvK = inv(inv(H) + K);
+            end
+            if compute_posterior_covariance
+                warning(wrn.state, 'MATLAB:singularMatrix');
             end
         end
 
@@ -3910,7 +3913,7 @@ classdef gum
                     end
 
                     scl = W(d).scale;
-                    if ~isrow(scl) && length(unique(scl(2,:)))<=size(scl,2)/2
+                    if ~isempty(scl) && ~isrow(scl) && length(unique(scl(2,:)))<=size(scl,2)/2
                         % add thiner vertical lines between subsets of regressors
                         subset_change = find(scl(2,1:end-1)~=scl(2,2:end));
                         xval = nRegCum(f)+ .5 + subset_change'; % find changes of values in second line
