@@ -89,7 +89,7 @@ classdef sparsearray
 
         %% DISP
         function disp(obj)
-            if any(subcoding(obj))
+            if any(onehotencoding(obj))
                 obj = fullcoding(obj);
             end
             if ~issparse(obj.value) || ismatrix(obj)
@@ -219,21 +219,20 @@ classdef sparsearray
             % permute value array
             if issparse(obj.value)
 
-                NonSubCoding = find(~subcoding(obj));
+                NonOneHot = find(~onehotencoding(obj));
                 sz = size(obj);
-                Pnon = P(ismember(P, NonSubCoding));
-                new_sz = sz(Pnon); % size of non-subindex coding array
+                Pnon = P(ismember(P, NonOneHot));
+                new_sz = sz(Pnon); % size of non-one-hot-encoding array
 
-                sz = sz(NonSubCoding);
+                sz = sz(NonOneHot);
 
+                nElem = prod(sz); % total number of element of sub-array
+                D = length(NonOneHot); % dimensionality
 
-                nelem = prod(sz); % total number of element of sub-array
-                D = length(NonSubCoding); % dimensionality
-
-                ind = ones(1,nelem);
+                ind = ones(1,nElem);
                 for d=1:D
                     sb = (0:sz(d)-1)*prod(sz(1:d-1)); % sub-indices for this dimension
-                    dd = find(Pnon==NonSubCoding(d)); % which position in new dimension order
+                    dd = find(Pnon==NonOneHot(d)); % which position in new dimension order
                     if dd>1
                         sb = repelem(sb, prod(new_sz(1:dd-1))); % replicate each value in this dimension according to lower dimensions
                     end
@@ -250,12 +249,12 @@ classdef sparsearray
                 obj.value = permute(obj.value,P);
             end
 
-            % permute sub-index arrays
-            for d=find(subcoding(obj))
+            % permute one-hot encoding arrays
+            for d=find(onehotencoding(obj))
                 obj.sub{d} = permute(obj.sub{d},P);
             end
 
-            % permute order of sub-index arrays
+            % permute order of  one-hot encoding arrays
             obj.sub(end+1:length(P)) = {[]};
             obj.sub = obj.sub(P);
 
@@ -322,7 +321,7 @@ classdef sparsearray
 
         %% FIND
         function [S, V] = find(obj)
-            if any(subcoding(obj))
+            if any(onehotencoding(obj))
                 obj = fullcoding(obj);
             end
 
@@ -338,13 +337,14 @@ classdef sparsearray
 
         end
 
-        %% SUBINDEX CODING (one boolean per dimension
-        function bool = subcoding(obj,d)
+        %% ONE-HOT ENCODING (one boolean per dimension)
+        function bool = onehotencoding(obj,d)
             bool = ~cellfun(@isempty, obj.sub);
             bool(end+1:ndims(obj)) = false;
-            if nargin>1
-                bool = bool(d);
+            if nargin==1
+                d = 1:ndims(obj);
             end
+            bool = bool(d);
         end
 
         %% ISSPARSE
@@ -357,15 +357,15 @@ classdef sparsearray
             bool = issparse(obj.value);
         end
 
-        %% FULLCODING: change subindex coding to coding
+        %% FULLCODING: change one-hot encoding coding to coding
         function obj = fullcoding(obj,d)
             if nargin<2 % if dimension is not provided: for all subindex coding dimensions
-                d = find(subcoding(obj));
+                d = find(onehotencoding(obj));
             end
             if isempty(d)
                 return;
             end
-            if any(~ismember(d, find(subcoding(obj))))
+            if any(~ismember(d, find(onehotencoding(obj))))
                 error('not a subindex coding dimension');
             end
 
@@ -373,42 +373,42 @@ classdef sparsearray
 
             [Ind,~,V] = find(obj.value(:)); % indices and values of non-zero values
 
-            NonSubDims = setdiff(1:ndims(obj), find(subcoding(obj))); % dimensions not coded with subindices
+            NonOneHot = setdiff(1:ndims(obj), find(onehotencoding(obj))); % dimensions not coded with one-hot-encoding
             sz = size(obj);
-            sz  = sz(NonSubDims);
+            sz  = sz(NonOneHot);
 
-            Sub = cell(1,length(NonSubDims));
-            [Sub{:}] = ind2sub(sz, Ind); % indices of values for non-subindex coding position
-            NSD = NonSubDims;
+            Sub = cell(1,length(NonOneHot));
+            [Sub{:}] = ind2sub(sz, Ind); % indices of values for non-one-hot coding position
+            NOHE = NonOneHot;
 
-            for dd=d
+            for dd=d % for all dimensions to change from one-hot encoding
                 SubSub = Sub;
-                for f = 1:length(NSD)
-                    if size(obj.sub{dd},NSD(f)) ==1 % if subindex matrix is singleton along this dim
+                for f = 1:length(NOHE)
+                    if size(obj.sub{dd},NOHE(f)) ==1 % if subindex matrix is singleton along this dim
                         SubSub{f} = ones(size(SubSub{f}));
                     end
                 end
-                SubInd = sub2ind(size(obj.sub{dd}), SubSub{:}); % indices with subindex array
-                NewSub = obj.sub{dd}(SubInd); % new subindex for this dimension
+                OneHotIndex = sub2ind(size(obj.sub{dd}), SubSub{:}); % indices with one-hot-encoding array
+                NewOneHot = obj.sub{dd}(OneHotIndex); % new subindex for this dimension
 
-                rmvdata = NewSub ==0;
+                rmvdata = NewOneHot ==0;
                 if any(rmvdata)
                     for ddd = 1:length(Sub)
                         Sub{ddd}(rmvdata) = [];
                     end
                     V(rmvdata) = [];
-                    NewSub(rmvdata) = [];
+                    NewOneHot(rmvdata) = [];
                 end
 
 
-                Sub{end+1} = NewSub;
+                Sub{end+1} = NewOneHot;
                 sz(end+1) = size(obj,dd);
 
                 obj.sub{dd} = [];
-                NSD(end+1) = dd;
+                NOHE(end+1) = dd;
             end
 
-            [NonSubDims,ord] = sort([NonSubDims d]);
+            [NonOneHot,ord] = sort([NonOneHot d]);
 
             % sort dimensions
             Sub = Sub(ord);
@@ -441,33 +441,33 @@ classdef sparsearray
                 return;
             end
 
-            % cannot replicate sub-coding
-            SubcodingDims = find(subcoding(obj));
-            obj = fullcoding(obj, SubcodingDims(rep(SubcodingDims)>1));
+            % cannot replicate one-hot encoding dimensions
+            OneHotDims = find(onehotencoding(obj));
+            obj = fullcoding(obj, OneHotDims(rep(OneHotDims)>1));
 
             if issparse(obj.value) && (~ismatrix(obj) || length(rep)>2)
 
-                NonSubCoding = ~subcoding(obj);
+                NonOneHot = ~onehotencoding(obj);
                 sz = size(obj);
                 if length(rep)>ndims(obj)
-                    NonSubCoding = [NonSubCoding true(1,length(rep)-ndims(obj))];
+                    NonOneHot = [NonOneHot true(1,length(rep)-ndims(obj))];
                     sz( ndims(obj)+1:length(rep)) = 1;
                 end
-                rep_nonsub = rep(NonSubCoding);
-                sz = sz(NonSubCoding);
-                new_sz = sz .* rep_nonsub; % size of new array
+                RepNonOneHot = rep(NonOneHot);
+                sz = sz(NonOneHot);
+                new_sz = sz .* RepNonOneHot; % size of new array
 
-                nelem = prod(new_sz); % total number of element of sub-array
-                D = sum(NonSubCoding); % dimensionality
+                nElem = prod(new_sz); % total number of element of sub-array
+                D = sum(NonOneHot); % dimensionality
 
                 % build the vector of indices for new matrix (this is not
                 % optimal as this vector is full - should work a more
                 % efficient way, perhaps converting to sparse matrix ...)
-                ind = ones(1,nelem);
+                ind = ones(1,nElem);
                 for d=1:D
                     sb = (0:sz(d)-1)*prod(sz(1:d-1)); % sub-indices for this dimension
-                    if rep_nonsub(d)>1 % if needs to replicate along that dimension
-                        sb = repmat( sb, 1, rep_nonsub(d));
+                    if RepNonOneHot(d)>1 % if needs to replicate along that dimension
+                        sb = repmat( sb, 1, RepNonOneHot(d));
                     end
                     if d>1
                         sb = repelem(sb, prod(new_sz(1:d-1))); % replicate each value in this dimension according to lower dimensions
@@ -483,13 +483,13 @@ classdef sparsearray
 
             else
                 sz = obj.siz;
-                sz(subcoding(obj)) = 1;
+                sz(onehotencoding(obj)) = 1;
                 obj.value = reshape(obj.value, sz);
                 obj.value = repmat(obj.value,varargin{:});
                 obj.value = obj.value(:);
             end
 
-            for d=find(subcoding(obj))
+            for d=find(onehotencoding(obj))
 
                 % only replicate non-singleton dimensions
                 S = size(obj.sub{d});
@@ -611,7 +611,7 @@ classdef sparsearray
                     s1 = s(1);
 
                     if ~issparse(obj.value) || isscalar(s1.subs) % syntax: obj(ind1:ind3) or obj(:)
-                        if any(subcoding(obj))
+                        if any(onehotencoding(obj))
                             obj= fullcoding(obj);
                         end
 
@@ -632,7 +632,7 @@ classdef sparsearray
                             AllIndices(3:D) = true;
                         end
 
-                        for d = find(~AllIndices & obj.subcoding)
+                        for d = find(~AllIndices & obj.onehotencoding)
                             % do not maintain one-hot encoding if referencing a subset
                             % (technically we could if there's no index repetition)
                             obj = fullcoding(obj, d);
@@ -643,7 +643,7 @@ classdef sparsearray
                             S = obj.siz;
 
                             % get correspinding values for one-hot encoding dimensions
-                            for d=find(obj.subcoding)
+                            for d=find(obj.onehotencoding)
                                 if size(obj.subs{d},1)>1
                                     obj.subs{d} = subsref(obj.subs{d}, s1);
                                 end
@@ -665,7 +665,7 @@ classdef sparsearray
                             S = obj.siz;
 
                             % get correspinding values for one-hot encoding dimensions
-                            for d=find(obj.subcoding)
+                            for d=find(obj.onehotencoding)
                                 if size(obj.subs{d},D)>1
                                     obj.subs{d} = subsref(obj.subs{d}, s1);
                                 end
@@ -1015,42 +1015,42 @@ classdef sparsearray
 
             n = ndims(obj);
             nRow = cellfun(@(x) size(x,1), U); % new size along dimensions we project on
-            subcode = subcoding(obj);
-            subcodeDims = find(subcode); % dim to project on and sparse dims
+            OneHot = onehotencoding(obj);
+            OneHotDims = find(OneHot); % dim to project on and sparse dims
             noprodDims = find(cellfun(@isempty,U)); % dimensions with no tensor product
 
-            %% collapse first over non-subindex coding dimensions which are not used by
+            %% collapse first over non-one-hot-encoding coding dimensions which are not used by
             % subindex dimensions
-            BoolMat = true(length(subcodeDims),n); % by default singleton doms
-            for ee =1:length(subcodeDims)
-                ss = size(obj.sub{subcodeDims(ee)})==1; % singleton dimensions for these regressors (i.e. subcoding regressor does not vary along that dimension)
+            BoolMat = true(length(OneHotDims),n); % by default singleton doms
+            for ee =1:length(OneHotDims)
+                ss = size(obj.sub{OneHotDims(ee)})==1; % singleton dimensions for these regressors (i.e. onehotencoding regressor does not vary along that dimension)
                 BoolMat(ee,1:length(ss)) = ss;
             end
-            SingletonDim = find(all(BoolMat==1,1) & ~subcode); % dimension all singleton across subcoding dimensions: let's start projecting around these ones
+            SingletonDim = find(all(BoolMat==1,1) & ~OneHot); % dimension all singleton across onehotencoding dimensions: let's start projecting around these ones
             SingletonDim = setdiff(SingletonDim,noprodDims);
             if ~isempty(SingletonDim)
                 UU = cell(1,n);
                 UU(SingletonDim)=  U(SingletonDim); % for tensor projection
-                SizeNonSubCode = obj.size; % size of value array
-                SizeNonSubCode(subcodeDims) = 1;
-                obj.value = tprod(obj.value, UU,SizeNonSubCode); % tensor product
+                NonOneHotSize = obj.size; % size of value array
+                NonOneHotSize(OneHotDims) = 1;
+                obj.value = tprod(obj.value, UU,NonOneHotSize); % tensor product
                 obj.siz(SingletonDim) = nRow(SingletonDim);
                 U(SingletonDim) = {[]};
 
             end
 
             %% now project over subindex coding dimensions
-            if isempty(subcodeDims)
-                subcodeDims = zeros(1,0);
+            if isempty(OneHotDims)
+                OneHotDims = zeros(1,0);
             end
-            if any(setdiff(subcodeDims,noprodDims))
+            if any(setdiff(OneHotDims,noprodDims))
                 V = sparsearray(obj.value);
                 S = size(obj);
                 SS = ones(1,ndims(obj));
-                SS(~subcoding(obj)) = S(~subcoding(obj));
+                SS(~onehotencoding(obj)) = S(~onehotencoding(obj));
                 V = reshape(V,SS);
 
-                for f= setdiff(subcodeDims,noprodDims)
+                for f= setdiff(OneHotDims,noprodDims)
                     UU = [zeros(nRow(f),1) U{f}]; % weights for that sparse dimension (add 0 first if 0 index)
 
                     S = size(obj.sub{f});
@@ -1077,7 +1077,7 @@ classdef sparsearray
                     %    obj.value = obj.value .* UU(1+obj.sub{f});
                     %end
                     U{f} = []; % remove this one
-                    subcode(f) = 0;
+                    OneHot(f) = 0;
                     obj.sub{f} = [];
                     obj.siz(f) = nRow(f);
                 end
@@ -1200,49 +1200,48 @@ end
 %% PRIVATE FUNCTIONS
 
 %% get indices
-function [ind,nsub] = get_indices(siz, subs)
-subs = check_subs(siz, subs);
+function [ind,nSub] = get_indices(siz, OHE)
+OHE = check_one_hot_encoding(siz, OHE);
 
-nsub = cellfun(@length, subs); % number of subindices in each dimension
-nelem = prod(nsub); % total number of element of sub-array
-D = length(nsub); % dimensionality
+nSub = cellfun(@length, OHE); % number of subindices in each dimension
+nElem = prod(nSub); % total number of element of sub-array
+D = length(nSub); % dimensionality
 
-ind = ones(nelem,1);
+ind = ones(nElem,1);
 for d=1:D
-    sb = (subs{d}(:)-1)*prod(siz(1:d-1)); % sub-indices for this dimension
+    sb = (OHE{d}(:)-1)*prod(siz(1:d-1)); % sub-indices for this dimension
     if d>1
-        sb = repelem(sb, prod(nsub(1:d-1)),1); % replicate each value in this dimension according to lower dimensions
+        sb = repelem(sb, prod(nSub(1:d-1)),1); % replicate each value in this dimension according to lower dimensions
     end
     if d<D
-        sb = repmat(sb,prod(nsub(d+1:end)),1); % replicate vector of subindices according to higher dimensions
+        sb = repmat(sb,prod(nSub(d+1:end)),1); % replicate vector of subindices according to higher dimensions
     end
     ind = ind + sb;
 end
 end
 
-
-%% check subs indices take correct value (for referencing and
+%% check one-hot-encoding indices take correct value (for referencing and
 % assignment)
-function  subs = check_subs(siz, subs)
+function  OHE = check_one_hot_encoding(siz, OHE)
 
 D = length(siz); % array dimension
-nSubs = length(subs);
-if nSubs>D 
+nOneHot = length(OHE);
+if nOneHot>D 
     error('sparse tensor does not have so many dimensions');
-elseif nSubs<D && ~all(siz(nSubs+1:end)==1)
+elseif nOneHot<D && ~all(siz(nOneHot+1:end)==1)
     error('provide indices for all dimensions (or just one to get column output)');
 else
-    subs(nSubs+1:D) = {1};
+    OHE(nOneHot+1:D) = {1};
     for d=1:D
-        if ischar(subs{d}) && subs{d}==':'
-            subs{d} = 1:siz(d);
-        elseif islogical(subs{d})
-            subs{d} = find(subs{d});
+        if ischar(OHE{d}) && OHE{d}==':'
+            OHE{d} = 1:siz(d);
+        elseif islogical(OHE{d})
+            OHE{d} = find(OHE{d});
         end
-        if any(subs{d}<0)
+        if any(OHE{d}<0)
             error('Array indices must be positive integers or logical values.');
         end
-        if any(subs{d}>siz(d))
+        if any(OHE{d}>siz(d))
             error('Index exceeds the number of array elements (%d).', siz(d));
         end
     end
@@ -1302,7 +1301,7 @@ sb = cell(1,D);
 for d=1:D
     if S1(d)==1 && S2(d)>1 % if obj1 is singleton is this dimension and obj2 is not
         % obj1 needs to be replicated
-        if ~subcoding(obj2,d)
+        if ~onehotencoding(obj2,d)
             R1(d) = S2(d);
         else % unless there is subindex coding
             fc(d) = true;
@@ -1313,7 +1312,7 @@ for d=1:D
         end
     end
     if S2(d)==1 && S1(d)>1
-        if ~subcoding(obj1,d)
+        if ~onehotencoding(obj1,d)
             R2(d) = S1(d);
         else
             fc(d) = true;
@@ -1325,10 +1324,10 @@ for d=1:D
     % cannot use subindex coding if the other array is not singleton
     % along that dimension
     if S1(d)>1 && S2(d)>1
-        if  subcoding(obj1,d)
+        if  onehotencoding(obj1,d)
             obj1 = fullcoding(obj1,d);
         end
-        if  subcoding(obj2,d)
+        if  onehotencoding(obj2,d)
             obj2 = fullcoding(obj2,d);
         end
     end

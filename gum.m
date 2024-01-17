@@ -100,7 +100,7 @@ classdef gum
     % - 'number_of_regressors': number of regressors
     % - 'concatenate_weights': concatenates model weights into vector
     % - 'get_weight_structure': get structure for weight data
- % - 'get_hyperparameter_structure': get structure for hyperparameter data
+    % - 'get_hyperparameter_structure': get structure for hyperparameter data
     % - 'freeze_weights': freezes weights and parameters in the model
     % - 'knockout': remove set of regressors from model
     % - 'clear_data': clear raw data to make lighter object
@@ -153,9 +153,18 @@ classdef gum
     % See https://github.com/ahyafil/gum
     % version 0.1.2. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
 
+    % DONE
+    % - regressor: corrected issue with splitting dimensions
+    % - added constraint "zero0"
+    % - added 'ref' field for categorical regressor
+    % - changed normalization for exponential basis functions
     % TODO
     % - wu: automatic permute of dimensions
+    % - constraints: add custom field, i.e. "mean3"
     % - basis functions: change prior to ARD? allow for chnge (L2/ARD/none)
+    % - plot_variance_vs_predictor (for normal and Poisson/lognorm)
+    % - test if residual is linear in one predictor (normal, expand for
+    % poisson)
     % - improve indexing in sparsearray
     % - Matern prior
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
@@ -1137,7 +1146,13 @@ classdef gum
             if length(obj)>1
                 %% fitting various models at a time
                 for i=1:numel(obj)
+                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
+                        fprintf('Inferring weights for model %d/%d (%s)\n', i, numel(obj), obj(i).label);
+                    end
                     obj(i) = obj(i).infer(param);
+                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
+                        fprintf('\n');
+                    end
                 end
                 return;
             end
@@ -1384,7 +1399,6 @@ classdef gum
                 Sfit.accuracy_all = accuracy;
                 Sfit.exitflag_CV = exitflag_CV;
                 Sfit.converged_CV = sum(exitflag_CV>0); % number of permutations with convergence achieved
-                % S.variance_CV = variance_CV;
                 if isfield(obj.param, 'testset')
                     Sfit.testscore = testscore;
                     Sfit.accuracy_test = accuracy_test;
@@ -4822,10 +4836,12 @@ O = ''; % list of operators
 OpenBracketPos = []; % position of opening brackets
 CloseBracketPos = []; % position of closing brackets
 
-option_list = {'sum','mean','tau','variance','basis','binning','constraint', 'type', 'period','fit','prior'}; % possible option types
+option_list = {'sum','mean','tau','variance','basis','binning','constraint', 'ref','type', 'period','fit','prior'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
 FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
+summing_opts =  {'joint', 'weighted', 'linear','equal','split','continuous'};% possible values for 'sum' options for multidim nonlinearity
+        constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
 
 basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier('}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
@@ -4874,6 +4890,7 @@ while ~isempty(fmla)
     % chech for lag operator
     [transfo, fmla] = starts_with_word(fmla,{'lag('});
     if ~isempty(transfo)
+        fmla = trimspace(fmla);
         assert(~inLag, 'cannot define nested lag operators');
         inLag = true;
         LS = struct;
@@ -4956,16 +4973,26 @@ while ~isempty(fmla)
                 case {'sum','mean'} % constraint type
                     [Num, fmla] = starts_with_number(fmla);
                     if isnan(Num)
-                        error('Value for option ''%s'' should be numeric',option);
-                    end
-                    if Num==0
-                        opts.constraint="nullmean";
-                    elseif Num==1 && strcmpi(option, 'sum')
-                        opts.constraint="sum1";
-                    elseif Num==1 && strcmpi(option, 'mean')
-                        opts.constraint="mean1";
+                        if strcmpi(option,'mean')
+                            error('Value for option ''sum'' should be numeric');
+                        end
+
+                        % could also be of type f(x; sum=weighted)
+                        [summing, fmla] = starts_with_word(fmla, summing_opts);
+                        if isnan(summing)
+                            error('Value for option ''sum'' should be numeric or one of the following:''joint'', ''weighted'', ''linear'',''equal'',''split'',''continuous''');
+                        end
+                        opts.sum = summing;
                     else
-                        error('%s=%f: not coded yet', option, Num);
+                        if Num==0
+                            opts.constraint="nullmean";
+                        elseif Num==1 && strcmpi(option, 'sum')
+                            opts.constraint="sum1";
+                        elseif Num==1 && strcmpi(option, 'mean')
+                            opts.constraint="mean1";
+                        else
+                            error('%s=%f: not coded yet', option, Num);
+                        end
                     end
                 case 'basis'
                     [opts.basis, fmla] = starts_with_word(fmla, basis_regexp  );
@@ -4992,9 +5019,16 @@ while ~isempty(fmla)
 
                     fmla(1:i-1) = [];
                 case 'constraint'
-                    % i = 1;
-                    opts.constraint = fmla(1);
-                    fmla = trimspace(fmla(2:end));
+                    [ct, fmla] = starts_with_word(fmla, constraint_opts);
+                    assert(~isempty(ct),'incorrect constraint type');
+                    opts.constraint = string(ct);
+                case 'ref'
+                    i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
+                    if isempty(i)
+                        error('incorrect formula, could not parse the value of ref');
+                    end
+                    opts.ref = fmla(1:i-1);
+                    fmla(1:i-1) = [];
                 case 'prior'
                     i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
                     if isempty(i)
