@@ -8,14 +8,14 @@ isBasisHP = contains(HP.type, "basis");
 % compute projection matrix and levels in projected space
 if ~isConcatenated % if no splitting or concatenating
 
-%if isrow(scale) && ~isConcatenated % if no splitting or concatenating
+    %if isrow(scale) && ~isConcatenated % if no splitting or concatenating
     [B.B,new_scale, B.params, gradB] = B.fun(scale, HP.HP(isBasisHP), B.params); % apply function (params is hyperparameter)
     assert(size(gradB,3)==sum(isBasisHP), 'dimension 3 of gradient should match the number of basis functions hyperparameters');
 else
     % more rows in scale means we fit different
     % functions for each level of splitting
     % variable
-assert(length(HP.index)==length(HP.type),'HP.index should be a vector of length equal to the number of hyperparameters');
+    assert(isempty(HP.index) || length(HP.index)==length(HP.type),'HP.index should be a vector of length equal to the number of hyperparameters');
 
     new_scale = zeros(size(scale,1),0);
     [id_list,~,split_id] = unique(scale(2:end,:)','rows'); % get id for each level
@@ -31,7 +31,7 @@ assert(length(HP.index)==length(HP.type),'HP.index should be a vector of length 
         else
             iHP = isBasisHP;
         end
-                    this_HP = HP.HP(iHP);
+        this_HP = HP.HP(iHP);
 
         gg = min(g,length(B)); % depending if B array with different structure or same B struct for all
         Bs = B(gg);
