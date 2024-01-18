@@ -43,11 +43,11 @@ if size(X,1)>D
     return;
 end
 
-order = params.order;
+degree = params.degree;
 
 % get all possible powers for x1, x2... such that sum of powers is not
-% larger than order
-powers = nchoosek(0:order+D-1, D); % all combinations of D values (all integers in a simplex)
+% larger than degree
+powers = nchoosek(0:degree+D-1, D); % all combinations of D values (all integers in a simplex)
 for d=2:D
     powers(:,d) = powers(:,d) - sum(powers(:,1:d-1),2) - d+1;
 end

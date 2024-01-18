@@ -49,22 +49,50 @@ X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
 
 B = zeros(nCos,length(X));
 Phi = Phi_1 + pi/2*(0:nCos-1); % Pi/2 spacing between each function
+
+non_neg = X+c>0;
+if a*log(min(X(non_neg))+c)-Phi_1-pi>=0
+    warning('Phi_1 hyperparameter is too small, some basis functions stay null over entire range of values')
+end
+if a*log(max(X(non_neg))+c)-Phi(end)+pi<=0
+    warning('Phi_1 hyperparameter is too large, some basis functions stay null over entire range of values')
+end
 for p=1:nCos
     alog = a*log(X+c)-Phi(p);
-    nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
+    nz = (X+c>0) & (alog>-pi) & (alog<pi); % time domain with non-null value
     B(p,nz) = cos(alog(nz))/2 + 1/2;
 end
+
+% add normalization so that each basis function has unit area (to be
+% finished)
+K = exp(-Phi'/a)*(1+1/a^2)/sinh(pi/a);
+
+B = B .* K;
+
 scale = 1:nCos;
 
 if nargout>3
     gradB = zeros(nCos, length(X),3);
+
+        % derivative of normalization constant w.r.t HPs (derivative w.r.c
+        % is null), divided by K
+dK_da_K = 1/a^2.*(Phi' + pi*coth(pi/a) - 2/(a+1/a)); 
+dK_dPhi_K = - 1/a; 
+
+%gradient of non-normalized basis functions
     for p=1:nCos
         alog = a*log(X+c)-Phi(p);
         nz = (X>-c) & (alog>-pi) & (alog<pi); % time domain with non-null value
         sin_alog = sin(alog(nz)) / 2;
+
         gradB(p,nz,1) = - sin_alog .* log(X(nz)+c); % gradient w.r.t a
         gradB(p,nz,2) = - sin_alog ./ (X(nz)+c) * a ; % gradient w.r.t c
         gradB(p,nz,3) = sin_alog; % gradient w.r.t Phi_1
     end
+
+    % add gradient relative to normalization factor
+    gradB(:,:,1) = K .* gradB(:,:,1) + B .*dK_da_K;
+   gradB(:,:,2) = K .* gradB(:,:,2);
+    gradB(:,:,3) = K .*gradB(:,:,3) + B .*dK_dPhi_K;
 end
 end

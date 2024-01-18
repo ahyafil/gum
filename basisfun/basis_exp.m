@@ -1,6 +1,10 @@
 function [B, scale, params, gradB] = basis_exp(X,HP, params)
-% compute basis functions as polynomial
+% compute basis functions as exponential functions 
 % [B, scale, params, gradB] = basis_exp(X,HP, params)
+
+if nargin<3
+    params = struct;
+end
 
 if size(X,1)>1
     %% another scale: separate set of basis functions for each level
@@ -46,7 +50,7 @@ B = zeros(nExp,length(X));
 X = double(X(1,:)); % x is on first row (extra rows may be used e.g. if splitted)
 for p=1:nExp
     tau = exp(HP(p));
-    B(p,:) = exp(-X/tau);
+    B(p,:) = exp(-X/tau)/tau; % normalize integral over [0,inf(
 end
 scale = 1:nExp;
 
@@ -55,7 +59,7 @@ if nargout>3
     gradB = zeros(nExp, length(X),length(HP));
     for p=1:nExp
         tau = exp(HP(p));
-        gradB(p,:,p) = B(p,:) .* X/tau;
+        gradB(p,:,p) = B(p,:) .* (X-1)/tau;
     end
 
 end

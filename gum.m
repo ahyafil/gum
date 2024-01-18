@@ -4354,7 +4354,7 @@ classdef gum
         end
 
         %% PLOT BASIS FUNCTIONS OF REGRESSOR
-        function h = plot_basis_functions(obj, varargin)
+        function varargout = plot_basis_functions(obj, varargin)
             % plot_basis_functions(M) plots basis functions in regressor
             %
             %plot_basis_functions(M, label) to specify which regressor to
@@ -4364,7 +4364,12 @@ classdef gum
             % normalizes basis functions
             %
             %h = plot_basis_functions(...) provides graphical handles
-            h = plot_basis_functions(obj.regressor, varargin{:});
+            %
+            %[h, B] = plot_basis_functions(...) provides the matrices of
+            %basis functions in a cell array.
+
+            varargout = cell(1,nargout);
+            [varargout{:}] = plot_basis_functions(obj.regressor, varargin{:});
 
             set_figure_name(gcf, obj, 'basis functions');
         end
@@ -4841,7 +4846,7 @@ TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % poss
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
 FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
 summing_opts =  {'joint', 'weighted', 'linear','equal','split','continuous'};% possible values for 'sum' options for multidim nonlinearity
-        constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
+constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
 
 basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier('}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
@@ -5499,37 +5504,26 @@ WordMatch = cellfun(@(x) ~isempty(x)&&x(1)==1, R);
 
 w = find(WordMatch);
 if length(w)>1 % if more than one match
-
     % select longer string
     wLength = cellfun(@length, WordList(w));
     [~,i_maxLength] = max(wLength);
     w = w(i_maxLength);
 end
 
-%for w=1:length(WordList)
-%    if ~isempty(R{w}) && R{w}(1)==1
 if ~isempty(w)
     %we've got a match
     word = WordList{w};
-    % wd = WordList{w};
-    % if length(str)>=length(wd) && strcmp(str(1:length(wd)),wd)
-    %   word = wd;
-
     str = trimspace(str);
 
     % check if word includes number (e.g. 'exp4')
     number_extent = regexp(word,'(\[\\d\]\+)','tokenExtents');
-
     word_no_number = word;
-
 
     if ~isempty(number_extent)
         % remove number
 
         number_extent = number_extent{1};
         word_no_number(number_extent(1):number_extent(end)) = [];
-
-
 
         % remove corresponding characters from string
         word_token = word;

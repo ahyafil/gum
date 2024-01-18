@@ -2110,14 +2110,15 @@ classdef regressor
         end
 
         %% PLOT BASIS FUNCTIONS
-        function h = plot_basis_functions(obj, label, normalize)
+        function [h, BB] = plot_basis_functions(obj, label, normalize)
             % plot_basis_functions(R) plots basis functions in regressor
             %
             %plot_basis_functions(R, label) to specify labels of regressor to
             %select
             %
             % plot_basis_functions(R, label,'normalize') or plot_basis_functions(R, [],'normalize')
-            % normalizes basis functions
+            % normalizes basis functions so that they have all the same
+            % peak
             %
             %h = plot_basis_functions(...) provides graphical handles
 
@@ -2134,6 +2135,7 @@ classdef regressor
             nSub = size(I,2); % total number of plots
             iSub = 1; % subplot counter
             h = cell(1,nSub);
+            BB = cell(1,nSub);
 
             for k=1:nSub
                 m = I(1,k);
@@ -2155,8 +2157,12 @@ classdef regressor
                 Bmat = B(1).B(is_real_basis,:);
 
                 if do_normalize
-                    Bmat = Bmat ./ sum(Bmat,2);
+                    peak = max(abs(Bmat),[],2); %peak value
+                    Bmat = Bmat ./ peak;
+                    Bmat(peak==0,:)=0;
                 end
+
+                BB{iSub} = Bmat;
 
                 subplot2(nSub,iSub);
                 h{iSub} =  plot(obj(m).Weights(d).scale(1,:), Bmat);
