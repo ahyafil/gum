@@ -3552,6 +3552,8 @@ classdef gum
             % first concatenate
             obj = concatenate_over_models(obj, true);
 
+            obj.score.Dataset = "average over "+n+ "datasets";
+            
             % now compute average and standard deviation of weights over
             % population
             for m=1:obj.nMod

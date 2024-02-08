@@ -520,6 +520,11 @@ if use_reg
         R = M.project_observations(EventCount);
     else
 
+        if M.nDim==1 && M.Weights.constraint=="first0"
+            % if categorical regressor, change reference value to 1
+            M.Weights.constraint="first1";
+        end
+
         M = M.add_dummy_dimension(1); % add dummy dimension in regressor at 1 as a placeholder for timeshift
 
         objval = cell(1,nK);
@@ -545,10 +550,9 @@ if use_reg
      %     constraint all set of weights (except temporal one) to be be mean-1 to make sure our model is identifiable
      freeRegressor = [R.Weights.constraint]=="free";
      freeRegressor(1) = false;
+     if any(freeRegressor)
      R.Weights(freeRegressor).constraint = "mean1";
-     %   if any([R(2:end).Weights.constraint]=="free") % if any other dimension is without constraint
-     %       R.Weights(1).constraint = "mean1"; % we constraint the dynamics to be 1 on average to make sure our model is identifiable
-     %   end
+     end
     end
 else
     % create regressor object
