@@ -1440,7 +1440,7 @@ classdef regressor
             single_tau(end+1:max(dims)) = true;
 
             for d= dims % for all specified dimensions
-                if isempty(summing{d}) || strcmp(summing{d},'weighted') % by default: linear set of weights for each dimension
+                                if isempty(summing{d}) || strcmp(summing{d},'weighted') % by default: linear set of weights for each dimension
                     summing{d} = 'linear';
                 end
                 obj.Weights(d).type = summing{d};
@@ -1495,6 +1495,8 @@ classdef regressor
 
                         % define continuous prior
                         obj = define_continuous_prior(obj,summing{d}, d,scl, prior{d},HP(d), basis{d}, [],2*pi, single_tau(d), condthresh, dimensions{d});
+                    otherwise
+                        error('incorrect sum type:%s',summing{d});
                 end
             end
         end

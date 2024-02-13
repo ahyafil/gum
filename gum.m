@@ -1160,7 +1160,6 @@ classdef gum
             if isempty(obj.regressor)
                 error('the model has no regressor');
             end
-
             tic;
 
             %% parse parameters
@@ -3368,15 +3367,15 @@ classdef gum
                     end
                     if  DifferentScale
 
-                        sc = unique([scale{:,d}]); % all values across all models
+                        sc = unique([scale{:,d}]','rows')'; % all values (or combination of values) across all models
                         for i=1:nObj
                             ss = scale{i,d};
 
                             % find the indices in sc corresponding to values
                             % for this model
-                            idx = zeros(1,length(ss));
-                            for v=1:length(ss)
-                                idx(v) = find(ss(v)==sc);
+                            idx = zeros(1,size(ss,2));
+                            for v=1:size(ss,2)
+                                idx(v) = find(all(ss(:,v)==sc,1));
                             end
 
                             % replace
@@ -3553,7 +3552,8 @@ classdef gum
             obj = concatenate_over_models(obj, true);
 
             obj.score.Dataset = "average over "+n+ "datasets";
-            
+            obj.label = obj.score.Dataset;
+
             % now compute average and standard deviation of weights over
             % population
             for m=1:obj.nMod
