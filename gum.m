@@ -3368,6 +3368,7 @@ classdef gum
                     if  DifferentScale
 
                         sc = unique([scale{:,d}]','rows')'; % all values (or combination of values) across all models
+                        nVal = size(sc,2); % number of different values
                         for i=1:nObj
                             ss = scale{i,d};
 
@@ -3379,19 +3380,19 @@ classdef gum
                             end
 
                             % replace
-                            tmp = nan(size(U{i,d},1),length(sc));
+                            tmp = nan(size(U{i,d},1),nVal);
                             tmp(:,idx) = U{i,d};
                             U{i,d} = tmp;
 
-                            tmp = nan(size(se{i,d},1),length(sc));
+                            tmp = nan(size(se{i,d},1),nVal);
                             tmp(:,idx) = se{i,d};
                             se{i,d} = tmp;
 
-                            tmp = nan(size(TT{i,d},1),length(sc));
+                            tmp = nan(size(TT{i,d},1),nVal);
                             tmp(:,idx) = TT{i,d};
                             TT{i,d} = tmp;
 
-                            tmp = nan(size(p{i,d},1),length(sc));
+                            tmp = nan(size(p{i,d},1),nVal);
                             tmp(:,idx) = p{i,d};
                             p{i,d} = tmp;
 
