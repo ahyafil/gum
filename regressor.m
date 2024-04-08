@@ -98,7 +98,7 @@ classdef regressor
     % - 'first1': first element in weight vector is set to 1
     % - 'zero0': value at 0 is 0
     % - 'fixed': fixed weights (not estimated)
-    % Default value is 'fixed' (unconstrained) for first dimension, 'mean1' for other
+    % Default value is 'free' (unconstrained) for first dimension, 'mean1' for other
     % dimensions. C must be a character array of length D (or rank x D matrix)
     %
     % V = regressor(...,'label', N) to add label to regressor
@@ -154,8 +154,6 @@ classdef regressor
             binning = [];
             label = "";
             dimensions = "";
-            % variance = [];
-            % tau = [];
             color = [];
             plot = [];
             prior = [];
@@ -165,7 +163,7 @@ classdef regressor
                 type = 'linear';
             end
 
-            assert(any(strcmp(class(type), {'char','function_handle','cell'})),...
+            assert(ismember(class(type), {'char','function_handle','cell'}),...
                 'second argument should be a string array (data type) or a covariance function (function handle or cell array)');
             is_covfun = ~ischar(type);
 
@@ -202,9 +200,9 @@ classdef regressor
                         assert(all(HP.k>0),'shape of gamma basis functions must be positive');
                     case {'a','c','phi'}
                         HP.(varargin{v}) = varargin{v+1};
-
                     case 'period'
                         period = varargin{v+1};
+                        type = 'periodic';
                     case 'singlescale'
                         single_tau = varargin{v+1};
                     case 'sum'
@@ -237,13 +235,13 @@ classdef regressor
             %% which hyparameters are estimated
             % default values
             if is_covfun
-                nPar = str2double(type()); % number of parameters
-                HPfit_def = ones(1,nPar);
+                %  nPar = str2double(type()); % number of parameters
+                %  HPfit_def = ones(1,nPar);
                 HPfit_lbl = {};
             else % data type
                 switch type
                     case 'constant'
-                        HPfit_def = [];
+                        %  HPfit_def = [];
                         HPfit_lbl = {};
                     case {'linear','categorical'}
                         if isempty(prior)
@@ -251,27 +249,18 @@ classdef regressor
                         end
                         switch prior
                             case 'L2'
-                                if strcmp(type,'linear')
-                                    HPfit_def = ones(1,ndims(X)-1);
-                                else
-                                    HPfit_def = 1;
-                                end
                                 HPfit_lbl = {'variance'};
                             case 'none'
-                                HPfit_def = [];
                                 HPfit_lbl = {};
                             case 'ARD'
-                                HPfit_def = ones(1,size(X,ndims(X)));
                                 HPfit_lbl = num2strcell('variance_%d',1:size(X,ndims(X)));
                             otherwise
                                 error('incorrect prior type: %s',prior);
                         end
 
                     case 'continuous'
-                        HPfit_def = [1 1];
                         HPfit_lbl = {'tau','variance'};
                     case 'periodic'
-                        HPfit_def = [1 1];
                         HPfit_lbl = {'tau','variance'};
                     otherwise
                         error('incorrect type: ''%s''',type);
@@ -294,10 +283,11 @@ classdef regressor
             end
             if iscell(HPfit)
                 assert(~is_covfun, 'cannot define names of hyperparameters to be fitted for custom covariance function')
-                HPfit = ismember(HPfit, HPfit_lbl);
+                HPfit = ismember(HPfit_lbl, HPfit);
+            else
+                HPfit = logical(HPfit);
             end
 
-            HPfit = logical(HPfit);
 
             if isrow(X)
                 X = X';
@@ -351,6 +341,7 @@ classdef regressor
             %create weights structure
             obj.Weights = empty_weight_structure(nD, siz, scale, color);
             obj.Weights(nD).type = type;
+            obj.Weights(nD).constraint = "free";
 
             % create prior structure
             obj.Prior = empty_prior_structure(nD);
@@ -401,7 +392,7 @@ classdef regressor
                 case 'constant'
                     obj.Data = X;
                     obj.nDim = 1;
-                    obj.Weights(1).constraint = 'fixed';
+                    obj.Weights(1).constraint = "fixed";
                     if iscolumn(X)
                         obj.Weights(1).scale = nan;
                     else
@@ -564,16 +555,20 @@ classdef regressor
             obj.Weights(nD).plot = plot;
 
             % by default, first dimension (that does not split or separate)
-            % is free, other have sum-one constraint
+            % is free, other have mean-one constraint
             if ~strcmpi(type, 'constant')
-                noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint});
+                noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint}) | cellfun(@(x) x=="",{obj.Weights.constraint});
                 FreeDim = find(~SplitOrSeparate & noDefinedConstraint,1);
                 for d= find(noDefinedConstraint)
-                    obj.Weights(d).constraint = "sum1"; % sum-one constraint
+                    if any([obj.Weights.constraint] == "free")
+                        obj.Weights(d).constraint = "mean1"; % mean-one constraint if already a free dimension
+                    else
+                        obj.Weights(d).constraint = "free"; % otherwise free
+                    end
                 end
-                if any(FreeDim)
-                    obj.Weights(FreeDim).constraint = "free";
-                end
+                %  if any(FreeDim)
+                %      obj.Weights(FreeDim).constraint = "free";
+                %  end
                 if strcmpi(type, 'categorical') % categorical variable: we fix the first weight to reference value
                     ct = obj.Weights(nD).constraint;
                     if strlength(ct)==0 % no reference defined
@@ -680,6 +675,7 @@ classdef regressor
                         % compute projection matrix and levels in projected space
                         B = compute_basis_functions(W(c).basis(1), this_scale, this_HP);
                         nWeight(c) = size(B(1).B,1);
+                                                W(c).basis(1).nWeight = nWeight(c); % needed to avoid errors with constraint_structure
                     end
                 end
             end
@@ -760,6 +756,30 @@ classdef regressor
             label = [W.label];
         end
 
+        %% ENSURE LABELS OF WEIGHT SET ARE UNIQUE
+        function obj = check_unique_weight_labels(obj)
+            % R = R.check_unique_weight_labels
+
+            Wlbl = weight_labels(obj); % label for all set of weights
+            Wlbl_unq = unique(Wlbl);
+            if length(Wlbl_unq)==length(Wlbl)
+                return; % all are unique: we're done
+            end
+
+            I = obj.find_weights; %indices of weight set
+            for w=Wlbl_unq
+                idx = find(Wlbl==w);
+                if length(idx)>1 % more than two with same names
+                    for j=1:length(idx)
+                        ii = idx(j);
+                        m = I(1,ii); % regressor index
+                        d = I(2,ii); % dimension index
+                        obj(m).Weights(d).label = w + j; % add counter after label
+                    end
+                end
+            end
+        end
+
         %% FIND SET OF WEIGHT WITH GIVEN LABEL
         function I = find_weights(obj, label)
             % I = find_weights(R, label) finds the set of weight with given
@@ -796,7 +816,6 @@ classdef regressor
 
             label = string(label);
 
-            %if length(label)==1
             lbl = char(label(1));
             if ~isempty(lbl) && lbl(1)=='-' % all weights but this one
                 Inot = find_weights(obj,lbl(2:end)); % index of the weights we don't want to include
@@ -804,7 +823,6 @@ classdef regressor
                 I = setdiff(Iall',Inot','rows')';
                 return;
             end
-            % end
 
             Wlbl = weight_labels(obj); % label for all set of weights
 
@@ -828,14 +846,26 @@ classdef regressor
         %% GET WEIGHT STRUCTURE
         function W = get_weight_structure(obj,label)
             % W = get_weight_structure(R) or
-            % W = get_weight_structure(R, label) to get weight structure
+            % W = get_weight_structure(R, label) where label is a string
+            % array
+            % W = get_weight_structure(R, I) where I is a two-row matrix of
+            % indices (first row: regressor index; second row: dimension
+            % index)
+            % to get weight structure
             if nargin==1
                 I = find_weights(obj);
+            elseif isnumeric(label)
+                if isrow(label)
+                     label(2,:) = 1;
+                end
+                assert(size(label,1)==2, 'I must be a matrix with 2 rows');
+                assert(all(label>0,'all'), 'values in I must be positive (indices)')
+                assert(all(label(1,:)<=numel(obj)), 'values in first row of I must not be larger than number of regressor objects');
+                I = label;
             else
                 I = find_weights(obj,label);
             end
 
-            W = empty_weight_structure(size(I,2)); % preallocate
             for i=1:size(I,2)
                 k = I(1,i);
                 d = I(2,i);
@@ -1157,7 +1187,6 @@ classdef regressor
             % regressor index and dimensionality of all sets of weights
             idx = find_weights(obj,varargin{:});
 
-
             for j=1:size(idx,2)
                 i = idx(1,j);
                 d = idx(2,j);
@@ -1171,6 +1200,51 @@ classdef regressor
                 %  obj(i).HP(d).fit(:) = 0;
             end
         end
+
+%% DROP UNUSED VALUES IN SCALE
+function obj = drop_unused_values(obj)
+% R = R.drop_unused_values to remove values in scales that are not present
+% in the dataset (i.e. corresponding column in design matrix is just
+% zeros).
+
+assert(isscalar(obj), 'only coded for single regressors - use for loop');
+
+% compute design matrix (all dimensions)
+obj2 = obj;
+obj2.Data = abs(obj.Data); % we'll compute sum of absolute values and compare to zero
+
+obj2 = obj2.set_weights(ones(1,obj.nTotalParameters));
+Phi = design_matrix(obj2,[], 0, false);
+unused = all(Phi==0,1); % unused values
+
+d = 1;
+Wfields = ["PosteriorMean","PosteriorStd","PosteriorCov","T","p","scale","U_allstarting","U_CV"];
+while any(unused)
+    W = obj.Weights(d); % weight structure
+    drop_these = unused(1:W.nWeight);
+    
+    if any(drop_these)
+        % remove unused values from all existing fields
+        for f=Wfields
+             if isfield(W,f) && ~isempty(W.(f))
+                    W.(f)(:,drop_these) = []; 
+             end
+        end
+   
+        W.nWeight = W.nWeight - sum(drop_these);
+        obj.Weights(d) = W;
+
+        % remove also from data
+        indices = repmat({':'},1,obj.nDim+1);
+        indices{d+1} = drop_these;
+        s = struct("type",'()','subs',{indices});
+        obj.Data = subsasgn(obj.Data,s,[]);
+    end
+
+    unused(1:length(drop_these)) = []; % these have been processed already
+    d = d+1;
+end
+end
 
         %% ORTHOGONALIZE WEIGHTS (FOR PWA)
         function obj = orthogonalize_weights(obj, d)
@@ -1561,11 +1635,6 @@ classdef regressor
                 else % 'fourier': number of basis functions is calculated automatically
                     nBasisFun = nan;
                 end
-
-                % !!not sure if this is still a problem, would think not
-                %if any(strcmp(summing,{'split','separate'}))
-                %    error('spectral trick not coded for sum=''%s''', summing);
-                %end
                 obj.Prior(d).CovFun = @covSquaredExp_Fourier;
 
                 B.fun = @basis_fourier;
@@ -1809,7 +1878,7 @@ classdef regressor
             % Phi = design_matrix(obj,subset, dims, init_weight) sets
             % whether weights should be initialized (default:true).
             %
-            % [Phi,nReg] = design_matrix(...) provides the number of
+            % [Phi,nWeight] = design_matrix(...) provides the number of
             % columns corresponding to each regressor
 
             nM = length(obj); % number of modules
@@ -1818,6 +1887,7 @@ classdef regressor
                 obj = extract_observations(obj,subset);
             end
 
+            % define for which dimension we want to plot it
             if nargin<3 || isempty(dims) % by default, project on dimension 1
                 dims = ones(1,nM);
                 dims = num2cell(dims);
@@ -1827,10 +1897,8 @@ classdef regressor
                 for m=1:nM
                     dims{m} = 1:obj(m).nDim;
                 end
-
             elseif ~iscell(dims)
                 dims = num2cell(dims);
-
             end
 
             if nargin<4 % by default, initialize weights
@@ -1900,27 +1968,14 @@ classdef regressor
 
             for r=1:rk % for each rank
                 for d=1:nD % for each dimension
-                    W = obj.Weights(d);
-                    % nW = W.nWeight;
-
                     % if more than one rank and only defined for first, use
                     % same as first
                     if r>1 && ((size(obj.Prior,1)<r) || isempty(obj.Prior(r,d).PriorCovariance))
                         obj.Prior(r,d).PriorCovariance = obj.Prior(1,d).PriorCovariance;
                     end
 
-                    % ct = constraint_structure(W);
-
                     if isempty(obj.Prior(r,d).PriorCovariance) % by default: (not sure this should ever happen)
                         obj.Prior(r,d).PriorCovariance = speye(nFreeWeights(r,d)); % identity matrix in free basis
-                        % ct = constraint_type(W);
-                        % if d<=nD && ismember(ct,["first0","first1"]) % no covariance for first weight (set to zero/one), unit for the others
-                        %     obj.Prior(r,d).PriorCovariance = diag([0 ones(1,nW-1)]);
-                        % elseif ct == "fixed"
-                        %     obj.Prior(r,d).PriorCovariance = zeros(nW);
-                        % else % otherwise diagonal unit covariance
-                        %     obj.Prior(r,d).PriorCovariance = speye(nW);
-                        % end
                     end
                     if ~isequal(size(obj.Prior(r,d).PriorCovariance),nFreeWeights(r,d)*[1 1])
                         error('Prior covariance for dimension %d should be a square matrix of size %d', d,nFreeWeights(r,d));
@@ -1955,13 +2010,16 @@ classdef regressor
                             size(Bmat,2), W.label, nW);
                         new_nWeight = size(Bmat,1);
 
+                        W.basis = B;
+                        cc = constraint_structure(W);
+
+
                         % store values for full space in B
                         B(1).scale = W.scale;
                         B(1).nWeight = W.nWeight;
                         W.scale = new_scale;
 
                         %% if weights are constrained to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                        cc = constraint_structure(W);
                         if cc(1).nConstraint>0
                             for r=2:obj(m).rank
                                 if ~isequal(cc(1), cc(r))
@@ -1969,27 +2027,7 @@ classdef regressor
                                 end
                             end
 
-                            % shouldn't be doing this which involved
-                            % changing the basis function because then the
-                            % prior should not apply
-                            %                             if cc(1).nConstraint==1 && all(cc(1).V == cc(1).V(1)) % mean1, sum1, nullmean
-                            %
-                            %                                 B2 = sum(Bmat,2); % ( 1*(B*U) = const -> (1*B)*U = const
-                            %
-                            %                                 if cc(1).u~=0
-                            %                                     B2 = B2 / cc(1).u;
-                            %                                     cc(1).u = 1;
-                            %                                 end
-                            %
-                            %                                 invB = diag(1./B2);
-                            %                                 Bmat = invB * Bmat; % change projection matrix so that constraint is sum of weight equal to one
-                            %
-                            %                                 cc(1).V = ones(new_nWeight,1);
-                            %
-                            %                             else
-                            %V*(B*U) = u -> (V*B)*U = u
                             cc(1).V = Bmat*cc(1).V;
-                            %  end
                             B(1).B = Bmat;
 
                             % !! I'm commenting because I don't
@@ -2247,30 +2285,12 @@ classdef regressor
                                 Sigma = P.CovFun;
                                 gsf{r,d} = zeros(nW,nW,0);
                             end
-
-
-
-                            %                        %% project onto free basis (if constraint) - now done in evaluate_prior_covariance_function
-                            %                        if with_grad
-                            %                        [Sigma, gsf{r,d}] = covariance_free_basis(Sigma, constraint_structure(W),gsf{r,d});
-                            %                        else
-                            %                        Sigma = covariance_free_basis(Sigma, constraint_structure(W));
-                            %                        end
-                            %                         ct = constraint_structure(W);
-                            %                         if ct.type =="fixed"
-                            %                             Sigma = [];
-                            %                         elseif ct.nConstraint>0
-                            %                             J = eye(nW)- ct.V/(ct.V'*Sigma*ct.V)*ct.V'*Sigma;
-                            %                             Sigma = ct.P*Sigma*J*ct.P';
-                            %                             Sigma = (Sigma+Sigma')/2; % make symmetric to correct numerical errors
-                            %                         end
                         end
 
                         obj(m).Prior(1,d).PriorCovariance = Sigma;
                     end
 
-                    %end
-
+                    fittable_cov_hp = contains(HH.type,"cov") & HH.fit;
                     if rk>1 && (rrr==1) % rank>1 and same covariance function and HPs for each rank
                         % replicate covariance matrices
                         for r=2:rk
@@ -2279,7 +2299,7 @@ classdef regressor
 
                         % extend gradient
                         if with_grad
-                            this_nHP = sum(contains(HH.type,"cov")); % number of covariance HPs
+                            this_nHP = sum(fittable_cov_hp); % number of covariance HPs
                             gsf_new = zeros(nW*rk,nW*rk,this_nHP);
                             for l=1:this_nHP
                                 gg = repmat({gsf{1,d}(:,:,l)},rk,1);
@@ -2291,8 +2311,8 @@ classdef regressor
 
                     % add zeros for non-covariance HPs
                     g_tmp = gsf{d};
-                    gsf{d} = zeros(size(g_tmp,1),size(g_tmp,2), length(HH.HP));
-                    gsf{d}(:,:,contains(HH.type, "cov")) = g_tmp;
+                    gsf{d} = zeros(size(g_tmp,1),size(g_tmp,2), sum(HH.fit));
+                    gsf{d}(:,:,fittable_cov_hp) = g_tmp;
                 end
 
                 grad_sf{m} = gsf(:)';
@@ -2406,6 +2426,7 @@ classdef regressor
                 obs = 'binomial';
             end
             obj = obj.check_prior_covariance; % make sure prior covariance is defined
+            obj = obj.project_to_basis; 
             obj = obj.compute_prior_mean;
 
             % if more than one object, compute iteratively
@@ -2705,11 +2726,12 @@ classdef regressor
                     W = obj(i).Weights(d);
                     B = W.basis;
                     HPs = obj(i).HP(d);
-                    nHP = length(HPs.HP);
+                    nHP = sum(HPs.fit);
                     nFW = obj(i).nFreeParameters(d);
-                    if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) %% for any fittable HP parametrizes basis functions
+                    fit_basis_hp = contains(HPs.type,'basis') & HPs.fit; % fittable HPs for basis functions
+                    if any(fit_basis_hp) && ~all([B.fixed]) %% for any fittable HP parametrizes basis functions
 
-                        basisHP = find(contains(HPs.type, "basis"));
+                        basisHP = find(fit_basis_hp);
 
                         % compute basis functions and gradient of basis fun w.r.t HP
                         [~,~, gradB] = compute_basis_functions(B, B(1).scale, HPs);
@@ -2783,8 +2805,6 @@ classdef regressor
                 Pall = projection_matrix_multiple(obj,'all'); % full-to-free basis
                 P = P - Pall*   DM'*dY_dHP;
             end
-
-
         end
 
         %% CLEAR DATA (E.G. TO FREE UP MEMORY)
@@ -2799,10 +2819,16 @@ classdef regressor
         %%%% 3. OPERATIONS ON REGRESSORS
 
         %% EXTRACT REGRESSOR FOR A SUBSET OF OBSERVATIONS
-        function obj = extract_observations(obj,subset) %,dim)
-            % M = M.extract_observations(subset); extracts observations for regressor
+        function obj = extract_observations(obj,subset, drop_unused)
+            % R = R.extract_observations(subset); extracts observations for regressor
             % object
+            %
+            % R = R.extract_observations(subset, drop_unused);
+            % if drop_unused is set to True, drops regressor values if they do not appear in subset
 
+            if nargin<3
+                drop_unused = false;
+            end
             for i=1:numel(obj)
                 S = size(obj(i).Data);
                 obj(i).Data = obj(i).Data(subset,:);
@@ -2814,6 +2840,10 @@ classdef regressor
                     obj(i).DataOriginal = reshape(obj(i).DataOriginal, [n_Obs, S(2:end)]); % back to nd array
                 end
                 obj(i).nObs = n_Obs;
+
+                if drop_unused
+                obj(i) = obj(i).drop_unused_values;
+                end
             end
         end
 
@@ -3200,12 +3230,14 @@ classdef regressor
                 %% update scale
                 W = obj.Weights(dd);
                 W = replicate_constraint(W, nVal); % update constraint
-                W.scale = interaction_levels(W.scale, label);
+                if all(ismissing(W.scale)) % splitting a no-scale variable
+                    W.scale = label;
+                    W.dimensions = split_var;
+                else
+                     W.scale = interaction_levels(W.scale, label);
                 W.dimensions = [W.dimensions split_var];
-                if all(ismissing(W.scale(1,:))) % splitting a no-scale variable
-                    W.scale(1,:) = [];
-                    W.dimensions(1) = [];
                 end
+               
                 W.label = W.label+ "|"+ split_var;
 
                 W.nWeight = W.nWeight * nVal; % one set of weights for each level of splitting variable
@@ -3762,7 +3794,7 @@ classdef regressor
         %%%% 4. PLOTTING AND EXPORTING
 
         %% PLOT FITTED WEIGHTS
-        function h = plot_weights(obj, U2, varargin)
+        function h = plot_weights(obj, label, varargin)
             % plot_weights(R) plot weights from regressor R
             % R.plot_weights()
             % R.plot_weights("regressor1")
@@ -3777,64 +3809,84 @@ classdef regressor
 
             Dataset = [];
 
-            if nargin<2 || isequal(U2, 'nsubplot') || isempty(U2)
-                if nargin>=2 && isequal(U2, 'nsubplot')
-                    varargin = {U2};
+            if nargin<2 || isequal(label, 'nsubplot')
+                if nargin>=2 && isequal(label, 'nsubplot') % R.plot_weights('nsubplot',...)
+                    varargin = {label};
                 end
-                U2 = [];
+                label = [];
             end
 
-            % select corresponding regressors to be plotted
-            if isempty(U2)
+            %% select corresponding regressors to be plotted
+            if isempty(label)
                 idx = find_weights(obj);
-            elseif isnumeric(U2) % already providing matrix
-                assert(size(U2,1)==2, 'U2 should be a matrix of 2 rows (first row: regressor index; second row: dimensionality');
-                idx = U2;
+            elseif isnumeric(label) % already providing matrix
+                assert(size(label,1)==2, 'U2 should be a matrix of 2 rows (first row: regressor index; second row: dimensionality');
+                idx = label;
             else
-                idx = find_weights(obj, U2);
+                idx = find_weights(obj, label);
             end
 
+            %% define number of subplots and colours
             only_nsubplot = ~isempty(varargin) && isequal(varargin{1}, 'nsubplot');
             cols = defcolor;
             cols{1,2} = ''; % add variable column
-            colmaps = {'jet','hsv','spring','summer','winter','automn','hot','parula','gray','bone','copper','pink',...
-                'hot','lines','colorcube','prism','sky','abyss','flag'};
 
-            NoFixedWeights = zeros(1,size(idx,2));
+            if verLessThan('matlab', '9.9') || only_nsubplot
+                % cannot use nexttile-> compute number of subplots a priori
+                % (may be wrong)
+            nSubplotsReg = zeros(1,size(idx,2));
             for j=1:size(idx,2) % for each set of regressor
                 m = idx(1,j);
                 isFW = isFixedWeightSet(obj(m));
                 d = idx(2,j);
-                NoFixedWeights(j) = ~isFW(d) * nRegressorSet(obj(m).Prior(d)); % regressors with constant (count also concatenated regs)
+                do_plot = ~isFW(d); % do not plot regressors with constant
+                do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
+                nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
             end
-            idx(:,~NoFixedWeights) = []; % remove fixed weights
-            nSubplots = sum(NoFixedWeights); % number of subplots
+            idx(:,~nSubplotsReg) = []; % remove non_plotted weights
+            nSubplots = sum(nSubplotsReg); % number of subplots
 
             if only_nsubplot % only ask for number of subplots
                 h = nSubplots;
                 return;
             end
+            end
 
-            % check if subplots are assigned
-            if ~isempty(varargin) && ~isequal(varargin{1}, 'nsubplot') && ~isequal(varargin{1}, 'Dataset')
-                h.Axes = varargin{1};
-                varargin(1) = [];
-            else % otherwise define a grid of subplots in current figure
-                for i=1:nSubplots
-                    h.Axes(i) = subplot2(nSubplots,i);
+            %% process extra arguments
+            v = 1;
+            handle_arg = false;
+            while v<=length(varargin)
+                varg = varargin{v};
+                if ishandle(varg) % graphics handle
+                    h.Axes = varg;
+                    varargin(v) = []; % remove from list of arguments
+                    handle_arg= true;
+
+                elseif isequal(varg,'Dataset') %plot_weights(...,'Dataset',lbl,...)
+                    Dataset = varargin{v+1};
+                    varargin(v:v+1) = [];  % remove from list of arguments
+                else % argument for wu
+                    v = v+1;
                 end
             end
 
-            % check if extra argument with dataset
-            if length(varargin)>=2 && isequal(varargin{end-1},'Dataset')
-                Dataset = varargin{end};
+            % if not graphics handles passed, 
+            if ~handle_arg
+                if verLessThan('matlab', '9.9')
+                    % define a grid of subplots in current figure
+                for i=1:nSubplots
+                    h.Axes(i) = subplot2(nSubplots,i);
+                end
+                else 
+                    h.Axes = []; % use nexttile
+                end
             end
 
             i = 1; % subplot counter
-            % c = -1; % color counter
             cm = 1; % colormap counter
             h.Objects = {};
 
+            %% plot
             for j=1:size(idx,2) % loop between subpots
                 m = idx(1,j);
                 d = idx(2,j);
@@ -3853,14 +3905,61 @@ classdef regressor
 
                 % plot weights
                 for s=1:length(W)
+                    if length(h.Axes)>=i
                     axes(h.Axes(i)); % set as active subplot
+                    else
+h.Axes(i) = nexttile;
+                    end
 
-                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, colmaps, Dataset);
+                    if ~isempty(varargin) && ~isa(W(s).plot, 'function_handle') % pass extra arguments
+                        W(s).plot = varargin;
+                    end
+
+                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, Dataset);
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
                 end
             end
+        end
+
+        %% DEFINE PLOTTING FUNCTION
+        function obj = define_plot(obj, fun, label)
+            % R = R.define_plot(label, fun) where fun is a function handle to use
+            % this function for plotting weights instead of default options.
+            % R = R.define_plot(label,'none') to avoid plotting regressor set when
+            % plotting model.
+            % R = R.define_plot(label,'auto') to use default options.
+
+            if nargin>2
+                idx = find_weights(obj,label);
+            else
+                idx = find_weights(obj);
+            end
+
+            assert(isa(fun,"function_handle") || isempty(fun) || isequal(fun, 'none') || isequal(fun,"none") || isequal(fun, 'auto') || isequal(fun,"auto") || iscell(fun),...
+                "fun should be a function handle, ''auto'',''none'' a cell array or an empty array");
+
+            if isequal(fun, 'auto') || isequal(fun,"auto")
+                fun = [];
+            end
+            assert(~isa(fun,"function_handle") || iscolumn(idx),"function handle: should use the label for a single regressor set");
+
+            for j=1:size(idx,2)
+                m = idx(1);
+                d = idx(2);
+                obj(m).Weights(d).plot = fun;
+            end
+        end
+
+        %% PLOT POSTERIOR COVARIANCE
+        function h = plot_posterior_covariance(obj,varargin)
+            h = plot_covariance(obj, 'posterior',varargin{:});
+        end
+
+        %% PLOT PRIOR COVARIANCE
+        function h = plot_prior_covariance(obj,varargin)
+            h = plot_covariance(obj, 'prior',varargin{:});
         end
 
         %% EXPORT WEIGHTS TO TABLE
@@ -3983,13 +4082,12 @@ end
 
 
 %% PLOT SINGLE WEIGHTS
-function [h_nu, cols, cm] = plot_single_weights(W, P, HP, rk, cols, cm, colmaps, Dataset)
+function [h_nu, cols, cm] = plot_single_weights(W, P, HP, rk, cols, cm, Dataset)
 if isa(W.plot, 'function_handle')
     %% custom-defined plot
     h_nu = W.plot(W);
     return;
 end
-
 
 % scales and dimension labels
 if isempty(W.scale)
@@ -4005,7 +4103,6 @@ if W.label ~= dim_label(1)
     title(W.label);
 end
 
-
 % error bar values
 U = W.PosteriorMean'; % concatenate over ranks
 if isempty(W.PosteriorStd)
@@ -4014,38 +4111,51 @@ else
     se = W.PosteriorStd';
 end
 
+if ~isempty(Dataset) % when plotting weights from different datasets
+scale = interaction_levels(scale', Dataset)';
+end
 if size(scale,2)>1
-    if size(scale,2)>2
-        warning('more than 2 dimensions for weights, ignoring extra dimensions');
-    end
-
-    [scale, U, se] = mesh_to_matrix(scale(:,1:2), U, se);
+    % try to convert to matrix representation
+    [scale, U, se] = mesh_to_matrix(scale, U, se);
+end
+if size(U,1)==1
+U = shiftdim(U,1);
+se = shiftdim(se,1);
 end
 if ~iscell(scale)
     scale = {scale};
 end
-if ~isempty(Dataset)
-    scale{end+1} = Dataset(:);
-end
+%if ~isempty(Dataset) % when plotting weights from different datasets
+%    scale{end+1} = Dataset(:);
+%end
 
-%% plotting options
+%% define plot type
 plot_opt = {};
+plot_type = 'curve'; % default plot
 
 if W.nWeight < 8 && numel(U)<20 %when we prefer plotting bar over curves
     plot_opt = {'bar'};
+    plot_type = 'bar';
 end
 
-% default color
-plot_opt{end+1} = 'Color';
-
 % select color map
-twodmap = size(scale{1},2)>1;
 nCurve = size(U,2);
-imageplot = nCurve>9;
+if size(scale{1},2)>1 % if input space is multidimensional
+    plot_type = 'map';
+elseif nCurve>9
+    plot_type = 'image';
+end
 
-if  twodmap || imageplot || nCurve>=6
+% if type is provided
+if ~isempty(W.plot) && ismember(W.plot{1},{'curve','bar','map','image'})
+    plot_type = W.plot{1};
+end
+
+%% define color
+plot_opt{end+1} = 'Color';
+if  ismember(plot_type,{'map','image'})|| nCurve>=6
     % use color map
-    plot_opt{end+1} = colmaps{cm};
+    plot_opt{end+1} = color_map(cm);
     cm = cm + 1;
 else
     % different colors for each curve
@@ -4062,22 +4172,23 @@ else
     end
     this_col = cols(iCol+(0:nCurve-1),1);
     plot_opt{end+1} = this_col;
-
 end
 
+% add user-provided options
 if ~isempty(W.plot)
     plot_opt = [plot_opt W.plot];
 end
 
 %% plot
-if twodmap
-    sc  = scale{1};
-    ColorPlot = 0;
-    if ColorPlot
-        % color plot
+sc  = scale{1};
+switch plot_type
+    case 'colorplot'
+        %% should be available option
         h_nu = colorplot(sc(:,1),sc(:,2), real(U));
+        xlabel(dim_label(1));  ylabel(dim_label(2));
 
-    else % plot all values in a grid
+    case 'map'
+        %% plot all values in a grid
 
         % get posterior from values in a grid
         xValue = linspace(min(sc(:,1)),max(sc(:,1)), 50);
@@ -4102,44 +4213,204 @@ if twodmap
         % add black dots representing data points in trained dataset
         h_nu(2) =plot(sc(:,1),sc(:,2),'k.', 'MarkerSize',2);
         axis xy; axis tight; box off;
-    end
-    xlabel(dim_label(1));  ylabel(dim_label(2));
 
-elseif imageplot
-    % image plot
-    h_nu = imagescnan(scale{1},scale{2}, U');
-    xlabel(dim_label(1));  ylabel(dim_label(2));
-    axis xy; axis tight; box off;
+        xlabel(dim_label(1));  ylabel(dim_label(2));
+
+    case 'image'
+        %% image plot
+        xx = sc;
+        if ~isnumeric(xx)
+            xx = [];
+        end
+        yy = scale{2};
+        if ~isnumeric(yy)
+            yy = [];
+        end
+        h_nu = imagescnan(xx,yy, U');
+        xlabel(dim_label(1));  ylabel(dim_label(2));
+        if isstring(sc) && length(sc)<20
+            set(gca, 'xtick',1:length(sc),'xticklabel',sc);
+        end
+        if isstring(scale{2}) && length(scale{2})<20
+            set(gca, 'ytick',1:length(scale{2}),'yticklabel',scale{2});
+        end
+        axis xy; axis tight; box off;
+
+    otherwise
+        %% curves / bar plots
+        if isscalar(sc) && ~isstring(sc) && isnan(sc)
+            scale{1} = {};
+        end
+
+        plot_opt = [{'ylabel','weights'} plot_opt]; %add default y-label
+        collapse = verLessThan('matlab', '9.9'); % collapse into single subplot when cannot use nexttile
+        [~,~,h_nu] = wu([],U,se,scale,plot_opt{:},dim_label, 'collapse',collapse);
+
+        % add horizontal line for reference value
+        if W.nWeight >= 8
+            hold on;
+            switch constraint_type(W)
+                case "mean1"
+                    y_hline = 1;
+                case "sum1"
+                    y_hline = 1/W.nWeight;
+                otherwise
+                    y_hline = 0;
+            end
+            plot(xlim,y_hline*[1 1], 'Color',.7*[1 1 1]);
+        end
+end
+drawnow;
+end
+
+%% PLOT COVARIANCE
+function h = plot_covariance(obj, type, label, varargin)
+
+%% select corresponding regressors to be plotted
+if nargin<3 || isempty(label)
+    idx = find_weights(obj);
+elseif isnumeric(label) % already providing matrix
+    assert(size(label,1)==2, 'U2 should be a matrix of 2 rows (first row: regressor index; second row: dimensionality');
+    idx = label;
 else
-    % curves / bar plots
-    if isscalar(scale{1}) && isnan(scale{1})
-        scale{1} = {};
+    idx = find_weights(obj, label);
+end
+
+%% define number of subplots and colours
+nSubplotsReg = zeros(1,size(idx,2));
+for j=1:size(idx,2) % for each set of regressor
+    m = idx(1,j);
+    isFW = isFixedWeightSet(obj(m));
+    d = idx(2,j);
+    do_plot = ~isFW(d); % do not plot regressors with constant
+    nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
+end
+idx(:,~nSubplotsReg) = []; % remove non_plotted weights
+nSubplots = sum(nSubplotsReg); % number of subplots
+
+% define a grid of subplots in current figure
+for i=1:nSubplots
+    h.Axes(i) = subplot2(nSubplots,i);
+end
+
+i = 1; % subplot counter
+cm = 1; % colormap counter
+h.Objects = {};
+
+%% plot
+for j=1:size(idx,2) % loop between subpots
+    axes(h.Axes(i));
+    m = idx(1,j);
+    d = idx(2,j);
+
+    W = obj(m).Weights(d); % set of weights
+    P = obj(m).Prior(d);
+
+    if W.nWeight>1
+        if strcmp(type,'posterior')
+            C = W.PosteriorCov;
+        else
+            C = P.PriorCovariance;
+        end
+        sc = W.scale;
+
+        if isrow(sc) && isnumeric(sc)
+            xx = sc;
+        else
+            xx = [];
+        end
+        imagesc(xx,xx,C);
+        if size(sc,2)<12
+            while ~isrow(sc) % combine dimensions if necessary
+                sc(end-1,:) = interaction_levels(sc(end-1,:), sc(end,:));
+                sc(end,:) = [];
+            end
+            xticks(1:length(sc));
+            xticklabels(sc);
+            yticks(1:length(sc));
+            yticklabels(sc);
+        end
+        h.Objects{i} = colormap(h.Axes(i), color_map(cm));
+        cm = cm+1;
+    else
+        bar(W.PosteriorCov);
     end
+    title(W.label);
 
-    % cufve/bar plot with errors
-    [~,~,h_nu] = wu([],U,se,scale,plot_opt{:},dim_label, 'collapse',true);
-    ylabel('weights');
+    i = i +1;
 end
 
-% add horizontal line for reference value
-if ~twodmap && ~imageplot && W.nWeight >= 8
-    hold on;
-    switch constraint_type(W)
-        case "mean1"
-            y_hline = 1;
-        case "sum1"
-            y_hline = 1/W.nWeight;
-        otherwise
-            y_hline = 0;
-    end
-    plot(xlim,y_hline*[1 1], 'Color',.7*[1 1 1]);
 end
 
+%% COLORMAPS
+function cmap = color_map(c)
+% get color map from color map index
 
+% all matlab colormaps
+colmaps = {'jet','spring','summer','winter','automn','hot','parula','gray','bone','copper','pink','hsv',...
+    'hot','lines','colorcube','prism','sky','abyss','flag'};
+
+c = mod(c-1, length(colmaps))+1;
+cmap = colmaps{c};
 end
+
+% %% RECONSTRUCT MATRIX FROM MESH
+% function [S, U, se] = mesh_to_matrix(S, U, se, cutoff)
+% % [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
+% % to transform mesh data to matrix form (if the inoccupancy ratio is
+% % smaller than cutoff)
+% 
+% if nargin<4
+%     cutoff = 3;
+% end
+% 
+% % reconstruct weights as matrix
+% S1 = S(:,1);
+% S2 = S(:,2);
+% x_unq = unique(S(:,1));
+% if isstring(x_unq) && all(~isnan(double(x_unq)) | strcmpi(x_unq,'nan'))
+%     % in case string of numeric values, convert to numeric values to have
+%     % numeric sorting
+%     S1 = double(S1);
+%     x_unq = unique(S1);
+% end
+% y_unq = unique(S2);
+% nX = length(x_unq);
+% nY = length(y_unq);
+% 
+% % compute ratio of total mesh points by provided points
+% ratio = nX*nY/size(S,1);
+% 
+% % if ratio is above threshold, keep data (i.e. they don't really form a
+% % mesh)
+% if ratio>cutoff
+%     return;
+% end
+% 
+% if ~isvector(U)
+%     nDataset = size(U,2);
+% else
+%     nDataset = 1;
+% end
+% 
+% U2 = nan(nX,nY,nDataset);
+% se2 = nan(nX,nY,nDataset);
+% for iX=1:nX
+%     for iY=1:nY
+%         bool = equal_numeric_or_cell(S1,x_unq(iX)) & equal_numeric_or_cell(S2,y_unq(iY));
+%         if any(bool)
+%             U2(iX,iY,:) = U(find(bool,1),:);
+%             se2(iX,iY,:) = se(find(bool,1),:);
+%         end
+%     end
+% end
+% U = U2;
+% se = se2;
+% S = {x_unq y_unq};
+% end
 
 %% RECONSTRUCT MATRIX FROM MESH
-function [S, U, se] = mesh_to_matrix(S, U, se, cutoff)
+function [Uniq, U, se] = mesh_to_matrix(S, U, se, cutoff)
 % [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
 % to transform mesh data to matrix form (if the inoccupancy ratio is
 % smaller than cutoff)
@@ -4149,48 +4420,47 @@ if nargin<4
 end
 
 % reconstruct weights as matrix
-S1 = S(:,1);
-S2 = S(:,2);
-x_unq = unique(S(:,1));
-if isstring(x_unq) && all(~isnan(double(x_unq)) | strcmpi(x_unq,'nan'))
+Scell = num2cell(S,1);
+Uniq = cellfun(@unique, Scell,'UniformOutput',false);
+if isstring(Uniq{1}) && all(~isnan(double(Uniq{1})) | strcmpi(Uniq{1},'nan'))
     % in case string of numeric values, convert to numeric values to have
     % numeric sorting
-    S1 = double(S1);
-    x_unq = unique(S1);
+    Scell{1} = double(Scell{1});
+    Uniq{1} = unique(Scell{1});
 end
-y_unq = unique(S2);
-nX = length(x_unq);
-nY = length(y_unq);
+nUnique = cellfun(@length, Uniq); % number of values for each dimension
+nUnique(end+1:2) = 1; % when only one-dim
+nCombi = prod(nUnique); % number of combinations
 
 % compute ratio of total mesh points by provided points
-ratio = nX*nY/size(S,1);
+ratio = nCombi/size(S,1);
 
 % if ratio is above threshold, keep data (i.e. they don't really form a
 % mesh)
 if ratio>cutoff
+    Uniq = S;
     return;
 end
 
-if ~isvector(U)
-    nDataset = size(U,2);
-else
-    nDataset = 1;
-end
+U2 = nan(nUnique);
+se2 = nan(nUnique);
+idx = cell(1,length(nUnique));
+for i=1:nCombi
+    [idx{:}] = ind2sub(nUnique,i); % value in each dimension
 
-U2 = nan(nX,nY,nDataset);
-se2 = nan(nX,nY,nDataset);
-for iX=1:nX
-    for iY=1:nY
-        bool = equal_numeric_or_cell(S1,x_unq(iX)) & equal_numeric_or_cell(S2,y_unq(iY));
-        if any(bool)
-            U2(iX,iY,:) = U(find(bool,1),:);
-            se2(iX,iY,:) = se(find(bool,1),:);
-        end
+    % select coordinates that match in all dimensions
+    bool = true;
+    for d=1:length(Scell)
+        this_val = Uniq{d}(idx{d});
+        bool = bool & equal_numeric_or_cell(Scell{d},this_val);
     end
+        if any(bool)
+            U2(i) = U(find(bool,1));
+            se2(i) = se(find(bool,1));
+        end
 end
-U = U2;
-se = se2;
-S = {x_unq y_unq};
+U = squeeze(U2);
+se = squeeze(se2);
 end
 
 %% compare cell or numeric arrays
@@ -4499,7 +4769,6 @@ else
     index_weight = W.scale(end,:);
     W.scale(end,:) = [];
     if ~iscell(P.CovFun)
-
         P.CovFun = repmat({P.CovFun},1,nSet);
     end
 end
@@ -4551,7 +4820,7 @@ gg = blkdiag3(grad{:});
 
 if nargout>1
     % replicate covariance matrix if needed
-    [Sigma{s}, gg]= replicate_covariance(nRep, SS,gg);
+    [Sigma, gg]= replicate_covariance(nRep, SS,gg);
 
     % project onto free basis (if constraint)
     [Sigma, gg] = covariance_free_basis(Sigma, constraint_structure(W),gg);
@@ -4568,10 +4837,10 @@ if nargout>1
 
         try
             MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
-            SigmaInvGrad = linsolve(Sigma{s},  gg(:,:,l),MatOptions);
-            grad(:,:,l) = - linsolve(Sigma{s}, SigmaInvGrad,MatOptions )';
+            SigmaInvGrad = linsolve(Sigma,  gg(:,:,l),MatOptions);
+            grad(:,:,l) = - linsolve(Sigma, SigmaInvGrad,MatOptions )';
         catch % if not definite positive- shouldn't happen if HPs have nice values
-            grad(:,:,l) = - (Sigma{s} \ gg(:,:,l)) / Sigma{s};% gradient of precision matrix
+            grad(:,:,l) = - (Sigma \ gg(:,:,l)) / Sigma;% gradient of precision matrix
         end
     end
 
@@ -4626,7 +4895,7 @@ function W = empty_weight_structure(nD, DataSize, scale, color)
 W = struct('type','','label', '', 'dimensions',"",'nWeight',0, ...
     'PosteriorMean',[], 'PosteriorStd',[],'V',[],...
     'PosteriorCov', [], 'T',[],'p',[],...
-    'scale',[],'constraint',"free",'plot',[],'basis',[],'invHinvK',[],'U_allstarting',[]);
+    'scale',[],'constraint',"",'plot',[],'basis',[],'invHinvK',[],'U_allstarting',[]);
 % other possible fields: U_CV
 
 % make it size nD
@@ -4897,8 +5166,9 @@ for i=1:numel(W)
     C = W(i).constraint;
     if ~isempty(W(i).basis) && ~W(i).basis.projected
         nWeight = W(i).basis.nWeight;
+        assert(~isnan(nWeight), 'number of weights not determined');
     else
-    nWeight = W(i).nWeight;
+        nWeight = W(i).nWeight;
     end
     if isstruct(C) % already a structure
         assert(all(isfield(C,{'V','u'})), 'incorrect constraint structure');
@@ -4992,8 +5262,13 @@ end
 function str = constraint_type(W)
 str = strings(size(W));
 for i=1:numel(W)
-    S = constraint_structure(W(i));
-    str(i) = string(S.type);
+    ct = W(i).constraint;
+    if isstring(ct) || ischar(ct)
+        str(i) = string(ct);
+    else
+        % S = constraint_structure(W(i));
+        str(i) = ct.type;
+    end
 end
 end
 

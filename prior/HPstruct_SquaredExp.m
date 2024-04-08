@@ -1,5 +1,6 @@
 function HH = HPstruct_SquaredExp(HH, scale, HP, type, period, single_tau, basis, binning)
-% creates hyperparameter structure for squared exponential prior
+% creates hyperparameter structure for squared exponential kernel (and
+% periodic kernel as well)
 
 % data point resolution (mean difference between two points)
 dt = zeros(1,size(scale,1));
@@ -11,9 +12,8 @@ log_dt = log(dt);
 % total span in each dimension
 span = max(scale,[],2)' - min(scale,[],2)';
 
-
 if strcmpi(type,'periodic')
-    tau = period/4; % initial time scale: period/4
+    tau = period/6; % initial time scale: period/6 (i.e. pi/3 for 2pi)
     assert(isrow(scale),'periodic functions only defined over one dimension scales');
 else
     tau =  sqrt(dt.*span); % geometric mean between the two
@@ -53,9 +53,8 @@ HH.fit = true(1,nScale+1);
 if strcmp(basis, 'fourier')
     HH.LB(1:nScale) = log(2*tau/length(scale)); % lower bound on log-scale: if using spatial trick, avoid scale smaller than resolution
     HH.LB(nScale+1) = max(-max_log_var, min(log_dt)-3); % to avoid exp(HP) = 0
-    HH.UB = [log(span)+2 max_log_var];  % scale not much larger than overall span to avoid exp(HP) = Inf
+    HH.UB = [log(span)*log(2) max_log_var];  % scale not much larger than overall span to avoid exp(HP) = Inf
     HH.type = repmat("basis_cov",1,nScale+1);
-
 else
     if ~strcmpi(type,'periodic')
         HH.UB(1:nScale) = min(log(101*tau),log(span)+2); %log(5*tau); % if not using spatial trick, avoid too large scale that renders covariance matrix singular
@@ -64,7 +63,7 @@ else
     end
     HH.UB(nScale+1) = max_log_var;
     if ~isempty(binning)
-        HH.LB = [log(binning)-2 -max_log_var];
+        HH.LB = [log(binning) -max_log_var];
     else
         HH.LB = [max(-max_log_var,log_dt-2) -max_log_var];  % to avoid exp(HP) = Inf
     end

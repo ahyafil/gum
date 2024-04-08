@@ -1299,7 +1299,7 @@ end
                     end
                 end
 
-            elseif (~isempty(labelz{1}) && ~isdatetime(X) && ~isequal(num2strcell(X), labelz{1}(:)')) || nPar < 10 %length(labelz{2})<10,
+            elseif ~isempty(labelz{1}) && ~isdatetime(X) && ~isequal(num2strcell(X), labelz{1}(:)') && nPar < 10
                 %% labels as ticklabels
 
                 [xtickval,xorder] = unique(X);

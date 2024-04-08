@@ -610,7 +610,7 @@ classdef sparsearray
 
                     s1 = s(1);
 
-                    if ~issparse(obj.value) || isscalar(s1.subs) % syntax: obj(ind1:ind3) or obj(:)
+                    if (~issparse(obj.value)&&~any(obj.onehotencoding)) || isscalar(s1.subs) % syntax: obj(ind1:ind3) or obj(:)
                         if any(onehotencoding(obj))
                             obj= fullcoding(obj);
                         end
@@ -644,43 +644,51 @@ classdef sparsearray
 
                             % get correspinding values for one-hot encoding dimensions
                             for d=find(obj.onehotencoding)
-                                if size(obj.subs{d},1)>1
-                                    obj.subs{d} = subsref(obj.subs{d}, s1);
+                                if size(obj.sub{d},1)>1
+                                    obj.sub{d} = subsref(obj.sub{d}, s1);
                                 end
                             end
 
                             % now deal with value array
-                            b = reshape(obj.value,S(1),prod(S(2:D))); % reshape as matrix grouping all dimensions until first as rows
+                            S(obj.onehotencoding) = 1;
+                            obj.value = reshape(obj.value,S(1),prod(S(2:D))); % reshape as matrix grouping all dimensions except first as columns
 
-                            % select corresponding columns
+                            % select corresponding rows
                             s1.subs(3:D) = [];
-                            b = subsref(b, s1);
+                            obj.value = subsref(obj.value,s1);
+
+                            % b = subsref(b, s1);
+                            obj.siz(1) = size(obj.value,1); %  update size along first dim
 
                             % size of new array
-                            nsub = S;
-                            nsub(1) = size(b,1); % number of columns in b
-
+                            % nsub = S;
+                            % nsub(1) = size(b,1); % number of columns in b
+                            b = obj;
                         elseif length(s1.subs)>= D && all(AllIndices(1:D-1))
                             %syntax: obj(:,:,:,v), only the last dim is indexed
                             S = obj.siz;
 
                             % get correspinding values for one-hot encoding dimensions
                             for d=find(obj.onehotencoding)
-                                if size(obj.subs{d},D)>1
-                                    obj.subs{d} = subsref(obj.subs{d}, s1);
+                                if size(obj.sub{d},D)>1
+                                    obj.sub{d} = subsref(obj.sub{d}, s1);
                                 end
                             end
 
                             % now deal with value array
-                            b = reshape(obj.value,prod(S(1:D-1)),S(D)); % reshape as matrix grouping all dimensions until first as rows
+                            S(obj.onehotencoding) = 1;
+                            obj.value = reshape(obj.value,prod(S(1:D-1)),S(D)); % reshape as matrix grouping all dimensions except last as rows
 
                             % select corresponding columns
                             s1.subs(1:D-2) = [];
-                            b = subsref(b, s1);
+                            obj.value = subsref(obj.value, s1);
 
+                            obj.siz(D) = size(obj.value,2); %  update size along first dim
+
+                            b = obj;
                             % size of new array
-                            nsub = S;
-                            nsub(D) = size(b,2); % number of columns in b
+                            % nsub = S;
+                            % nsub(D) = size(b,2); % number of columns in b
                         else
 
                             % get linear indices from sub-indices (this is very
@@ -694,12 +702,24 @@ classdef sparsearray
 
                             % extract value
                             b = obj.value(ind);
+
+                            if length(nsub)>1
+                                b = sparsearray(b);
+                            end
+                            b = reshape(b,nsub);
+
+                            if length(nsub)>1
+                                b = sparsearray(b);
+                            end
+
+                             b = reshape(b,nsub);
+
                         end
 
-                        if length(nsub)>1
-                            b = sparsearray(b);
-                        end
-                        b = reshape(b,nsub);
+                        %                         if length(nsub)>1
+                        %                             b = sparsearray(b);
+                        %                         end
+                      %  b = reshape(b,nsub);
 
                     end
 
@@ -765,6 +785,10 @@ classdef sparsearray
                         V = varargin{1};
 
                         if isempty(V) % remove elements from array
+
+                            % !! should improve computational cost for
+                            % calls X(:,:,idx,:) = []; when corresponding
+                            % dim is one-hot-encoded
 
                             nonColon = find(obj.siz ~= nsub);
                             if length(nonColon)>1
@@ -1226,7 +1250,7 @@ function  OHE = check_one_hot_encoding(siz, OHE)
 
 D = length(siz); % array dimension
 nOneHot = length(OHE);
-if nOneHot>D 
+if nOneHot>D
     error('sparse tensor does not have so many dimensions');
 elseif nOneHot<D && ~all(siz(nOneHot+1:end)==1)
     error('provide indices for all dimensions (or just one to get column output)');

@@ -143,7 +143,12 @@ classdef gum
     % - 'plot_design_matrix': plot design matrix
     % - 'plot_posterior_covariance': plot posterior covariance for each
     % regressor
+    % - 'plot_prior_covariance': plot prior covariance for each
+    % regressor
     % - 'plot_weights': plot estimated weights and functions
+    % - 'define_plot' to use custom plotting function
+    % - 'disable_plot' to disable plotting a certain regressor set
+    % - 'enable_plot' to enable plotting
     % - 'plot_data_vs_predictor': plots individual observed data points vs
     % predictor
     % - 'plot_hyperparameters': plot hyperparameter values
@@ -158,20 +163,30 @@ classdef gum
     % - added constraint "zero0"
     % - added 'ref' field for categorical regressor
     % - changed normalization for exponential basis functions
+    % - improved computational cost of X(subset,:) for sparsearray
+    % - added AIC/BIC for HPs
+
     % TODO
     % - wu: automatic permute of dimensions
+    % - when splitting models, remove unused levels
+    % - splitting over various variables, concatenating/averaging over just
+    % one
     % - constraints: add custom field, i.e. "mean3"
-    % - basis functions: change prior to ARD? allow for chnge (L2/ARD/none)
+    % - basis functions:  allow for change (L2/ARD/none) - done?
     % - plot_variance_vs_predictor (for normal and Poisson/lognorm)
+    % - crossvalidation: set cv weights as initial weights, do not infer on
+    % full dataset at every iteration
     % - test if residual is linear in one predictor (normal, expand for
     % poisson)
     % - improve indexing in sparsearray
     % - Matern prior
+    % - relevance vector machine (alternative to Squared Exp)
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
     % - link functions as in glmfit
     % - test rank again
+    % - add full cov prior (e.g. for GLMM w full cov matrix)
     % - prior mean function (mixed effect; fixed effect: mean with 0 covar)
     % - use fitglme/fitlme if glmm model
     % - reset: weights for gum, clearing all scores and predictions
@@ -224,8 +239,6 @@ classdef gum
             end
             assert(isa(M,'regressor'),'first argument should either be a table, a numeric data or a regressor object');
             nMod = length(M); % number of modules
-
-            %  n = prod(n); % number of observations
 
             % model label
             if isfield(param,'label')
@@ -385,6 +398,7 @@ classdef gum
                 end
             end
 
+            M = M.check_unique_weight_labels(); % check labels of regressors
             obj.param = param;
             obj.regressor = M;
 
@@ -430,7 +444,7 @@ classdef gum
 
             %% split model for population analysis
             if isfield(param, 'split')
-                obj = split(obj, param.split);
+                obj = split(obj, param.split, param.SplittingVariable);
             end
         end
 
@@ -584,11 +598,17 @@ classdef gum
 
 
         %% SELECT SUBSET OF OBSERVATIONS FROM MODEL
-        function obj = extract_observations(obj,subset)
+        function obj = extract_observations(obj,subset, drop_unused)
             % M = extract_observations(M, subset) generates a model with
             % only observations provided by vector subset. subset is either
             % a vector of indices or a boolean vector indicating
             % observations to be included.
+            %
+            % M = extract_observations(M, subset, drop_unused)
+            % if drop_unused is set to True, drops regressor values if they do not appear in subset
+            if nargin<3
+                drop_unused = false;
+            end
 
             obj.T = obj.T(subset);
             n_obs = length(obj.T);
@@ -601,51 +621,71 @@ classdef gum
                 obj.score.nObservations = n_obs;
             end
 
+            % select subset in regressor data
+            obj.regressor= obj.regressor.extract_observations(subset, drop_unused);
 
-            for m=1:length(obj.regressor) % for each module
-                obj.regressor(m) = extract_observations(obj.regressor(m), subset);
-                %  obj.regressor(m).Data =   extract_observations(obj.regressor(m).Data,subset); % extract for this module
-                %  obj.regressor(m).nObs = n_obs;
-            end
-
-            if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'rho') && ~isempty(obj.Predictions.rho)
-                obj.Predictions.rho = obj.Predictions.rho(subset);
-            end
-            if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'Expected') && ~isempty(obj.Predictions.Expected)
-                obj.Predictions.Expected = obj.Predictions.Expected(subset);
-            end
-            if ~isempty(obj.Predictions) && isfield(obj.Predictions, 'sample') && ~isempty(obj.Predictions.rho)
-                obj.Predictions.sample = obj.Predictions.rho(sample);
+            if ~isempty(obj.Predictions)
+                if isfield(obj.Predictions, 'rho') && ~isempty(obj.Predictions.rho)
+                    obj.Predictions.rho = obj.Predictions.rho(subset);
+                end
+                if isfield(obj.Predictions, 'Expected') && ~isempty(obj.Predictions.Expected)
+                    obj.Predictions.Expected = obj.Predictions.Expected(subset);
+                end
+                if isfield(obj.Predictions, 'sample') && ~isempty(obj.Predictions.rho)
+                    obj.Predictions.sample = obj.Predictions.rho(sample);
+                end
             end
 
             % update number of parameters and degrees of freedom
             obj = compute_n_parameters_df(obj);
-
         end
 
         %% SPLIT OBSERVATIONS IN MODEL
-        function  objS = split(obj, S)
+        function  objS = split(obj, S, label)
             % M = split(M,S) splits model M into array of models M with one
-            % model for each value of S. S should be a vector of the same
-            % length as the number of observations in M.
+            % model for each value of S. S should be a row vector of the same
+            % length as the number of observations in M, or a matrix with
+            % one row for each splitting variable.
+            %
+            % split(M,S, label) to provide label for splitting variables
 
-            if ~isvector(S) || length(S)~=obj.nObs
+            assert(isscalar(obj), 'splits works only on single models');
+
+            if size(S,1)~=obj.nObs
                 error('splitting variable must be a vector of the same length as number of observation in model');
             end
 
-            V = unique(S);
+            if nargin>=3
+                assert(length(label)==size(S,2), 'number of elements in label must match the number of columns in S');
+                label = string(label);
+            else
+                label = "SplittingVariable"+(1:size(S,2));
+            end
+            [V, ~, idV] = unique(S,'rows'); % all unique values (or combinations of values if various splitting vars)
+            nV = size(V,1); % number of unique values
+
+            single_splitting_var = isrow(S);
+            if single_splitting_var % adding dummy splitting variable
+                V(:,end+1) = 1;
+            end
 
             % preallocate as series of regressors
-            objS = repmat(gum(),1, length(V));
+            objS = repmat(gum(),nV, 1);
 
-            for v=1:length(V)
+            for v=1:nV
                 % subset of observations
-                subset = find(S == V(v));
+                subset = find(idV==v);
 
-                objS(v) = extract_observations(obj,subset);
-                objS(v).param.split = (S==V(v)); % know the index of selected datapoints is useful for stratified cross-validation
+                objS(v) = obj.extract_observations(subset, true);
+                objS(v).param.split = idV; % know the index of selected datapoints is useful for stratified cross-validation
 
-                objS(v).score.Dataset = string(V(v)); % give label to dataset
+                this_V = V(v,:);
+                if single_splitting_var
+                    this_V(end) = [];
+                end
+                objS(v).score.Dataset = string(this_V); % give label to dataset
+
+                objS(v).score.SplittingVariable = label;
             end
 
         end
@@ -747,7 +787,6 @@ classdef gum
                 verbose = obj.param.display;
             end
 
-
             %%  check fitting method
             if isfield(param, 'HPfit') % if specified as parameter
                 HPfit = param.HPfit;
@@ -791,6 +830,16 @@ classdef gum
             HP_LB = [HPall.LB]; % HP lower bounds
             HP_UB = [HPall.UB]; % HP upper bounds
             HP_fittable = logical([HPall.fit]);  % which HP are fitted
+            nHP = sum(HP_fittable); % number of fitted hyperparameters
+
+            if nHP==0
+                % if requested to fit but there are no hyperparameter in
+                % the model...
+                fprintf('required optimization of hyperparameters but the model has no hyperparameter, inferring instead!\n' );
+                obj = obj.infer();
+                return;
+            end
+
             if strcmpi(HPfit,'em')
                 W = [M.Weights];
                 basis = [W.basis];
@@ -801,15 +850,7 @@ classdef gum
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
-            [HPidx, nHP] = get_hyperparameters_indices(M);
-
-            if sum(cellfun(@(x) sum(x,'all'),nHP))==0
-                % if requested to fit but there are no hyperparameter in
-                % the model...
-                fprintf('required optimization of hyperparameters but the model has no hyperparameter, inferring instead!\n' );
-                obj = obj.infer();
-                return;
-            end
+            HPidx = get_hyperparameters_indices(M);
 
             % select hyperparmaters to be fitted
             HPini = HPini(HP_fittable);
@@ -821,6 +862,8 @@ classdef gum
                 maxiter = param.maxiter;
                 param.maxiter_HP = param.maxiter;
                 param = rmfield(param, 'maxiter');
+            elseif isfield(param,'maxiter_HP')
+                maxiter = param.maxiter_HP;
             else
                 param.maxiter_HP = maxiter;
             end
@@ -870,7 +913,12 @@ classdef gum
                     obj =  cv_score(obj, HP, HPidx, 1);
             end
 
+            % score (penalized marginal evidence)
             obj.score.isFitted = 1;
+            obj.score.BIC = nHP*log(obj.score.nObservations) -2*obj.score.LogEvidence; % Bayes Information Criterion
+            obj.score.AIC = 2*nHP - 2*obj.score.LogEvidence; % Akaike Information Criterior
+            obj.score.AICc = obj.score.AIC + 2*nHP*(nHP+1)/(obj.score.nObservations -nHP-1); % AIC corrected for sample size
+
         end
 
         %%% EM ALGORITHM
@@ -1135,34 +1183,14 @@ classdef gum
             % - 'testscore_all': a vector of LLH over test set of observations normalized by number of
             % observations, for each permutation
             % - 'LogEvidence': estimated log-evidence for the model (to improve...)
-            % - 'BIC': Bayesian Information Criterion
-            % - 'AIC': Akaike Information Criterion
-            % - 'AICc': corrected Akaike Information Criterion
+            % - 'BIC_infer': Bayesian Information Criterion
+            % - 'AIC_infer': Akaike Information Criterion
+            % - 'AICc_infer': corrected Akaike Information Criterion
 
+            %% parse parameters
             if nargin==1
                 param = struct();
             end
-
-            if length(obj)>1
-                %% fitting various models at a time
-                for i=1:numel(obj)
-                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
-                        fprintf('Inferring weights for model %d/%d (%s)\n', i, numel(obj), obj(i).label);
-                    end
-                    obj(i) = obj(i).infer(param);
-                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
-                        fprintf('\n');
-                    end
-                end
-                return;
-            end
-
-            if isempty(obj.regressor)
-                error('the model has no regressor');
-            end
-            tic;
-
-            %% parse parameters
             if ~isfield(param, 'maxiter')
                 param.maxiter = 100; % maximum number of iterations
             end
@@ -1182,6 +1210,26 @@ classdef gum
                 assert(ismember(param.verbose, {'on','off','little','full'}), 'incorrect value for field ''verbose'': possible values are ''on'', ''off'',''full'' and ''little''');
             end
             verbose =strcmp(param.verbose, 'on') || strcmp(param.verbose, 'full');
+
+            %% fitting various models at a time
+            if length(obj)>1
+                for i=1:numel(obj)
+                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
+                        fprintf('Inferring weights for model %d/%d (%s)\n', i, numel(obj), obj(i).label);
+                    end
+                    obj(i) = obj(i).infer(param);
+                    if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
+                        fprintf('\n');
+                    end
+                end
+                return;
+            end
+
+            %% final checks
+            if isempty(obj.regressor)
+                error('the model has no regressor');
+            end
+            tic;
 
             obj.param = param;
 
@@ -1237,9 +1285,9 @@ classdef gum
             if isfield(obj.param, 'testset') && ~isempty(obj.param.testset)
                 testset = obj.param.testset;
 
-                obj_test = extract_observations(obj,testset); % extract test set
-                [obj_test,testscore] = LogLikelihood(obj_test); % evaluate LLH
-                accuracy_test = Accuracy(obj_test); % and accuracy
+                obj_test = obj.extract_observations(testset); % extract test set
+                [obj_test,testscore] = obj_test.LogLikelihood(); % evaluate LLH
+                accuracy_test = obj_test.Accuracy(); % and accuracy
 
                 if isempty(obj.ObservationWeight)
                     n_Test = length(testset);
@@ -1272,6 +1320,7 @@ classdef gum
                     PP = projection_matrix_multiple(M,'all'); % global transformation matrix from full parameter set to free basis
                 else
                     PP = []; % just for parfor
+                    grad_hp = zeros(0,nSet);
                 end
 
                 warning('off','MATLAB:nearlySingularMatrix');
@@ -1282,96 +1331,8 @@ classdef gum
                     if verbose
                         fprintf('Cross-validation set %d/%d', p, nSet);
                     end
-
-                    trainset = CV.training(p);
-                    validationset = CV.test(p);
-                    if iscell(trainset) % CV structure
-                        trainset = trainset{1};
-                        validationset = validationset{1};
-                    end
-
-                    %fit on training set
-                    %obj_train = IRLS(extract_observations(obj,trainset));
-                    obj_train = obj.extract_observations(trainset).IRLS();
-
-                    exitflag_CV(p) = obj_train.score.exitflag;
-
-                    allU = concatenate_weights(obj_train);
-                    U_CV(:,p) = allU;
-
-                    score_train = obj_train.score;
-                    s = score_train.scaling; % dispersion parameter
-
-                    %compute score on testing set (mean log-likelihood per observation)
-                    obj_test = obj.extract_observations(validationset); % model with test set
-                    obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
-                    obj_test.Predictions.rho = [];
-                    obj_test.score.scaling = s; % dispersion parameter estimated in training set
-
-                    [obj_test,CVLL(p),grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
-                    accuracy(p) = Accuracy(obj_test); % and accuracy
-
-                    nValidation = obj_test.score.nObservations; % number of observations in test set
-
-                    validationscore(p) = CVLL(p)/ nValidation; % normalize by number of observations
-
-                    % compute gradient of score over hyperparameters
-                    if do_grad_hyperparam
-
-                        % add contribution of free dispersion parameter to
-                        % gradient of CVLL w.r.t weights
-                        free_dispersion = ismember(obj.obs, {'normal','neg-binomial'});
-
-                        PPP = PP;
-
-                        dY_drho = inverse_link_function(obj_train,obj_train.Predictions.rho, 1); % derivative of inverse link
-
-                        if free_dispersion
-                            PPP(end+1,end+1) = 1;
-
-                            % add derivative of test data LLH w.r.t.
-                            % dispersion parameter
-                            obj_test = obj_test.compute_r_squared;
-                            grad_validationscore(end+1) = -nValidation/2/s + obj_test.score.SSE/2/s^2;
-
-                            %  log-joint derived w.r.t to dispersion param and basis function hyperparameters
-                            gradgrad_dispersion = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, dY_drho.*prediction_error(obj_train), 1)/s^2;
-
-                        end
-
-                        grad_validationscore = grad_validationscore / nValidation; % gradient w.r.t each weight
-
-                        % posterior covariance computed from train data (include dispersion parameter if free)
-                        PCov = PosteriorCov(obj_train, free_dispersion);
-
-                        % compute LLH derived w.r.t to U (free basis) and basis fun hyperparameters
-                        err_train = prediction_error(obj_train); % training model prediction error
-                        gradgrad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, err_train,0, dY_drho)/s;
-
-                        this_gradhp = zeros(1,size(CovJacob,3));
-                        for q=1:size(CovJacob,3) % for each hyperparameter
-                            %   gradgrad = PP*CovJacob(:,:,q)'*allU'; % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
-                            gradgrad = CovJacob(:,:,q)'*(PP*allU'); % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
-                            % gradgrad = gradgrad - PP*gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
-                            gradgrad = gradgrad - gradgrad_basisfun_hp(:,q);  % add contribution of basis function HP (finite differences say sth different)
-
-
-                            if free_dispersion % add log-joint derived w.r.t to dispersion param and hyperparameters (null for cov HPs)
-                                gradgrad(end+1,:) = gradgrad_dispersion(:,q);
-                            end
-
-                            gradU = - PPP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
-
-                            this_gradhp(q) = grad_validationscore * gradU; % derivate of score w.r.t hyperparameter
-                        end
-
-                        % add direct contribution of basis function
-                        % hyperparameters
-                        this_grad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_test.regressor, prediction_error(obj_test), 1)/s;
-                        this_gradhp = this_gradhp + this_grad_basisfun_hp/ nValidation;
-
-                        grad_hp(:,p) = this_gradhp;
-                    end
+                    [exitflag_CV(p), U_CV(:,p), CVLL(p), accuracy(p), validationscore(p), grad_hp(:,p)] = ...
+                        infer_trainset(obj, CV, p, do_grad_hyperparam, PP, CovJacob);
 
                     if verbose
                         fprintf('done\n');
@@ -1416,11 +1377,6 @@ classdef gum
 
                 % explained variance
                 nWeightedObs = obj.score.nObservation;
-                % if isempty(obj.ObservationWeight)
-                %     nWeightedObs = obj.nObs;
-                % else
-                %     nWeightedObs = sum(obj.ObservationWeight);
-                % end
                 Sfit.validationscore = validationscore/ nWeightedObs; % normalize by number of observations
                 grad_validationscore = grad_validationscore / nWeightedObs; % gradient w.r.t each weight
 
@@ -1466,7 +1422,6 @@ classdef gum
             all_T = (allU-allPriorMean) ./ all_se;
 
             % p-value for significance of each coefficient
-            %all_p = 1-chi2cdf(all_T.^2,1);
             all_p = 2*normcdf(-abs(all_T));
 
             % distribute values of se, T, p and V to different regressors
@@ -1475,44 +1430,6 @@ classdef gum
             M = M.set_weights(all_p,[],'p');
             M = M.set_posterior_covariance(Sfit.covb);
             M = M.set_posterior_covariance(invHinvK,'invHinvK');
-
-            %             midx = 0;
-            %             mfidx = 0;
-            %             for m=1:obj.nMod
-            %                 rr = rank(m);
-            %
-            %                 for d=1:M(m).nDim
-            %                     W = M(m).Weights(d);
-            %                     nW = W.nWeight;
-            %                     nFW = M(m).nFreeParameters(d);
-            %                   %  W.PosteriorStd = zeros(M(m).rank, nW);
-            %                   %  W.T = zeros(M(m).rank,nW);
-            %                   %  W.p = zeros(M(m).rank, nW);
-            %                     W.PosteriorCov =  zeros(nW, nW, M(m).rank);
-            %                     if any(strcmp(W.type, {'continuous','periodic'}))
-            %                         W.invHinvK =  zeros(nFW, nFW, M(m).rank);
-            %                     end
-            %                     for r=1:M(m).rank
-            %                         idx = (1:nW) + (r-1)*nW + rr*sum([M(m).Weights(1:d-1).nWeight]) + midx; % index of regressors in design matrix
-            %                       %  W.PosteriorStd(r,:) = all_se(idx);
-            %                       %  W.T(r,:) = all_T(idx);
-            %                       %  W.p(r,:) = all_p(idx);
-            %                         W.PosteriorCov(:,:,r) = Sfit.covb(idx,idx);
-            %                         if any(strcmp(W.type, {'continuous','periodic'}))
-            %                                                     fidx = (1:nFW) + (r-1)*nFW + rr*sum([M(m).nFreeParameters(1:d-1)]) + mfidx; % index of regressors in design matrix
-            %
-            %                             W.invHinvK(:,:,r) = invHinvK(fidx,fidx);
-            %                         end
-            %                     end
-            %                     M(m).Weights(d) = W;
-            %                 end
-            %
-            %                 midx = midx + M(m).nTotalParameters; % jump index by number of components in module
-            %                                 mfidx = mfidx + M(m).nTotalFreeParameters; % jump index by number of components in module
-            %
-            %              %   midx = midx + sum([M(m).Weights.nWeight]) * rr; % jump index by number of components in module
-            %
-            %             end
 
             Sfit.exitflag = Sfit.exitflag;
             Sfit.exitflag_allstarting = Sfit.exitflag_allstarting;
@@ -1559,9 +1476,9 @@ classdef gum
                 end
             end
 
-            Sfit.BIC = nFreePar*log(obj.score.nObservations) -2*Sfit.LogLikelihood; % Bayes Information Criterion
-            Sfit.AIC = 2*nFreePar - 2*Sfit.LogLikelihood; % Akaike Information Criterior
-            Sfit.AICc = Sfit.AIC + 2*nFreePar*(nFreePar+1)/(obj.score.nObservations -nFreePar-1); % AIC corrected for sample size
+            Sfit.BIC_infer = nFreePar*log(obj.score.nObservations) -2*Sfit.LogLikelihood; % Bayes Information Criterion
+            Sfit.AIC_infer = 2*nFreePar - 2*Sfit.LogLikelihood; % Akaike Information Criterior
+            Sfit.AICc_infer = Sfit.AIC_infer + 2*nFreePar*(nFreePar+1)/(obj.score.nObservations -nFreePar-1); % AIC corrected for sample size
             Sfit.LogJoint_allstarting = Sfit.LogJoint_allstarting; % values for all starting points
 
             % compute SSE and r2 for normal observations
@@ -3198,9 +3115,9 @@ classdef gum
             % where each row is for a different model.
             for i=1:numel(obj)
                 if nargin>1
-                    H(i,:) = get_hyperparameter_structure(obj.regressor,label);
+                    H(i,:) = get_hyperparameter_structure(obj(i).regressor,label);
                 else
-                    H(i,:) = get_hyperparameter_structure(obj.regressor);
+                    H(i,:) = get_hyperparameter_structure(obj(i).regressor);
                 end
             end
         end
@@ -3306,17 +3223,62 @@ classdef gum
         end
 
         %% CONCATENATE WEIGHTS OVER POPULATION
-        function obj = concatenate_over_models(obj, place_first)
+        function obj = concatenate_over_models(obj, place_first, splitting_variable)
             % M = concatenate_over_models(M)
             % concatenates weights from array of models (e.g. same model for different datasets) into a single model object (usually for plotting
             % and storing)
             %
             % M = concatenate_over_models(M, false) to place model index as
             % last dimension in weights (default: first dimension)
-            if nargin==1 % whether we put model index as first dimension in weights
+            %
+            % concatenate_over_models(M, bool, label) or concatenate_over_models(M, [], label)
+            % to concatenate models over splitting variable provided by
+            % label (when M is obtained by splitting dataset along multiple
+            % variables).
+            if nargin==1 || isempty(place_first) % whether we put model index as first dimension in weights
                 place_first = true;
             end
             nObj = length(obj);
+
+            withSplittingVariable = nargin>2;
+            AllSplitVar = obj(1).score.SplittingVariable;
+            if withSplittingVariable && isscalar(AllSplitVar) && strcmp(AllSplitVar, splitting_variable)
+                % just a single splitting variable so let's concatenate
+                % over all models
+                withSplittingVariable = false;
+            end
+
+            if withSplittingVariable % concatenate over splitting variable
+                assert(ismember(splitting_variable, AllSplitVar),...
+                    'incorrect value for splitting variable');
+
+                iConcat = strcmp(splitting_variable, AllSplitVar); % index of splitting variablewe concatenate over
+
+                sc = [obj.score];
+                AllSplittingLevels = cat(1,sc.Dataset); % dataset x splitting variable array
+
+                [SplittingLevels,~,iSplittingLevels] = unique(AllSplittingLevels(:,~iConcat),'rows');
+
+                % concatenate models that share levels of non-concatenating
+                % variables
+                concat_idx = false(size(obj));
+                for s=1:size(SplittingLevels,1)
+                    iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables
+
+                    for m=1:length(iModel)
+                        obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
+                    end
+                    % concatenate these models together
+                    obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first);
+                    obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
+
+                    concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
+                end
+
+                obj(~concat_idx) = [];
+
+                return;
+            end
 
             %% concatenate weights
             n_Mod = [obj.nMod];
@@ -3324,7 +3286,7 @@ classdef gum
                 error('all models should have the same number of modules');
             end
             for m=1:n_Mod(1)
-                nD = cellfun(@(x) x(m).nDim, {obj.regressor}); %[obj.regressor(m).nDim];
+                nD = cellfun(@(x) x(m).nDim, {obj.regressor});
                 if ~all(nD==nD(1))
                     error('dimensionality of module %d differs between modules');
                 end
@@ -3464,6 +3426,7 @@ classdef gum
             % array M (for model selection / model comparison)
 
             n =  numel(obj);
+            %  S = size(obj);
 
             all_score = {obj.score};
 
@@ -3482,29 +3445,40 @@ classdef gum
             for i=1:length(metrics)
                 mt = metrics{i};
 
+                mt1 = all_score{1}.(mt);
+                if isvector(mt1)
+                new_siz = length(mt1);
+                else
+ new_siz = size(mt1);
+                end
                 if strcmp(mt, 'Dataset')
                     for m=1:n
                         all_score{m}.Dataset = string(all_score{m}.Dataset);
                     end
                     % pre-allocate values for each model
-                    X = strings(length(all_score{1}.(mt)),length(obj));
+                    X = strings(prod(new_siz),n);
                 else
                     % pre-allocate values for each model
-                    X = nan(length(all_score{1}.(mt)),length(obj));
+                    X = nan(prod(new_siz),n);
                 end
-
-
 
                 % add values from each model where value is present
                 for m=1:n
                     if ~isempty(all_score{m}) && isfield(all_score{m}, mt) && ~isempty(all_score{m}.(mt))
                         xx = all_score{m}.(mt);
-                        X(:,m) =  xx;
+                        X(:,m) =  xx(:);
                     end
                 end
+                X = reshape(X, [new_siz n]);
+                % if isrow(X)
+                %     X = reshape(X,S);
+                % end
                 Sc.(mt) = X;
             end
 
+            if isfield(all_score{1},'SplittingVariable') % simply inherit (should be constant across models)
+                Sc.SplittingVariable = all_score{1}.SplittingVariable;
+            end
         end
 
         %% EXPORT SCORES TO TABLE
@@ -3543,44 +3517,63 @@ classdef gum
         end
 
         %% AVERAGE WEIGHTS OVER POPULATION
-        function obj = population_average(obj)
+        function obj = population_average(obj, label)
             % M = population_average(M) averages weights across models in
             % array of models M. Produces a single model M.
-
+            %
+            % M = M.population_average(label)
+            % to average models over splitting variable provided by
+            % label (when M is obtained by splitting dataset along multiple
+            % variables).
             n = length(obj); % size of population (one model per member)
 
             % first concatenate
-            obj = concatenate_over_models(obj, true);
+            if nargin>1
+                % concatenate over single variable
+                obj = concatenate_over_models(obj, true, label);
 
-            obj.score.Dataset = "average over "+n+ "datasets";
-            obj.label = obj.score.Dataset;
+                for i=1:numel(obj)
+                    iConcat = strcmp(obj(i).score.SplittingVariable, label);
+
+                    obj(i).score.SplittingVariable(iConcat) = [];
+                    obj(i).score.Dataset = obj(i).score.Dataset(1,~iConcat);
+                    obj(i).label = obj(i).score.Dataset + " (average over " + label + ")";
+                end
+            else
+                obj = concatenate_over_models(obj, true);
+
+                obj.score.Dataset = "average over "+n+ " datasets";
+                obj.label = obj.score.Dataset;
+            end
 
             % now compute average and standard deviation of weights over
             % population
-            for m=1:obj.nMod
+            for i=1:numel(obj)
+                for m=1:obj(i).nMod
 
-                if obj.regressor(m).rank(1)>1 % !! check this is how this is done in concatenate_over_models
-                    dd = 3; % weight x rank x model
-                else
-                    dd = 1; % model x weight
-                end
+                    if obj(i).regressor(m).rank(1)>1 % !! check this is how this is done in concatenate_over_models
+                        dd = 3; % weight x rank x model
+                    else
+                        dd = 1; % model x weight
+                    end
 
-                for d=1:obj.regressor(m).nDim
-                    W = obj.regressor(m).Weights(d);
-                    X = W.PosteriorMean;
+                    for d=1:obj(i).regressor(m).nDim
+                        W = obj(i).regressor(m).Weights(d);
+                        X = W.PosteriorMean;
 
-                    W.PosteriorMean = mean(X,dd,'omitnan'); % population average
-                    W.PosteriorStd = std(X,[],dd,'omitnan')/sqrt(n); % standard error of the mean
-                    W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
-                    W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
+                        W.PosteriorMean = mean(X,dd,'omitnan'); % population average
+                        W.PosteriorStd = std(X,[],dd,'omitnan')/sqrt(n); % standard error of the mean
+                        W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
+                        W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
 
-                    obj.regressor(m).Weights(d) = W;
+                        obj(i).regressor(m).Weights(d) = W;
 
-                    % mean and std of hyperparameters
-                    H = obj.regressor(m).HP(d);
-                    HPHP = H.HP;
-                    obj.regressor(m).HP(d).HP = mean(HPHP,1);
-                    obj.regressor(m).HP(d).std = std(HPHP,[],1);
+                        % mean and std of hyperparameters
+                        H = obj(i).regressor(m).HP(d);
+                        HPHP = H.HP;
+                        obj(i).regressor(m).HP(d).HP = mean(HPHP,1);
+                        obj(i).regressor(m).HP(d).std = std(HPHP,[],1);
+                    end
                 end
             end
         end
@@ -3607,6 +3600,60 @@ classdef gum
             % M.export_hyperparameters_to_csv(filename) exports hyperparameter data as csv file.
             %
             export_hyperparameters_to_csv(obj.regressor, filename);
+        end
+
+        %%  DATASET CODING DIMENSION FOR ARRAY OF MODELS
+        function [d, L] = dataset_dimension(obj)
+            %  d = dataset_dimension(M) gives the dimension encoding
+            %  datasets if M is an array of models.
+            % Returns nan if there is none
+            %
+            %[d, L] = dataset_dimension(obj)
+            % L provides the labels for all datasets
+            if isscalar(obj)
+                d = nan;
+                return;
+            end
+
+            % formula for each model
+            F = {obj.formula};
+            F = reshape(F,size(obj));
+            F = string(F);
+
+            % when formula does not vary across one dimension, then this
+            % dimension encodes dataset
+            found_it = 0;
+            D = ndims(obj);
+            for d=1:D
+                % select first formula along this dimension
+                C = cell(1,D);
+                for dd=1:D
+                    C{dd} = 1:size(obj,dd);
+                end
+                C{d} = 1;
+                F1 = F(C{:});
+
+                %all formulas are the same along this dim
+                found_it = all(F==F1,'all');
+                if found_it
+                    % extract dataset labels
+                    L = cellfun(@(x) x.Dataset, {obj.score},'unif',0); % dataset label for each models
+                    L = reshape(L,size(obj));
+
+                    % avoid repeats
+                    C = num2cell(ones(1,D));
+                    C{d} = 1:size(obj,d);
+                    L = L(C{:});
+
+                    break;
+                end
+            end
+
+            if ~found_it
+                d = nan;
+                L = [];
+            end
+
         end
 
         %% COMPUTE PREDICTOR VARIANCE FROM EACH MODULE
@@ -3990,12 +4037,26 @@ classdef gum
         end
 
         %% PLOT POSTERIOR COVARIANCE
-        function h = plot_posterior_covariance(obj)
-            % plot_posterior_covariance(M) plot the posterior covariance of
+        function h = plot_posterior_covariance(obj, varargin)
+            % plot_posterior_covariance(M, 'joint') plots the full posterior covariance of
             % the model
             %
-            % h = plot_posterior_covariance(M) provide graphical handles
+            % plot_posterior_covariance(M) plots the posterior covariance of
+            % each set of weights separately
+            %
+            % plot_posterior_covariance(M, label) plots the posterior
+            % covariance of the set of weights indicated in label
+            %
+            % h = plot_posterior_covariance(...) provide graphical handles
 
+
+            if nargin==1 || ~isequal(varargin{1},'joint')
+                % plots posterior covariance separately
+                h = obj.regressor.plot_posterior_covariance(varargin{:});
+                return;
+            end
+
+            % plots the full posterior covariance
             h.Axes = [];
             h.Objects = {};
 
@@ -4011,7 +4072,7 @@ classdef gum
             nReg = zeros(1,obj.nMod);
 
             for m=1:obj.nMod
-                nReg(m) = M(m).nParameters; % add number of regressors for this module
+                nReg(m) = sum(M(m).nParameters); % add number of regressors for this module
             end
 
             nRegCum = cumsum([0 nReg]);
@@ -4040,6 +4101,20 @@ classdef gum
             set_figure_name(gcf, obj, 'Posterior Covariance'); % figure name
         end
 
+        %% PLOT POSTERIOR COVARIANCE
+        function h = plot_prior_covariance(obj, varargin)
+            % plot_prior_covariance(M) plots the prior covariance of
+            % each set of weights separately
+            %
+            % plot_prior_covariance(M, label) plots the prior
+            % covariance of the set of weights indicated in label
+            %
+            % h = plot_prior_covariance(...) provide graphical handles
+
+
+            % plots posterior covariance separately
+            h = obj.regressor.plot_prior_covariance(varargin{:});
+        end
 
         %% PLOT FITTED WEIGHTS
         function h = plot_weights(obj, U2, varargin)
@@ -4081,6 +4156,8 @@ classdef gum
 
             if length(obj)>1 % array of models
 
+                withTile = ~verLessThan('matlab', '9.9'); % whether we can use 'nexttile' function
+
                 % first check that all models all have same number of
                 % subplots
                 nObj = length(obj);
@@ -4094,24 +4171,47 @@ classdef gum
                 end
                 nsub = nsub(1);
 
-                % plot each model use recursive calls
-                for mm=1:nObj
-                    if nsub>1 % more than one subplot per model: subplots with one row per model, one column per regressor
-                        for i=1:nsub
-                            idx = (mm-1)*nsub + i;
-                            this_h(i) = subplot(nObj, nsub, idx);
-                        end
-                    else % one subplot per model: all models in a grid
-                        this_h = subplot2(nObj, mm);
+                % plotting first model in temporary figure to know real
+                % nomber of subplots
+                if withTile
+                    f = gcf;
+                    tmp_fig = figure;
+                    h_temp = plot_weights(obj(1), U2);
+                    nsub = length(h_temp.Axes);
+                    close(tmp_fig);
+
+                    if nsub>1
+                            tiledlayout(f, nObj,nsub); % nObj rows, nsub columns
                     end
-                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h);
+                end
+
+                % plot each model use recursive calls
+                this_h = {};
+                for mm=1:nObj
+                    if ~withTile
+                        %  use approximate number of figures
+                        if nsub>1 % more than one subplot per model: subplots with one row per model, one column per regressor
+                            for i=1:nsub
+                                idx = (mm-1)*nsub + i;
+                                this_h{1}(i) = subplot(nObj, nsub, idx);
+                            end
+                        else % one subplot per model: all models in a grid
+                            this_h{1} = subplot2(nObj, mm);
+                        end
+                    end
+
+                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h{:}, varargin{:});
 
                     % remove redundant labels and titles
                     if mm>1 && nsub>1
-                        title(this_h,'');
+                        for u=1:length(h(mm).Axes)
+                        title(h(mm).Axes(u),'');
+                        end
                     end
                     if mm<nObj && nsub>1
-                        xlabel(this_h, '');
+                        for u=1:length(h(mm).Axes)
+                            xlabel(h(mm).Axes(u), '');
+                        end
                     end
                 end
                 set(gcf,'name',"Weights "+numel(obj)+ "models");
@@ -4134,6 +4234,17 @@ classdef gum
             set_figure_name(gcf, obj, 'Weights');
         end
 
+        %% DEFINE PLOTTING FUNCTION
+        function obj  = define_plot(obj, varargin)
+            obj.regressor = obj.regressor.define_plot(varargin{:});
+        end
+
+        function obj  = disable_plot(obj, label)
+            obj.regressor = obj.regressor.define_plot(label,'none');
+        end
+        function obj  = enable_plot(obj, label)
+            obj.regressor = obj.regressor.define_plot(label,'auto');
+        end
 
         %% PLOT HYPERPARAMETERS
         function h = plot_hyperparameters(obj)
@@ -4266,7 +4377,7 @@ classdef gum
             %  plot_score(M, score)
             % plots score for different models (for model comparison)
             % score can be either
-            % 'AIC','AICc','BIC','LogEvidence','LogJoint','LogPrior','FittingTime'
+            % 'AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence','LogJoint','LogPrior','FittingTime'
             % It can also be a cell array, in which case each score is
             % plotted in a different subplot
             %
@@ -4278,7 +4389,9 @@ classdef gum
             % definition
             %
             % plot_score(M, score, ref, 'scatter') to use scatter plot
-            % instead of bar plots
+            % plot_score(M, score, ref, 'bar') to use bar plots
+            % (default is scatter plot when comparing over multiple
+            % datasets, bar plot otherwise
             %
             %  h = plot_score(...) provides graphical handles
 
@@ -4286,7 +4399,24 @@ classdef gum
                 ref = [];
             end
 
-            if nargin<4
+
+            [dataset_dim,dataset_label] = dataset_dimension(obj);
+            with_dataset_dim = ~isnan(dataset_dim);
+
+            % define plot type
+            if nargin<5
+                if isnan(dataset_dim)
+                    plottype = 'bar';
+                else
+                    plottype = 'scatter';
+
+                end
+            else
+                assert(ismember(plottype, {'bar','scatter','hist'}));
+            end
+
+            % define labels
+            if nargin<4 || isempty(labels)
                 labels = {obj.label};
                 cnt = 1;
                 for m=1:numel(obj)
@@ -4295,11 +4425,26 @@ classdef gum
                         cnt = cnt+1;
                     end
                 end
+                labels = reshape(labels, size(obj));
+
+                % if comparing across different datasets, keep just one set
+                % of model labels
+                if with_dataset_dim
+                    C =cell(1,ndims(obj));
+                    for dd=1:ndims(obj)
+                        C{dd} = 1:size(obj,dd);
+                    end
+                    C{dataset_dim} = 1;
+                    labels = labels(C{:});
+
+                    % now use dataset labels instead
+                    if strcmp(plottype, 'bar')
+                        model_label = labels;
+                        labels = dataset_label;
+                    end
+                end
             end
 
-            if nargin<5
-                plottype = 'bar';
-            end
             % if cell array of score, plot each one in a different subplot
             if iscell(score)
                 nScore = length(score);
@@ -4323,7 +4468,6 @@ classdef gum
             end
             score = metrics{i_score};
 
-
             % concatenate scores of different models into single structure
             Sc =  concatenate_score(obj);
             X = Sc.(score); % extract relevant data
@@ -4331,28 +4475,49 @@ classdef gum
                 X = X(:);
             end
 
+            if dataset_dim==1
+                X = X';
+            end
+
             if ~isempty(ref) % use one as reference
                 X = X - X(ref,:);
                 score = ['\Delta ' score];
             end
 
+            if  with_dataset_dim && strcmp(plottype, 'bar')
+                X = X';
+            end
+
             % draw bars
-            if strcmp(plottype, 'bar')
-                h = barh(X);
-            else
-                hold on;
-                smb = '.ox+*sdv^<>ph'; % all possible symbols
-                smb = repmat(smb, 1, ceil(size(X,2)/length(smb)));
-                for xx = 1:size(X,2) % for each set of data
-                    h(xx) = plot(X(:,xx), 1:size(X,1), smb(xx));
-                end
+            switch(plottype)
+                case 'bar'
+                    h = barh(X);
+
+                    if with_dataset_dim
+                        legend(model_label);
+                    end
+                case 'scatter'
+                    hold on;
+                    smb = '.ox+*sdv^<>ph'; % all possible symbols
+                    smb = repmat(smb, 1, ceil(size(X,2)/length(smb)));
+                    for xx = 1:size(X,2) % for each set of data
+                        h(xx) = plot(X(:,xx), 1:size(X,1), smb(xx));
+                    end
+                    ylim(.5+[0 size(X,1)]);
+                case 'hist'
+                    assert( ~isempty(ref) && size(X,1)==2,'histogram only when comparing one model with reference model over distinct datasets');
+                    X(ref,:) =[]; % remove column of zeros
+                    histogram(X);
+
             end
             xlabel(score);
 
-            if ~isempty(labels)
+            if ~isempty(labels) && ~strcmp(plottype,'hist')
                 yticks(1:length(labels))
                 yticklabels(labels);
             end
+
+
 
         end
 
@@ -4463,6 +4628,98 @@ elseif strcmp(obj.obs, 'neg-binomial')
 else
     % canonical link function, so this is truly the prediction error
     err = obj.T-Y;
+end
+
+end
+
+%% run inference on train set and predict on test set
+function [exitflag_CV, U_CV, CVLL, accuracy, validationscore, gradhp] = infer_trainset(obj, CV, p, do_grad_hyperparam, PP, CovJacob)
+
+trainset = CV.training(p);
+validationset = CV.test(p);
+if iscell(trainset) % CV structure
+    trainset = trainset{1};
+    validationset = validationset{1};
+end
+
+%fit on training set
+obj_train = obj.extract_observations(trainset).IRLS();
+exitflag_CV = obj_train.score.exitflag;
+
+U_CV = concatenate_weights(obj_train);
+
+score_train = obj_train.score;
+s = score_train.scaling; % dispersion parameter
+
+%compute score on testing set (mean log-likelihood per observation)
+obj_test = obj.extract_observations(validationset); % model with test set
+obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
+obj_test.Predictions.rho = [];
+obj_test.score.scaling = s; % dispersion parameter estimated in training set
+
+[obj_test,CVLL,grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
+accuracy = Accuracy(obj_test); % and accuracy
+
+nValidation = obj_test.score.nObservations; % number of observations in test set
+
+validationscore = CVLL/ nValidation; % normalize by number of observations
+
+% compute gradient of score over hyperparameters
+if do_grad_hyperparam
+
+    % add contribution of free dispersion parameter to
+    % gradient of CVLL w.r.t weights
+    free_dispersion = ismember(obj.obs, {'normal','neg-binomial'});
+
+    PPP = PP;
+
+    dY_drho = inverse_link_function(obj_train,obj_train.Predictions.rho, 1); % derivative of inverse link
+
+    if free_dispersion
+        PPP(end+1,end+1) = 1;
+
+        % add derivative of test data LLH w.r.t.
+        % dispersion parameter
+        obj_test = obj_test.compute_r_squared;
+        grad_validationscore(end+1) = -nValidation/2/s + obj_test.score.SSE/2/s^2;
+
+        %  log-joint derived w.r.t to dispersion param and basis function hyperparameters
+        gradgrad_dispersion = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, dY_drho.*prediction_error(obj_train), 1)/s^2;
+
+    end
+
+    grad_validationscore = grad_validationscore / nValidation; % gradient w.r.t each weight
+
+    % posterior covariance computed from train data (include dispersion parameter if free)
+    PCov = PosteriorCov(obj_train, free_dispersion);
+
+    % compute LLH derived w.r.t to U (free basis) and basis fun hyperparameters
+    err_train = prediction_error(obj_train); % training model prediction error
+    gradgrad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_train.regressor, err_train,0, dY_drho)/s;
+
+    gradhp = zeros(1,size(CovJacob,3));
+    for q=1:size(CovJacob,3) % for each hyperparameter
+        % log-joint derived w.r.t to U (free basis) and covariance hyperparameters
+        gradgrad = CovJacob(:,:,q)'*(PP*U_CV');
+
+        % add contribution of basis function HP (finite differences say sth different)
+        gradgrad = gradgrad - gradgrad_basisfun_hp(:,q);
+
+        if free_dispersion % add log-joint derived w.r.t to dispersion param and hyperparameters (null for cov HPs)
+            gradgrad(end+1,:) = gradgrad_dispersion(:,q);
+        end
+
+        gradU = - PPP' * PCov * gradgrad;% derivative of inferred parameter U w.r.t hyperparameter (full parametrization)
+
+        gradhp(q) = grad_validationscore * gradU; % derivate of score w.r.t hyperparameter
+    end
+
+    % add direct contribution of basis function
+    % hyperparameters
+    this_grad_basisfun_hp = compute_gradient_LLH_wrt_basis_fun_hps(obj_test.regressor, prediction_error(obj_test), 1)/s;
+    gradhp = gradhp + this_grad_basisfun_hp/ nValidation;
+else
+    gradhp = [];
 end
 
 end
@@ -4827,12 +5084,26 @@ if ~isempty(T_fmla)
         error('dependent variable in formula should be followed either by ''~'',''/'' or ''|'' symbol');
     end
 
-    SplitVar = trimspace(T_fmla(2:end));
-    if ~ismember(SplitVar, VarNames)
-        error('Variable ''%s'' is not present in the table', SplitVar);
-    end
+    fmla_split = T_fmla(2:end);
+    fmla_split(end+1) = ','; % add dummy coma as separator between splitting variables
 
-    param.split = Tbl.(SplitVar);
+    param.split = [];
+    param.SplittingVariable = string([]);
+    while any(fmla_split==',') % still any splitting variable to process
+        i_coma = find(fmla_split==',',1);
+        SplitVar = trimspace(fmla_split(1:i_coma-1));
+        if ~ismember(SplitVar, VarNames)
+            error('Variable ''%s'' is not present in the table', SplitVar);
+        end
+
+        this_var = Tbl.(SplitVar);
+        if iscell(this_var)
+            this_var = string(this_var);
+        end
+        param.split = [param.split this_var];  % get values from table and add as column
+        param.SplittingVariable(end+1) = SplitVar; % add label
+        fmla_split(1:i_coma) = []; % remove this part of formula
+    end
 end
 
 fmla(1:i) = []; % remove left part of formula
@@ -5647,7 +5918,7 @@ end
 
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
-metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','LogEvidence',...
+metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence',...
     'accuracy','scaling','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','isEstimated','isFitted','FittingTime'};
 end
 
@@ -5667,7 +5938,7 @@ end
 %% figure name
 function set_figure_name(gcf, obj, str)
 if ~isempty(obj.label) && ~iscell(obj.label)
-    str = [str ' ' obj.label];
+    str = [str ' ' char(obj.label)];
 end
 if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset) && isscalar(obj.score.Dataset)
     str = [str ' (' char(obj.score.Dataset) ')'];
