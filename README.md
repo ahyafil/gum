@@ -17,6 +17,8 @@ Key features include:
 
 The toolbox uses object-orienting programming: a model is defined from a dataset table `T` and formula `fmla` using `M = gum(T, fmla);`. Methods allow to estimate the model, plot weights, design matrix, perform model comparison (among many other options) in a single-line code.
 
+![alt text](https://github.com/ahyafil/gum/blob/main/tutorials/GUM%20principle.png?raw=true)
+
 Check our [preprint](https://arxiv.org/abs/2002.00920). Tutorials will soon follow.
 
 # Installation
