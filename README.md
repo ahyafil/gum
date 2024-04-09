@@ -4,7 +4,7 @@
 GUM is a versatile Matlab toolbox for running Generalized Unrestricted Models (GUMs). GUMs is a very general modelling framework including Generalized Linear Models (GLMs), Generalized Additive Models (GAMs) and many other families of models. 
 
 Key features include:
-- Simple model definition using R-style formulas by combining different operators on sets of regressors, including: linear mapping of regressors (e.g. 'y ~ x1 + x2'), non-linear mapping of regressors ('y ~ f(x1) + f(x2)'), splitting regressors on categorical variable ('y ~ x1|x2'), lagged regressors ('y ~ lag(x1;Lags=1:5)`), multiplication of regressors ('y ~ f(x1)(x2 + f(x3))').
+- Simple model definition using R-style formulas by combining different operators on sets of regressors, including: linear mapping of regressors (e.g. `y ~ x1 + x2`), non-linear mapping of regressors (`y ~ f(x1) + f(x2)`), splitting regressors on categorical variable (`y ~ x1|x2`), lagged regressors (`y ~ lag(x1;Lags=1:5)`), multiplication of regressors (`y ~ f(x1)(x2 + f(x3))`).
 - Binary, continuous or count output variables (with Bernoulli, gaussian or Poisson observation noise, respectively)
 - Single line command to generate nice intuitive plots of estimated weights
 - Frequentist or Bayesian treatment of linear weights
