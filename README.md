@@ -25,6 +25,7 @@ Check our [preprint](https://arxiv.org/abs/2002.00920). Tutorials will soon foll
 
 - Clone or download repository
 - Add the folder (with subfolders!) to your Matlab path
+- Add the [Matrix Computation Toolbox](https://www.mathworks.com/matlabcentral/fileexchange/2360-the-matrix-computation-toolbox) to your Matlab path
 - Enjoy!
 
 # Contact
