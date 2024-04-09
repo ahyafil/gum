@@ -3241,7 +3241,11 @@ classdef gum
             nObj = length(obj);
 
             withSplittingVariable = nargin>2;
+            if withSplittingVariable && isfield(obj(1).score, 'SplittingVariable')
             AllSplitVar = obj(1).score.SplittingVariable;
+            else
+AllSplitVar = [];
+            end
             if withSplittingVariable && isscalar(AllSplitVar) && strcmp(AllSplitVar, splitting_variable)
                 % just a single splitting variable so let's concatenate
                 % over all models

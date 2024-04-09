@@ -29,7 +29,7 @@ while isNPD % if some eigenvalue is negative
     n = size(M,1);
     XX = M - c*eye(n);
     try
-        [~, HH] = poldec(full(XX)); % Polar Decomposition from Matrix Computation Toolbox (http://www.maths.manchester.ac.uk/%7Ehigham/mctoolbox/)
+        [~, HH] = poldec(full(XX)); % Polar Decomposition from Matrix Computation Toolbox (https://www.mathworks.com/matlabcentral/fileexchange/2360-the-matrix-computation-toolbox)
     catch ME
         if strcmp(ME.identifier,'MATLAB:UndefinedFunction')
             error('The Matrix Computation Toolbox was not found on the path, download from http://www.maths.manchester.ac.uk/%7Ehigham/mctoolbox/ and add to path');
