@@ -29,7 +29,7 @@ accuracy_label = ["error";"correct"];
 T.accuracy = accuracy_label(accuracy+1);
 
 % add signed response (for lagged regressor)
-T.signed_resp = sign(T.resp-0.5); % -1 or +1
+T.response = sign(T.resp-0.5); % -1 or +1
 
 fprintf('done\n');
 end

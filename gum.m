@@ -165,12 +165,15 @@ classdef gum
     % - changed normalization for exponential basis functions
     % - improved computational cost of X(subset,:) for sparsearray
     % - added AIC/BIC for HPs
+    % - split over multiple dimensions
+    % - concatenate/average over single splitting dimension
+    % - added nexttile for plotting weights
 
     % TODO
     % - wu: automatic permute of dimensions
-    % - when splitting models, remove unused levels
-    % - splitting over various variables, concatenating/averaging over just
-    % one
+    % - concatenate over models: allow dissimilar HP structure
+    % - parameter recovery
+    % - binary model: any values
     % - constraints: add custom field, i.e. "mean3"
     % - basis functions:  allow for change (L2/ARD/none) - done?
     % - plot_variance_vs_predictor (for normal and Poisson/lognorm)
@@ -4957,7 +4960,10 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     Bmat = B(1).B;
 
     % gradient for K for basis hyperparameter
-    gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
+ %   gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
+ nW = size(Bmat,2);
+        gradK_tmp = zeros(nW, nW,nHP);
+
     basisHP = find(contains(HPs.type, "basis"));
 
     for p=1:length(basisHP) % for all fitted hyperparameter

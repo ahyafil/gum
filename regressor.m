@@ -1997,6 +1997,8 @@ end
 
                     if ~isempty(B) && any(~[B.projected]) % if this regressor uses a set of non-projected basis functions
 
+                        cc = constraint_structure(W); % compute constraint structure before projection
+
                         % hyperparameter values for this component
                         this_HP = obj(m).HP(d); %fixed values
                         this_scale = W.scale;
@@ -2011,8 +2013,7 @@ end
                         new_nWeight = size(Bmat,1);
 
                         W.basis = B;
-                        cc = constraint_structure(W);
-
+                        %cc = constraint_structure(W);
 
                         % store values for full space in B
                         B(1).scale = W.scale;
@@ -2020,7 +2021,7 @@ end
                         W.scale = new_scale;
 
                         %% if weights are constrained to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                        if cc(1).nConstraint>0
+                       % if cc(1).nConstraint>0
                             for r=2:obj(m).rank
                                 if ~isequal(cc(1), cc(r))
                                     error('Basis functions cannot use different constraints for different orders');
@@ -2028,6 +2029,7 @@ end
                             end
 
                             cc(1).V = Bmat*cc(1).V;
+
                             B(1).B = Bmat;
 
                             % !! I'm commenting because I don't
@@ -2044,7 +2046,7 @@ end
 
                             B(1).constraint = W.constraint;
                             W.constraint = cc(1);
-                        end
+                      %  end
                         W.nWeight = new_nWeight;
 
 
@@ -5164,12 +5166,12 @@ end
 function S = constraint_structure(W)
 for i=1:numel(W)
     C = W(i).constraint;
-    if ~isempty(W(i).basis) && ~W(i).basis.projected
-        nWeight = W(i).basis.nWeight;
-        assert(~isnan(nWeight), 'number of weights not determined');
-    else
+ %   if ~isempty(W(i).basis) && ~W(i).basis.projected
+ %       nWeight = W(i).basis.nWeight;
+ %       assert(~isnan(nWeight), 'number of weights not determined');
+ %   else
         nWeight = W(i).nWeight;
-    end
+  %  end
     if isstruct(C) % already a structure
         assert(all(isfield(C,{'V','u'})), 'incorrect constraint structure');
         if ~isfield(C, 'type')
@@ -5286,7 +5288,7 @@ end
 end
 
 %% change constraint structure when replicating
-function                 W = replicate_constraint(W, nVal)
+function  W = replicate_constraint(W, nVal)
 if any(constraint_type(W)==["free","fixed"])
     return;
 end
@@ -5298,7 +5300,7 @@ W.constraint = S;
 end
 
 %% constraint structure for interaction of two sets of regressors (or splitting dimension)
-function    S = interaction_constraints(W1, W2)
+function S = interaction_constraints(W1, W2)
 S1 = constraint_structure(W1); % extract structure for each constraint
 S2 = constraint_structure(W2);
 
