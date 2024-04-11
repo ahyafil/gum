@@ -86,7 +86,9 @@ classdef gum
     % Use ' y|x ~ ...' if you want to define separate GUM for each level in
     % variable 'x' (the output will be a vector of GUM objects).
     %
-    % Complete list of methods:
+    % Complete list of methods (type e.g. 'help gum.knockout' for help on
+    % method knockout):
+    %
     % OPERATIONS AND TESTS ON MODEL
     % -'extract_observations': extract model for only a subset of
     % observations
@@ -168,10 +170,12 @@ classdef gum
     % - split over multiple dimensions
     % - concatenate/average over single splitting dimension
     % - added nexttile for plotting weights
+    % - plow_weights:automatic ordering of dimensions
+    % - plot hyperparameters: change scale if all log parameters
+    % - concatenate over models: allow dissimilar HP structure
+
 
     % TODO
-    % - wu: automatic permute of dimensions
-    % - concatenate over models: allow dissimilar HP structure
     % - parameter recovery
     % - binary model: any values
     % - constraints: add custom field, i.e. "mean3"
@@ -217,16 +221,14 @@ classdef gum
     methods
 
         %% %%%%%% CONSTRUCTOR %%%%%
-        function obj = gum(M, y, param)
+        function obj = gum(M, y, varargin)
             if nargin==0
                 %% empty class
                 return;
             end
             assert(nargin>=2, 'needs at least two arguments');
             % optional parameters
-            if (nargin < 3)
-                param = struct;
-            end
+            param = param_structure(varargin);
 
             if istable(M)
                 fmla = y;% formula
@@ -465,7 +467,7 @@ classdef gum
             fprintf([repmat('=',1,80) '\n']);
             fprintf('Generalized Unrestricted Model (GUM) object');
             if ~isempty(obj.label)
-                fprintf(': %s',obj.label);
+                fprintf(': %s',model_full_label(obj));
             else
                 fprintf(': unnamed model');
             end
@@ -695,7 +697,7 @@ classdef gum
 
 
         %% FIT HYPERPARMETERS (and estimate) %%%%%%%%%%%
-        function obj = fit(obj, param)
+        function obj = fit(obj, varargin)
             % M = M.fit(); or M = M.fit(param);
             % FITS THE HYPERPARAMETERS OF A GUM.
             % Optional parameters are passed in structure param with optional
@@ -752,15 +754,14 @@ classdef gum
             maxiter = 200; % maximum number of iterations
             HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
 
-            if nargin==1
-                param = struct;
-            end
+            param = param_structure(varargin);
+
 
             if length(obj)>1
                 %% fitting various models
 
                 for i=1:numel(obj) % use recursive call
-                    fprintf('fitting model %d/%d...\n', i, numel(obj));
+                    fprintf('fitting model %d/%d: %s...\n', i, numel(obj), model_full_label(obj(i)));
                     obj(i) = obj(i).fit(param); % fit individual model
                     fprintf('\n');
                 end
@@ -1152,7 +1153,7 @@ classdef gum
         %% %%%%% INFERENCE (ESTIMATE WEIGHTS) %%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-        function   obj = infer(obj, param)
+        function   obj = infer(obj, varargin)
             % M = M.infer(); or M = M.infer(param);
             % INFERS (ESTIMATES) WEIGHTS OF GUM USING THE LAPLACE APPROXIMATION.
             % Optional parameters are passed as fiels in structure param:
@@ -1191,9 +1192,8 @@ classdef gum
             % - 'AICc_infer': corrected Akaike Information Criterion
 
             %% parse parameters
-            if nargin==1
-                param = struct();
-            end
+            param = param_structure(varargin);
+
             if ~isfield(param, 'maxiter')
                 param.maxiter = 100; % maximum number of iterations
             end
@@ -1218,7 +1218,7 @@ classdef gum
             if length(obj)>1
                 for i=1:numel(obj)
                     if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
-                        fprintf('Inferring weights for model %d/%d (%s)\n', i, numel(obj), obj(i).label);
+                        fprintf('Inferring weights for model %d/%d: %s\n', i, numel(obj), model_full_label(obj(i)));
                     end
                     obj(i) = obj(i).infer(param);
                     if ~isfield(param, 'verbose') || ~strcmp(param.verbose, 'off')
@@ -2426,7 +2426,7 @@ classdef gum
 
             bool = false(size(obj));
             for m=1:numel(obj)
-                bool(m) = obj.score.isFitted;
+                bool(m) = obj(m).score.isFitted;
             end
         end
 
@@ -3242,18 +3242,28 @@ classdef gum
                 place_first = true;
             end
             nObj = length(obj);
+            assert(nObj>1, 'cannot concatenate over single model or void model');
 
-            withSplittingVariable = nargin>2;
-            if withSplittingVariable && isfield(obj(1).score, 'SplittingVariable')
-            AllSplitVar = obj(1).score.SplittingVariable;
+            if isfield(obj(1).score, 'SplittingVariable')
+                AllSplitVar = obj(1).score.SplittingVariable;
             else
-AllSplitVar = [];
+                AllSplitVar = [];
             end
-            if withSplittingVariable && isscalar(AllSplitVar) && strcmp(AllSplitVar, splitting_variable)
-                % just a single splitting variable so let's concatenate
-                % over all models
-                withSplittingVariable = false;
+
+            if nargin<3 && ~isempty(AllSplitVar)
+                % concatenate first over splitting variables
+                for v = 1:length(AllSplitVar)
+                    obj = obj.concatenate_over_models(place_first, AllSplitVar(v));
+                end
+
+                % then over models (if more than one)
+                if ~isscalar(obj)
+                obj = obj.concatenate_over_models(place_first,[]);
+                end
+                return;
             end
+
+            withSplittingVariable = nargin>2 && ~isempty(splitting_variable);
 
             if withSplittingVariable % concatenate over splitting variable
                 assert(ismember(splitting_variable, AllSplitVar),...
@@ -3262,21 +3272,23 @@ AllSplitVar = [];
                 iConcat = strcmp(splitting_variable, AllSplitVar); % index of splitting variablewe concatenate over
 
                 sc = [obj.score];
+                lbl = string({obj.label}); % all model labels
                 AllSplittingLevels = cat(1,sc.Dataset); % dataset x splitting variable array
 
-                [SplittingLevels,~,iSplittingLevels] = unique(AllSplittingLevels(:,~iConcat),'rows');
+                AllSplittingLevels_and_ModelLabels = [AllSplittingLevels(:,~iConcat) lbl(:)]; % add also model labels
+                [SplittingLevels,~,iSplittingLevels] = unique(AllSplittingLevels_and_ModelLabels,'rows');
 
                 % concatenate models that share levels of non-concatenating
                 % variables
                 concat_idx = false(size(obj));
                 for s=1:size(SplittingLevels,1)
-                    iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables
+                    iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables and model label
 
                     for m=1:length(iModel)
                         obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
                     end
                     % concatenate these models together
-                    obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first);
+                    obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
                     obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
 
                     concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
@@ -3348,23 +3360,12 @@ AllSplitVar = [];
                                 idx(v) = find(all(ss(:,v)==sc,1));
                             end
 
-                            % replace
-                            tmp = nan(size(U{i,d},1),nVal);
-                            tmp(:,idx) = U{i,d};
-                            U{i,d} = tmp;
-
-                            tmp = nan(size(se{i,d},1),nVal);
-                            tmp(:,idx) = se{i,d};
-                            se{i,d} = tmp;
-
-                            tmp = nan(size(TT{i,d},1),nVal);
-                            tmp(:,idx) = TT{i,d};
-                            TT{i,d} = tmp;
-
-                            tmp = nan(size(p{i,d},1),nVal);
-                            tmp(:,idx) = p{i,d};
-                            p{i,d} = tmp;
-
+                            % replace with larger arrays with nans for
+                            % missing values
+                            U{i,d} = pad_with_nan(U{i,d}, nVal, idx);
+                            se{i,d} = pad_with_nan(se{i,d}, nVal, idx);
+                            TT{i,d} = pad_with_nan(TT{i,d}, nVal, idx);
+                            p{i,d} = pad_with_nan(p{i,d}, nVal, idx);
                         end
                         obj(1).regressor(m).Weights(d).scale = sc; %update scale
                     end
@@ -3406,6 +3407,46 @@ AllSplitVar = [];
                 HP = cellfun(@(x) x(m).HP, {obj.regressor},'unif',0);
                 HP = cat(1,HP{:});
                 for d=1:size(HP,2)
+                    lbl = {HP.label};
+
+                    % if uses different hyperparameters across models (e.g.
+                    % GP vs basis functions)
+                    DifferentHP = ~all(cellfun(@(x) isequal(x,lbl{1}),lbl));
+                    if  DifferentHP
+
+                        sc = unique([lbl{:}]); % all values across all models
+                        nVal = length(sc); % number of different values
+
+                        newHP = obj(1).regressor(m).HP(d);
+                        newHP.label = sc;
+                        newHP.UB = nan(1,nVal);
+                        newHP.LB = nan(1,nVal);
+                        newHP.fit = nan(1,nVal);
+                        newHP.type = strings(1,nVal);
+                        for i=1:nObj
+                            ss = lbl{i};
+
+                            % find the indices in sc corresponding to values
+                            % for this model
+                            idx = zeros(1,size(ss,2));
+                            for v=1:size(ss,2)
+                                idx(v) = find(ss(v)==sc,1);
+                            end
+
+                            % replace with larger arrays with nans for
+                            % missing values
+                            HP(i).HP = pad_with_nan(HP(i).HP, nVal, idx);
+
+                            newHP.UB(idx) = HP(i).UB;
+                            newHP.LB(idx) = HP(i).LB;
+                            newHP.fit(idx) = HP(i).fit;
+                            newHP.type(idx) = HP(i).type;
+
+                        end
+                        obj(1).regressor(m).HP(d) = newHP;
+                    end
+
+
                     if  ~isempty( HP(1,d).HP)
                         obj(1).regressor(m).HP(d).HP = cat(1,HP(:,d).HP);
                     end
@@ -3454,9 +3495,9 @@ AllSplitVar = [];
 
                 mt1 = all_score{1}.(mt);
                 if isvector(mt1)
-                new_siz = length(mt1);
+                    new_siz = length(mt1);
                 else
- new_siz = size(mt1);
+                    new_siz = size(mt1);
                 end
                 if strcmp(mt, 'Dataset')
                     for m=1:n
@@ -3473,7 +3514,11 @@ AllSplitVar = [];
                 for m=1:n
                     if ~isempty(all_score{m}) && isfield(all_score{m}, mt) && ~isempty(all_score{m}.(mt))
                         xx = all_score{m}.(mt);
-                        X(:,m) =  xx(:);
+                        if ~strcmp(mt, 'PredictorVariance') || size(X,1)==numel(xx)
+                            % still need to code predictor variance for
+                            % models with different regressors
+                            X(:,m) =  xx(:);
+                        end
                     end
                 end
                 X = reshape(X, [new_siz n]);
@@ -4188,7 +4233,7 @@ AllSplitVar = [];
                     close(tmp_fig);
 
                     if nsub>1
-                            tiledlayout(f, nObj,nsub); % nObj rows, nsub columns
+                        tiledlayout(f, nObj,nsub); % nObj rows, nsub columns
                     end
                 end
 
@@ -4212,7 +4257,7 @@ AllSplitVar = [];
                     % remove redundant labels and titles
                     if mm>1 && nsub>1
                         for u=1:length(h(mm).Axes)
-                        title(h(mm).Axes(u),'');
+                            title(h(mm).Axes(u),'');
                         end
                     end
                     if mm<nObj && nsub>1
@@ -4229,7 +4274,11 @@ AllSplitVar = [];
             Dataset = string(obj.score.Dataset);
             if length(Dataset)>1 && ~all(Dataset=="")
                 varargin{end+1} = 'Dataset';
+                if iscolumn(obj.score.Dataset)
+                varargin{end+1} = string(obj.score.Dataset)';
+                else
                 varargin{end+1} = string(obj.score.Dataset);
+                end
             elseif iscell(obj.label)
                 varargin{end+1} = 'Dataset';
                 varargin{end+1} = string(obj.label);
@@ -4278,12 +4327,22 @@ AllSplitVar = [];
 
                 for d=1:ndim(m)
                     h.Axes(end+1) = subplot2(nDim_tot,i);
-                    if isempty(M(m).Weights(d).label)
-                        M(m).Weights(d).label = "HP" + m +"_"+d; % default label
-                    end
+                    %if isempty(M(m).Weights(d).label)
+                    %    M(m).Weights(d).label = "HP" + m +"_"+d; % default label
+                    %end
                     title(M(m).Weights(d).label);
 
-                    [~,~,h_nu] = wu(M(m).HP(d).HP',[],{M(m).HP(d).label},'bar');
+                    this_HP = M(m).HP(d).HP';
+                    lbl = M(m).HP(d).label;
+
+                    % if all hyperparameters are logs, take the exponential
+                    if all(strncmpi(lbl, 'log ',4))
+                        this_HP = exp(this_HP);
+                        lbl = eraseBetween(lbl, 1, 4); % remove 'log' from label
+                        set(gca, 'yscale','log');
+                    end
+
+                    [~,~,h_nu] = wu(this_HP,[],{lbl},'bar');
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
@@ -4405,7 +4464,10 @@ AllSplitVar = [];
             if nargin<3
                 ref = [];
             end
+            if any(ismember(score,{'AIC','AICc','BIC'})) && ~all(obj.isfitted,'all')
+                error('''AIC'',''BIC'' and ''AICc'' are restricted to fitted models - for inferred models, use ''AIC_infer'',''BIC_infer'' and ''AICc_infer'' instead');
 
+            end
 
             [dataset_dim,dataset_label] = dataset_dimension(obj);
             with_dataset_dim = ~isnan(dataset_dim);
@@ -4523,9 +4585,6 @@ AllSplitVar = [];
                 yticks(1:length(labels))
                 yticklabels(labels);
             end
-
-
-
         end
 
         %% PLOT BASIS FUNCTIONS OF REGRESSOR
@@ -4960,9 +5019,9 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     Bmat = B(1).B;
 
     % gradient for K for basis hyperparameter
- %   gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
- nW = size(Bmat,2);
-        gradK_tmp = zeros(nW, nW,nHP);
+    %   gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
+    nW = size(Bmat,2);
+    gradK_tmp = zeros(nW, nW,nHP);
 
     basisHP = find(contains(HPs.type, "basis"));
 
@@ -5947,12 +6006,63 @@ end
 
 %% figure name
 function set_figure_name(gcf, obj, str)
+str = [str model_full_label(obj)];
+set(gcf, 'name',str);
+end
+
+%% model label+dataset
+function str = model_full_label(obj)
+str = '';
 if ~isempty(obj.label) && ~iscell(obj.label)
     str = [str ' ' char(obj.label)];
 end
-if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset) && isscalar(obj.score.Dataset)
-    str = [str ' (' char(obj.score.Dataset) ')'];
+if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
+    str = [str ' (' ];
+    Ds = obj.score.Dataset;
+    if isrow(Ds) % single dataset
+        for v=1:length(Ds)
+            if isfield(obj.score,'SplittingVariable')
+                str = [str char(obj.score.SplittingVariable(v)) '='];
+            end
+            str = [str char(obj.score.Dataset(v)) ','];
+        end
+    else % concatenated over datasets
+        str = [str num2str(size(Ds,1)) ' '];
+        if isfield(obj.score,'SplittingVariable')
+            Sv = obj.score.SplittingVariable;
+            for v=1:length(Sv)
+                str = [str char(Sv(v)) 's/'];
+            end
+        else
+            str = [str 'datasets '];
+        end
+    end
+    str(end) = ')';
 end
-set(gcf, 'name',str);
+end
 
+%% pad vector/array with nans
+function  Y = pad_with_nan(X, nVal, idx)
+Y = nan(size(X,1),nVal);
+Y(:,idx) = X;
+end
+
+%% convert optional arguments to optional structure
+function param = param_structure(args)
+if isempty(args)
+    % no optional argument: void structure
+    param = struct;
+    return;
+elseif isstruct(args{1})
+    % first argument is already a structure
+    param = args{1};
+    return;
+end
+
+% otherwise convert list of arguments param1, val1, param2, val2,... to
+% structure
+assert(~mod(length(args),2), 'number of optional arguments must be even');
+assert(all(cellfun(@(x) ischar(x)||isstring(x), args(1:2:end))),...
+    'arguments must be character arrays');
+param = struct(args{:});
 end

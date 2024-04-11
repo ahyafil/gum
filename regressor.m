@@ -675,7 +675,7 @@ classdef regressor
                         % compute projection matrix and levels in projected space
                         B = compute_basis_functions(W(c).basis(1), this_scale, this_HP);
                         nWeight(c) = size(B(1).B,1);
-                                                W(c).basis(1).nWeight = nWeight(c); % needed to avoid errors with constraint_structure
+                        W(c).basis(1).nWeight = nWeight(c); % needed to avoid errors with constraint_structure
                     end
                 end
             end
@@ -856,7 +856,7 @@ classdef regressor
                 I = find_weights(obj);
             elseif isnumeric(label)
                 if isrow(label)
-                     label(2,:) = 1;
+                    label(2,:) = 1;
                 end
                 assert(size(label,1)==2, 'I must be a matrix with 2 rows');
                 assert(all(label>0,'all'), 'values in I must be positive (indices)')
@@ -1201,50 +1201,50 @@ classdef regressor
             end
         end
 
-%% DROP UNUSED VALUES IN SCALE
-function obj = drop_unused_values(obj)
-% R = R.drop_unused_values to remove values in scales that are not present
-% in the dataset (i.e. corresponding column in design matrix is just
-% zeros).
+        %% DROP UNUSED VALUES IN SCALE
+        function obj = drop_unused_values(obj)
+            % R = R.drop_unused_values to remove values in scales that are not present
+            % in the dataset (i.e. corresponding column in design matrix is just
+            % zeros).
 
-assert(isscalar(obj), 'only coded for single regressors - use for loop');
+            assert(isscalar(obj), 'only coded for single regressors - use for loop');
 
-% compute design matrix (all dimensions)
-obj2 = obj;
-obj2.Data = abs(obj.Data); % we'll compute sum of absolute values and compare to zero
+            % compute design matrix (all dimensions)
+            obj2 = obj;
+            obj2.Data = abs(obj.Data); % we'll compute sum of absolute values and compare to zero
 
-obj2 = obj2.set_weights(ones(1,obj.nTotalParameters));
-Phi = design_matrix(obj2,[], 0, false);
-unused = all(Phi==0,1); % unused values
+            obj2 = obj2.set_weights(ones(1,obj.nTotalParameters));
+            Phi = design_matrix(obj2,[], 0, false);
+            unused = all(Phi==0,1); % unused values
 
-d = 1;
-Wfields = ["PosteriorMean","PosteriorStd","PosteriorCov","T","p","scale","U_allstarting","U_CV"];
-while any(unused)
-    W = obj.Weights(d); % weight structure
-    drop_these = unused(1:W.nWeight);
-    
-    if any(drop_these)
-        % remove unused values from all existing fields
-        for f=Wfields
-             if isfield(W,f) && ~isempty(W.(f))
-                    W.(f)(:,drop_these) = []; 
-             end
+            d = 1;
+            Wfields = ["PosteriorMean","PosteriorStd","PosteriorCov","T","p","scale","U_allstarting","U_CV"];
+            while any(unused)
+                W = obj.Weights(d); % weight structure
+                drop_these = unused(1:W.nWeight);
+
+                if any(drop_these)
+                    % remove unused values from all existing fields
+                    for f=Wfields
+                        if isfield(W,f) && ~isempty(W.(f))
+                            W.(f)(:,drop_these) = [];
+                        end
+                    end
+
+                    W.nWeight = W.nWeight - sum(drop_these);
+                    obj.Weights(d) = W;
+
+                    % remove also from data
+                    indices = repmat({':'},1,obj.nDim+1);
+                    indices{d+1} = drop_these;
+                    s = struct("type",'()','subs',{indices});
+                    obj.Data = subsasgn(obj.Data,s,[]);
+                end
+
+                unused(1:length(drop_these)) = []; % these have been processed already
+                d = d+1;
+            end
         end
-   
-        W.nWeight = W.nWeight - sum(drop_these);
-        obj.Weights(d) = W;
-
-        % remove also from data
-        indices = repmat({':'},1,obj.nDim+1);
-        indices{d+1} = drop_these;
-        s = struct("type",'()','subs',{indices});
-        obj.Data = subsasgn(obj.Data,s,[]);
-    end
-
-    unused(1:length(drop_these)) = []; % these have been processed already
-    d = d+1;
-end
-end
 
         %% ORTHOGONALIZE WEIGHTS (FOR PWA)
         function obj = orthogonalize_weights(obj, d)
@@ -2021,32 +2021,32 @@ end
                         W.scale = new_scale;
 
                         %% if weights are constrained to have mean or average one, change projection matrix so that sum of weights constrained to 1
-                       % if cc(1).nConstraint>0
-                            for r=2:obj(m).rank
-                                if ~isequal(cc(1), cc(r))
-                                    error('Basis functions cannot use different constraints for different orders');
-                                end
+                        % if cc(1).nConstraint>0
+                        for r=2:obj(m).rank
+                            if ~isequal(cc(1), cc(r))
+                                error('Basis functions cannot use different constraints for different orders');
                             end
+                        end
 
-                            cc(1).V = Bmat*cc(1).V;
+                        cc(1).V = Bmat*cc(1).V;
 
-                            B(1).B = Bmat;
+                        B(1).B = Bmat;
 
-                            % !! I'm commenting because I don't
-                            % understand what it's supposed to be
-                            % doing... go back to it later on
-                            %                                 for r2=1:obj(m).rank
-                            %                                     if cc(r)~='b'
-                            %                                         obj(m).Weights(d).constraint(r2) = 's';
-                            %                                     end
-                            %                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
-                            %                                 end
-                            %break; % do not do it for other orders
-                            %end
+                        % !! I'm commenting because I don't
+                        % understand what it's supposed to be
+                        % doing... go back to it later on
+                        %                                 for r2=1:obj(m).rank
+                        %                                     if cc(r)~='b'
+                        %                                         obj(m).Weights(d).constraint(r2) = 's';
+                        %                                     end
+                        %                                     obj(m).Prior(r2,d).CovFun = @(sc,hp) covfun_transfo(sc,hp,  diag(B.B) , obj(m).Prior(r2,d).CovFun);
+                        %                                 end
+                        %break; % do not do it for other orders
+                        %end
 
-                            B(1).constraint = W.constraint;
-                            W.constraint = cc(1);
-                      %  end
+                        B(1).constraint = W.constraint;
+                        W.constraint = cc(1);
+                        %  end
                         W.nWeight = new_nWeight;
 
 
@@ -2428,7 +2428,7 @@ end
                 obs = 'binomial';
             end
             obj = obj.check_prior_covariance; % make sure prior covariance is defined
-            obj = obj.project_to_basis; 
+            obj = obj.project_to_basis;
             obj = obj.compute_prior_mean;
 
             % if more than one object, compute iteratively
@@ -2844,7 +2844,7 @@ end
                 obj(i).nObs = n_Obs;
 
                 if drop_unused
-                obj(i) = obj(i).drop_unused_values;
+                    obj(i) = obj(i).drop_unused_values;
                 end
             end
         end
@@ -3236,10 +3236,10 @@ end
                     W.scale = label;
                     W.dimensions = split_var;
                 else
-                     W.scale = interaction_levels(W.scale, label);
-                W.dimensions = [W.dimensions split_var];
+                    W.scale = interaction_levels(W.scale, label);
+                    W.dimensions = [W.dimensions split_var];
                 end
-               
+
                 W.label = W.label+ "|"+ split_var;
 
                 W.nWeight = W.nWeight * nVal; % one set of weights for each level of splitting variable
@@ -3836,22 +3836,22 @@ end
             if verLessThan('matlab', '9.9') || only_nsubplot
                 % cannot use nexttile-> compute number of subplots a priori
                 % (may be wrong)
-            nSubplotsReg = zeros(1,size(idx,2));
-            for j=1:size(idx,2) % for each set of regressor
-                m = idx(1,j);
-                isFW = isFixedWeightSet(obj(m));
-                d = idx(2,j);
-                do_plot = ~isFW(d); % do not plot regressors with constant
-                do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
-                nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
-            end
-            idx(:,~nSubplotsReg) = []; % remove non_plotted weights
-            nSubplots = sum(nSubplotsReg); % number of subplots
+                nSubplotsReg = zeros(1,size(idx,2));
+                for j=1:size(idx,2) % for each set of regressor
+                    m = idx(1,j);
+                    isFW = isFixedWeightSet(obj(m));
+                    d = idx(2,j);
+                    do_plot = ~isFW(d); % do not plot regressors with constant
+                    do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
+                    nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
+                end
+                idx(:,~nSubplotsReg) = []; % remove non_plotted weights
+                nSubplots = sum(nSubplotsReg); % number of subplots
 
-            if only_nsubplot % only ask for number of subplots
-                h = nSubplots;
-                return;
-            end
+                if only_nsubplot % only ask for number of subplots
+                    h = nSubplots;
+                    return;
+                end
             end
 
             %% process extra arguments
@@ -3872,14 +3872,14 @@ end
                 end
             end
 
-            % if not graphics handles passed, 
+            % if not graphics handles passed,
             if ~handle_arg
                 if verLessThan('matlab', '9.9')
                     % define a grid of subplots in current figure
-                for i=1:nSubplots
-                    h.Axes(i) = subplot2(nSubplots,i);
-                end
-                else 
+                    for i=1:nSubplots
+                        h.Axes(i) = subplot2(nSubplots,i);
+                    end
+                else
                     h.Axes = []; % use nexttile
                 end
             end
@@ -3908,9 +3908,9 @@ end
                 % plot weights
                 for s=1:length(W)
                     if length(h.Axes)>=i
-                    axes(h.Axes(i)); % set as active subplot
+                        axes(h.Axes(i)); % set as active subplot
                     else
-h.Axes(i) = nexttile;
+                        h.Axes(i) = nexttile;
                     end
 
                     if ~isempty(varargin) && ~isa(W(s).plot, 'function_handle') % pass extra arguments
@@ -4101,10 +4101,6 @@ if isempty(dim_label) || (isnumeric(dim_label)&&isnan(dim_label)) % shouldn't ha
     dim_label = "";
 end
 
-if W.label ~= dim_label(1)
-    title(W.label);
-end
-
 % error bar values
 U = W.PosteriorMean'; % concatenate over ranks
 if isempty(W.PosteriorStd)
@@ -4114,19 +4110,33 @@ else
 end
 
 if ~isempty(Dataset) % when plotting weights from different datasets
-scale = interaction_levels(scale', Dataset)';
+    scale = interaction_levels(scale', Dataset)';
 end
 if size(scale,2)>1
     % try to convert to matrix representation
     [scale, U, se] = mesh_to_matrix(scale, U, se);
 end
 if size(U,1)==1
-U = shiftdim(U,1);
-se = shiftdim(se,1);
+    U = shiftdim(U,1);
+    se = shiftdim(se,1);
 end
 if ~iscell(scale)
     scale = {scale};
 end
+
+% permute variables for better visibility
+if ~iscolumn(U)
+    % order variables by descending size (with some penalty for changing
+    % order)
+ weighted_siz = size(U) ./ 1.5.^(1:length(size(U)));
+        [~,ord] = sort(weighted_siz,'descend');
+
+        U = permute(U,ord);
+        se = permute(se,ord);
+        scale = scale(ord);
+        dim_label = dim_label(ord);
+end
+
 %if ~isempty(Dataset) % when plotting weights from different datasets
 %    scale{end+1} = Dataset(:);
 %end
@@ -4160,8 +4170,9 @@ if  ismember(plot_type,{'map','image'})|| nCurve>=6
     plot_opt{end+1} = color_map(cm);
     cm = cm + 1;
 else
-    % different colors for each curve
-    if any(strcmp(dim_label(end), cols(:,2)))
+    % select colours
+    reuse_color = any(strcmp(dim_label(end), cols(:,2)));
+    if reuse_color
         % use same colour as used for same variable name
         iCol = find(strcmp(dim_label(end), cols(:,2)),1);
     else
@@ -4246,6 +4257,8 @@ switch plot_type
 
         plot_opt = [{'ylabel','weights'} plot_opt]; %add default y-label
         collapse = verLessThan('matlab', '9.9'); % collapse into single subplot when cannot use nexttile
+
+        % call plotting function
         [~,~,h_nu] = wu([],U,se,scale,plot_opt{:},dim_label, 'collapse',collapse);
 
         % add horizontal line for reference value
@@ -4261,6 +4274,11 @@ switch plot_type
             end
             plot(xlim,y_hline*[1 1], 'Color',.7*[1 1 1]);
         end
+end
+if W.label ~= dim_label(1) && isscalar(h_nu)
+    % add title (unless there are multiple subplots for this set of
+    % weights)
+    title(W.label);
 end
 drawnow;
 end
@@ -4361,11 +4379,11 @@ end
 % % [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
 % % to transform mesh data to matrix form (if the inoccupancy ratio is
 % % smaller than cutoff)
-% 
+%
 % if nargin<4
 %     cutoff = 3;
 % end
-% 
+%
 % % reconstruct weights as matrix
 % S1 = S(:,1);
 % S2 = S(:,2);
@@ -4379,22 +4397,22 @@ end
 % y_unq = unique(S2);
 % nX = length(x_unq);
 % nY = length(y_unq);
-% 
+%
 % % compute ratio of total mesh points by provided points
 % ratio = nX*nY/size(S,1);
-% 
+%
 % % if ratio is above threshold, keep data (i.e. they don't really form a
 % % mesh)
 % if ratio>cutoff
 %     return;
 % end
-% 
+%
 % if ~isvector(U)
 %     nDataset = size(U,2);
 % else
 %     nDataset = 1;
 % end
-% 
+%
 % U2 = nan(nX,nY,nDataset);
 % se2 = nan(nX,nY,nDataset);
 % for iX=1:nX
@@ -4456,10 +4474,10 @@ for i=1:nCombi
         this_val = Uniq{d}(idx{d});
         bool = bool & equal_numeric_or_cell(Scell{d},this_val);
     end
-        if any(bool)
-            U2(i) = U(find(bool,1));
-            se2(i) = se(find(bool,1));
-        end
+    if any(bool)
+        U2(i) = U(find(bool,1));
+        se2(i) = se(find(bool,1));
+    end
 end
 U = squeeze(U2);
 se = squeeze(se2);
@@ -5166,12 +5184,12 @@ end
 function S = constraint_structure(W)
 for i=1:numel(W)
     C = W(i).constraint;
- %   if ~isempty(W(i).basis) && ~W(i).basis.projected
- %       nWeight = W(i).basis.nWeight;
- %       assert(~isnan(nWeight), 'number of weights not determined');
- %   else
-        nWeight = W(i).nWeight;
-  %  end
+    %   if ~isempty(W(i).basis) && ~W(i).basis.projected
+    %       nWeight = W(i).basis.nWeight;
+    %       assert(~isnan(nWeight), 'number of weights not determined');
+    %   else
+    nWeight = W(i).nWeight;
+    %  end
     if isstruct(C) % already a structure
         assert(all(isfield(C,{'V','u'})), 'incorrect constraint structure');
         if ~isfield(C, 'type')

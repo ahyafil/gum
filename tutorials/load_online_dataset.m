@@ -31,5 +31,17 @@ T.accuracy = accuracy_label(accuracy+1);
 % add signed response (for lagged regressor)
 T.response = sign(T.resp-0.5); % -1 or +1
 
+% add trial index
+trial = zeros(height(T),1);
+for i=1:height(T)
+    if ((i==1) || (T.session(i-1) ~= T.session(i)))
+        tt=1; % first trial in session
+    else 
+        tt = tt+1; 
+    end
+    trial(i) = tt; 
+end
+T.trial = trial;
+
 fprintf('done\n');
 end

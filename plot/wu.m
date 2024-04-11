@@ -98,6 +98,9 @@ function varargout = wu(varargin)
 % plotting legend
 % - 'axis' : on which axis dependent measure is plotted along:
 %'Y' (e.g. plot vertical bars, default value) or 'X' (underconstruction)
+% - 'permute': permute the order of dimensions: 'auto' to optimize figure
+% readability, or a permutation order
+% - 'layout': whether to use tiled layout (when more than one subplot)
 %
 % !!check that it works
 % 'ErrorBarStyle': line style for error bars.
@@ -172,7 +175,6 @@ function varargout = wu(varargin)
 %parameter levels (if numerical) ; 'index' to use regular spacing of levels
 %along X axis
 %'pvalue'    : p-values, same size as Ymean
-%'permute'   : a vector to permute the dimensions for plotting (deprecated)
 
 %default values
 X = [];
@@ -191,7 +193,8 @@ linecolor = '';
 errorstyle = '';   % '', {'bar', 'bars', 'errorbar', 'errorbars'}, {'fill', 'area', 'marge'},  {'line', 'lines', 'errorline', 'errorlines'}
 errorlinestyle = ''; % default style for curve errors
 pval = [];
-threshold = .05;%permut = [];
+threshold = .05;
+permut = [];
 correction = 'off';
 statsstyle = '-';
 titl = '';
@@ -206,6 +209,7 @@ legend_style = 'standard';
 IdentityLine = 0; % identity line for 'xy' plot
 shiftrange = 0; % shift in X axis for different curves
 collapse = 0; % whether to collapse second & third dimension
+layout = [];
 
 %% determine syntax
 numargs = cellfun(@isnumeric, varargin) | cellfun(@islogical, varargin) | cellfun(@isdatetime, varargin);  %which arguments are numeric
@@ -445,9 +449,11 @@ while v<=length(varargin)
                 case {'clf', 'noclf'}
                     doclf = varg;
                 case 'permute'
-                    error('not supported anymore');
                     v = v+1;
                     permut = varargin{v};
+                case 'layout'
+                    v = v+1;
+                    layout = varargin{v};
                 case 'xtick'
                     v = v+1;
                     xtick = varargin{v};
@@ -473,9 +479,9 @@ while v<=length(varargin)
                     v = v +1;
                     shiftrange = varargin{v};
                 case 'collapse'
-v = v +1;
-collapse = logical(varargin{v});
-                    
+                    v = v +1;
+                    collapse = logical(varargin{v});
+
                 otherwise
                     % check whether it is line specification
                     [XL,XC,XM,MSG] = colstyle(varg);
@@ -615,7 +621,7 @@ for i=1:length(levels)
     %     end
 
     % turn to string
-levels{i} = string(levels{i});
+    levels{i} = string(levels{i});
 
     % replace '_' chars
     if removeunderscore
@@ -626,9 +632,6 @@ end
 if VerticalLabel && ~((strcmp(plottype, 'curve')&&nVar~=1) ||  (strcmp(plottype, 'bar')&&any([nVar nPar]~=1)))
     error('vertical labels only for single series bar/curve type');
 end
-
-% use values for xtick from xticklabels, if relevant
-X = get_xtick(X, levels{1}, nPar, xtick);
 
 %% process p-values
 if isempty(pval)
@@ -653,35 +656,61 @@ if isnan(ymin) || ymin==0
 end
 y_pval = ymax + (.05 + .02*(0:nVar-1)/max(nVar-1,1))*(ymax-ymin); % vertical positioning of significance lines
 
-%% default linestyle
-def_linestyle = strlength(linestyle)==0; 
-    if strcmp(plottype, 'xy')
-        linestyle(def_linestyle) = "none";
+%% permute dimensions
+if ~isempty(permut)
+    if isequal(permut,'auto')
+        % automatic: go from highest to lowest number of levels, but with
+        % some penalty to avoid too many permutations
+        weighted_siz = siz ./ 1.5.^(1:length(siz));
+        [~,permut] = sort(weighted_siz,'descend');
     else
-        linestyle(def_linestyle) = "-";
+        assert(length(permut) ==length(siz) && all(ismember(1:length(siz),permut)),...
+            'permute option: ORDER contains an invalid permutation index.');
     end
 
-    %% one property for each level of dim2
-    collapse = collapse && nDim>2;
+    siz = siz(permut);
+    nPar = siz(1);
+    nVar = siz(2);
+    M = permute(M,permut);
+    L = permute(L,permut);
+    U = permute(U,permut);
+    pval = permute(pval,permut);
+    varnames = varnames(permut);
+    levels = levels(permut);
+end
+
+% use values for xtick from xticklabels, if relevant
+X = get_xtick(X, levels{1}, nPar, xtick);
+
+%% default linestyle
+def_linestyle = strlength(linestyle)==0;
+if strcmp(plottype, 'xy')
+    linestyle(def_linestyle) = "none";
+else
+    linestyle(def_linestyle) = "-";
+end
+
+%% one property for each level of dim2
+collapse = collapse && nDim>2;
 
 if isscalar(linestyle)
     if collapse && isscalar(linewidth) && isscalar(markersize) && isscalar(marker) && strcmp(plottype,'curve')
         % if we collapse over dim 2 and 3, by default we will vary
         % linestyle over dim 3
         linestyle = [linestyle ':' '-.' '--'];
-            linestyle = linestyle(1+mod(0:siz(3)-1,length(linestyle)));
+        linestyle = linestyle(1+mod(0:siz(3)-1,length(linestyle)));
     else
-    linestyle = repmat(linestyle, nVar,1);
+        linestyle = repmat(linestyle, nVar,1);
     end
 end
 if isscalar(linewidth)
- linewidth = repmat(linewidth, nVar,1);
+    linewidth = repmat(linewidth, nVar,1);
 end
 if isscalar(markersize)
- markersize = repmat(markersize, nVar,1);
+    markersize = repmat(markersize, nVar,1);
 end
 if isscalar(marker)
- marker = repmat(marker, nVar,1);
+    marker = repmat(marker, nVar,1);
 end
 
 %if ~iscell(linestyle)
@@ -728,48 +757,48 @@ end
 % compute light colours for margin
 if strcmp(plottype, 'curve') && any(strcmp(errorstyle, {'fill', 'area', 'marge'}))
     lightcolour = .8+.2*cor; %light colors
-lightcolour = num2cell(lightcolour,2); % turn into cell array
+    lightcolour = num2cell(lightcolour,2); % turn into cell array
 end
 cor = num2cell(cor,2); % turn into cell array
 
 
 %% collapse 2nd and 3rd dimension
-if collapse 
+if collapse
     new_size = [siz(1) siz(2)*siz(3) siz(4:end)]; % new shape
     M = reshape(M, new_size);
     L = reshape(L, new_size);
     U = reshape(U, new_size);
-    
+
     cor = repmat(cor(:),1,siz(3));
     lightcolour = repmat(cor,1,siz(3));
-   marker = rep_for_collapse(marker,siz);
-      markersize = rep_for_collapse(markersize,siz);
-   linestyle = rep_for_collapse(linestyle,siz);
-   linewidth = rep_for_collapse(linewidth,siz);
-   if ~isempty(varnames{2}) && ~isempty(varnames{3})
-       new_varname = [varnames{2} ',' varnames{3}]; 
-   else
-new_varname = "";
-   end
+    marker = rep_for_collapse(marker,siz);
+    markersize = rep_for_collapse(markersize,siz);
+    linestyle = rep_for_collapse(linestyle,siz);
+    linewidth = rep_for_collapse(linewidth,siz);
+    if ~isempty(varnames{2}) && ~isempty(varnames{3})
+        new_varname = [varnames{2} ',' varnames{3}];
+    else
+        new_varname = "";
+    end
     varnames = [varnames(1) new_varname varnames(4:end)];
-        levels = [levels(1) {interaction_levels(levels{2},levels{3})} levels(4:end)];
+    levels = [levels(1) {interaction_levels(levels{2},levels{3})} levels(4:end)];
 
-        if strcmp(plottype,'bar') % encode dim3 as shade of bar facecolor
-            errorbarpars(end+1:end+2)= {'shades',0};
+    if strcmp(plottype,'bar') % encode dim3 as shade of bar facecolor
+        errorbarpars(end+1:end+2)= {'shades',0};
 
-            for v=1:nVar
+        for v=1:nVar
             towards_light = .2*min(siz(3),3);
             lighter = (1-towards_light)*cor{v,1}+ towards_light; % lightest shade
             towards_dark = .1*min(siz(3),3);
             darker = (1-towards_dark)*cor{v,1}; % darkest shade
             this_cmap = lighter + (0:siz(3)-1)'.*(darker-lighter)./(siz(3)-1);
             cor(v,:) = num2cell(this_cmap,2);
-            end
         end
+    end
 
-       nDim = nDim-1;
+    nDim = nDim-1;
     nVar = nVar*siz(3);
-        siz = new_size;
+    siz = new_size;
 end
 
 if isempty(errorlinestyle)
@@ -838,6 +867,14 @@ end
 is_hold = ishold;
 hold on;
 
+%% layout
+if isempty(layout) && nDim>2
+    % by default, we use layout if there's not any axes already in figure,
+    % or version prior to 2019
+    noTiling = verLessThan('matlab', '9.13'); % we need tilerowcol
+    layout = isempty(get(gcf,'child')) || noTiling;
+end
+
 %% plot
 is_xy = strcmp(plottype,'xy');
 switch nDim %number of dimension
@@ -855,7 +892,13 @@ switch nDim %number of dimension
     case 3 % different panels
         dd = 3+is_xy;
         for s = 1:siz(dd)
-            [~, nRowSubplot,nColSubplot] = subplot2(siz(dd),s);
+            if layout
+                [h_ax(s), nRowSubplot,nColSubplot] = subplot2(siz(dd),s);
+            elseif s>1
+                h_ax(s) = nexttile;
+            else 
+                h_ax(s) = gca;
+            end
             setclim(clim);
             if ~isempty(levels{dd})
                 titl = shortlabel(varnames{dd}, levels{dd}{s}); %title
@@ -872,48 +915,61 @@ switch nDim %number of dimension
             if s>1
                 legend(gca,'off');
             end
-            if mod(s,nColSubplot)~=1
-                ylabel('');
-                set(gca, 'yticklabel',{});
 
+            if layout
+                if mod(s,nColSubplot)~=1
+                    ylabel('');
+                    set(gca, 'yticklabel',{});
+
+                end
+                if ceil(s/nColSubplot)<nRowSubplot
+                    xlabel('');
+                    set(gca, 'xticklabel',{});
+                end
+                axis tight;
             end
-            if ceil(s/nColSubplot)<nRowSubplot
-                xlabel('');
-                set(gca, 'xticklabel',{});
-            end
-            axis tight;
         end
-        sameaxis;
+        sameaxis(h_ax);
 
-    case 4 % different panels
+        %% 4 dimensions: different panels
+    case 4 %
         dd = 3+is_xy;
         ee = 4+is_xy;
 
         for s1 = 1:siz(dd)
             for s2 = 1:siz(ee)
-                subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
-                setclim(clim)
-                titl = [shortlabel(varnames{dd}, levels{dd}{s1}) ', ' shortlabel(varnames{ee}, levels{ee}{s2})];
+                if layout
+                    subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
+                elseif s1*s2>1
+                    h_ax(s) = nexttile;
+                    else 
+                h_ax(s) = gca;
+                end
+
+                setclim(clim); % colour limits
+                titl = [shortlabel(varnames{dd}, levels{dd}{s1}) ', ' shortlabel(varnames{ee}, levels{ee}{s2})]; % title
 
                 % plot
                 if is_xy
-                    plothandle(:,s1,s2) = pcurve(X, M(:,:,:,s1,s2), L(:,:,:,s1,s2), U(:,:,:,s1,s2), pval(:,:,:,s1, s2), ...
+                    plothandle(s1,s2) = pcurve(X, M(:,:,:,s1,s2), L(:,:,:,s1,s2), U(:,:,:,s1,s2), pval(:,:,:,s1, s2), ...
                         varnames(1:3), levels(1:3));
                 else
-                    plothandle(:,s1,s2) = pcurve(X, M(:,:,s1,s2), L(:,:,s1,s2), U(:,:,s1,s2), pval(:,:,s1, s2), ...
+                    plothandle(s1,s2) = pcurve(X, M(:,:,s1,s2), L(:,:,s1,s2), U(:,:,s1,s2), pval(:,:,s1, s2), ...
                         varnames(1:2), levels(1:2));
                 end
                 if s1>1 || s2>1
                     legend off;
                 end
-                if s1>1
-                    ylabel('');
-                    set(gca, 'yticklabel',{});
+                if layout
+                    if s1>1
+                        ylabel('');
+                        set(gca, 'yticklabel',{});
 
-                end
-                if s2<siz(4)
-                    xlabel('');
-                    set(gca, 'xticklabel',{});
+                    end
+                    if s2<siz(4)
+                        xlabel('');
+                        set(gca, 'xticklabel',{});
+                    end
                 end
             end
             axis tight;
@@ -947,6 +1003,8 @@ end
 
         X = X(:)';
         hold on;
+
+        phandle = struct('axis',gca);
 
         %% compute probability values to display
         %         if isnumeric(PP),
@@ -1407,10 +1465,10 @@ end
 end
 
 %% interaction levels when collapsing 2nd and 3rd dim
-    function str =interaction_levels(str1,str2)
-    n1 = numel(str1);
+function str =interaction_levels(str1,str2)
+n1 = numel(str1);
 str1 = repmat(str1(:),numel(str2),1);
 str2 = repelem(str2(:),n1,1);
 str = str1 + ", " + str2; %concatenate
-    end
+end
 
