@@ -976,7 +976,7 @@ classdef gum
                         %% instead we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
                     end
 
-                    if ~strcmp(vbs,'off')
+                    if ~ismember(vbs,{'off','little'})
                         fprintf('Initial weight inference (%d starting points):', prm.initialpoints);
                     end
                     switch vbs
@@ -1128,7 +1128,9 @@ classdef gum
                 % has converged if improvement in LLH is smaller than epsilon
                 iter = iter + 1; % update iteration counter;
                 LogEvidence = obj.score.LogEvidence;
-                if ~strcmp(vbs,'off')
+                if strcmp(vbs, 'little')
+                    fprintf('*');
+                elseif ~strcmp(vbs,'off')
                     fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
                 end
                 % HP
@@ -1142,6 +1144,10 @@ classdef gum
             %  obj = obj;
             % obj.regressor = M2;
             obj.param = param_tmp;
+
+            if strcmp(vbs, 'little')
+                fprintf('done!\nFinal evidence (%d iterations): %f\n', iter, LogEvidence);
+            end
 
             % allocate fitted hyperparameters to each module
             obj.regressor = obj.regressor.set_hyperparameters(HP);
@@ -3276,9 +3282,12 @@ classdef gum
                 sc = [obj.score];
                 lbl = string({obj.label}); % all model labels
                 AllSplittingLevels = cat(1,sc.Dataset); % dataset x splitting variable array
-
+                
                 AllSplittingLevels_and_ModelLabels = [AllSplittingLevels(:,~iConcat) lbl(:)]; % add also model labels
+                
                 [SplittingLevels,~,iSplittingLevels] = unique(AllSplittingLevels_and_ModelLabels,'rows');
+
+                if ~isrow(SplittingLevels) %% if there are different models or other splitting variables
 
                 % concatenate models that share levels of non-concatenating
                 % variables
@@ -3290,7 +3299,9 @@ classdef gum
                         obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
                     end
                     % concatenate these models together
-                    obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
+                  %  obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
+                                        obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,splitting_variable);
+
                     obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
 
                     concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
@@ -3299,6 +3310,7 @@ classdef gum
                 obj(~concat_idx) = [];
 
                 return;
+                end
             end
 
             %% concatenate weights
@@ -3337,7 +3349,8 @@ classdef gum
                 % appropriate
                 for d=1:nD(1)
                     obj(1).regressor(m).Weights(d).dimensions = string(obj(1).regressor(m).Weights(d).dimensions); % shouldn't be useful
-                    obj(1).regressor(m).Weights(d).dimensions(end+1) = ""; % dataset
+                   
+                    obj(1).regressor(m).Weights(d).dimensions(end+1) = string(splitting_variable); % dataset
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
@@ -4249,9 +4262,9 @@ classdef gum
                 end
             elseif iscell(obj.label)
                 varargin{end+1} = 'Dataset';
-                varargin{end+1} = string(obj.label);
-               % varargin{end+1} = obj.score.SplittingVariable;
+                varargin{end+1} = string(obj.label);             
             end
+% varargin{end+1} = obj.score.SplittingVariable;
 
             % plot regressor weights
             h = plot_weights(obj.regressor,U2, varargin{:});
@@ -6012,7 +6025,7 @@ end
 if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
     str = [str ' (' ];
     Ds = obj.score.Dataset;
-    if isrow(Ds) % single dataset
+    if iscolumn(Ds) % single dataset   
         for v=1:length(Ds)
             if isfield(obj.score,'SplittingVariable')
                 str = [str char(obj.score.SplittingVariable(v)) '='];
@@ -6020,7 +6033,7 @@ if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
             str = [str char(obj.score.Dataset(v)) ','];
         end
     else % concatenated over datasets
-        str = [str num2str(size(Ds,1)) ' '];
+        str = [str num2str(size(Ds,2)) ' '];
         if isfield(obj.score,'SplittingVariable')
             Sv = obj.score.SplittingVariable;
             for v=1:length(Sv)

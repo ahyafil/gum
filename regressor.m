@@ -4096,7 +4096,8 @@ if isempty(W.scale)
     W.scale = 1:W.nWeight;
 end
 scale = W.scale';
-dim_label = W.dimensions;
+%dim_label = [W.dimensions SplittingVariable];
+dim_label = W.dimensions ;
 if isempty(dim_label) || (isnumeric(dim_label)&&isnan(dim_label)) % shouldn't happen but let's make sure
     dim_label = "";
 end
