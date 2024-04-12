@@ -737,7 +737,7 @@ classdef gum
             % set
             % -'CovPriorJacobian': provide gradient of prior covariance matrix w.r.t hyperparameters
             % to compute gradient of MAP LLH over hyperparameters.
-            % - 'maxiter_HP': integer, defining the maximum number of iterations for
+            % - 'maxiter': integer, defining the maximum number of iterations for
             % hyperparameter optimization (default: 200)
             % - 'TolFun': tolerance criterion for stopping optimization
             % - 'verbose':
@@ -754,15 +754,14 @@ classdef gum
             maxiter = 200; % maximum number of iterations
             HP_TolFun = 1e-3; % stopping criterion for hyperparameter fitting
 
-            param = param_structure(varargin);
-
+            pars = param_structure(varargin);
 
             if length(obj)>1
                 %% fitting various models
 
                 for i=1:numel(obj) % use recursive call
                     fprintf('fitting model %d/%d: %s...\n', i, numel(obj), model_full_label(obj(i)));
-                    obj(i) = obj(i).fit(param); % fit individual model
+                    obj(i) = obj(i).fit(pars); % fit individual model
                     fprintf('\n');
                 end
                 return;
@@ -780,20 +779,20 @@ classdef gum
             end
 
             % level of verbosity
-            if isfield(param, 'verbose')
-                obj.param.verbose = param.verbose;
+            if isfield(pars, 'verbose')
+                obj.param.verbose = pars.verbose;
             else
                 obj.param.verbose = 'on';
             end
-            if isfield(param, 'verbose')
+            if isfield(pars, 'verbose')
                 verbose = obj.param.verbose;
-            elseif isfield(param, 'display')
+            elseif isfield(pars, 'display')
                 verbose = obj.param.display;
             end
 
             %%  check fitting method
-            if isfield(param, 'HPfit') % if specified as parameter
-                HPfit = param.HPfit;
+            if isfield(pars, 'HPfit') % if specified as parameter
+                HPfit = pars.HPfit;
                 assert(ischar(HPfit) && any(strcmpi(HPfit, {'em','cv','basic'})), 'incorrect value for field ''HPfit''');
             end
             if strcmp(verbose,'full') && ~strcmp(HPfit,'em')
@@ -802,8 +801,8 @@ classdef gum
                 obj.param.verbose = 'iter';
             end
 
-            if isfield(param, 'gradient')
-                use_gradient = param.gradient;
+            if isfield(pars, 'gradient')
+                use_gradient = pars.gradient;
                 assert(ischar(use_gradient) && any(strcmpi(use_gradient, {'on','off','check'})), 'incorrect value for field ''gradient''');
             end
             if strcmp(HPfit, 'cv') && ismember(use_gradient,{'on','check'})
@@ -820,8 +819,8 @@ classdef gum
             end
 
             %%  check cross validation parameters
-            if isfield(param, 'crossvalidation')
-                obj.param.crossvalidation =  param.crossvalidation;
+            if isfield(pars, 'crossvalidation')
+                obj.param.crossvalidation =  pars.crossvalidation;
             elseif strcmpi(HPfit,'cv')
                 % if asked for cross-validation but did not provide CVset
                 obj.param.crossvalidation = .8; % use 10-fold CVLL with 80% data in training and 20% in test set
@@ -862,24 +861,24 @@ classdef gum
             HP_UB = HP_UB(HP_fittable);
 
             %% optimization parameters
-            if isfield(param, 'maxiter')
-                maxiter = param.maxiter;
-                param.maxiter_HP = param.maxiter;
-                param = rmfield(param, 'maxiter');
-            elseif isfield(param,'maxiter_HP')
-                maxiter = param.maxiter_HP;
+            if isfield(pars, 'maxiter')
+                maxiter = pars.maxiter;
+                pars.maxiter_HP = pars.maxiter;
+                pars = rmfield(pars, 'maxiter');
+            elseif isfield(pars,'maxiter_HP')
+                maxiter = pars.maxiter_HP;
             else
-                param.maxiter_HP = maxiter;
+                pars.maxiter_HP = maxiter;
             end
-            if isfield(param, 'TolFun')
-                HP_TolFun = param.TolFun;
-                param.TolFun_HP = param.TolFun;
-                param = rmfield(param, 'TolFun');
+            if isfield(pars, 'TolFun')
+                HP_TolFun = pars.TolFun;
+                pars.TolFun_HP = pars.TolFun;
+                pars = rmfield(pars, 'TolFun');
             else
-                param.TolFun_HP = HP_TolFun;
+                pars.TolFun_HP = HP_TolFun;
             end
-            if isfield(param, 'initialpoints')
-                obj.param.initialpoints = param.initialpoints;
+            if isfield(pars, 'initialpoints')
+                obj.param.initialpoints = pars.initialpoints;
             end
 
             %% apply fitting method
@@ -3242,7 +3241,10 @@ classdef gum
                 place_first = true;
             end
             nObj = length(obj);
-            assert(nObj>1, 'cannot concatenate over single model or void model');
+
+            if nObj==1 % already a single model
+                return;
+            end
 
             if isfield(obj(1).score, 'SplittingVariable')
                 AllSplitVar = obj(1).score.SplittingVariable;
@@ -3258,7 +3260,7 @@ classdef gum
 
                 % then over models (if more than one)
                 if ~isscalar(obj)
-                obj = obj.concatenate_over_models(place_first,[]);
+                    obj = obj.concatenate_over_models(place_first,[]);
                 end
                 return;
             end
@@ -3446,7 +3448,7 @@ classdef gum
                         obj(1).regressor(m).HP(d) = newHP;
                     end
 
-
+                    % concatenate HP values across models
                     if  ~isempty( HP(1,d).HP)
                         obj(1).regressor(m).HP(d).HP = cat(1,HP(:,d).HP);
                     end
@@ -3473,10 +3475,25 @@ classdef gum
             % Sc = concatenate_score(M) concatenates scores over model
             % array M (for model selection / model comparison)
 
-            n =  numel(obj);
-            %  S = size(obj);
+            if isscalar(obj)
+                Sc = obj.score;
+                return;
+            end
 
+            %% if models depend on datasets, concatenate first over datasets
+                            lbl = string({obj.label}); % all model labels
+                unique_model = isscalar(unique(lbl)); % just one model (then ignore)
+            if isfield(obj(1).score, 'SplittingVariable') && ~unique_model
+                % concatenate first over splitting variables
+                AllSplitVar = obj(1).score.SplittingVariable;
+                for v = 1:length(AllSplitVar)
+                    obj = obj.concatenate_over_models(true, AllSplitVar(v));
+                end
+            end
+
+            %% select fieldnames to concatenate
             all_score = {obj.score};
+            n = numel(obj);
 
             with_score = ~cellfun(@isempty, all_score); % models with scores
 
@@ -3489,6 +3506,7 @@ classdef gum
             % select metrics that are present in at least one model
             metrics = metrics(ismember(metrics, all_fieldnames));
 
+            %% concatenate each fieldname
             Sc = struct;
             for i=1:length(metrics)
                 mt = metrics{i};
@@ -3652,60 +3670,6 @@ classdef gum
             % M.export_hyperparameters_to_csv(filename) exports hyperparameter data as csv file.
             %
             export_hyperparameters_to_csv(obj.regressor, filename);
-        end
-
-        %%  DATASET CODING DIMENSION FOR ARRAY OF MODELS
-        function [d, L] = dataset_dimension(obj)
-            %  d = dataset_dimension(M) gives the dimension encoding
-            %  datasets if M is an array of models.
-            % Returns nan if there is none
-            %
-            %[d, L] = dataset_dimension(obj)
-            % L provides the labels for all datasets
-            if isscalar(obj)
-                d = nan;
-                return;
-            end
-
-            % formula for each model
-            F = {obj.formula};
-            F = reshape(F,size(obj));
-            F = string(F);
-
-            % when formula does not vary across one dimension, then this
-            % dimension encodes dataset
-            found_it = 0;
-            D = ndims(obj);
-            for d=1:D
-                % select first formula along this dimension
-                C = cell(1,D);
-                for dd=1:D
-                    C{dd} = 1:size(obj,dd);
-                end
-                C{d} = 1;
-                F1 = F(C{:});
-
-                %all formulas are the same along this dim
-                found_it = all(F==F1,'all');
-                if found_it
-                    % extract dataset labels
-                    L = cellfun(@(x) x.Dataset, {obj.score},'unif',0); % dataset label for each models
-                    L = reshape(L,size(obj));
-
-                    % avoid repeats
-                    C = num2cell(ones(1,D));
-                    C{d} = 1:size(obj,d);
-                    L = L(C{:});
-
-                    break;
-                end
-            end
-
-            if ~found_it
-                d = nan;
-                L = [];
-            end
-
         end
 
         %% COMPUTE PREDICTOR VARIANCE FROM EACH MODULE
@@ -3980,14 +3944,20 @@ classdef gum
 
         %% PLOT DESIGN MATRIX
         function h = plot_design_matrix(obj, varargin)
-            % plot_design_matrix(M) plots the design matrix
+            % M.plot_design_matrix() plots the design matrix
             %
-            % plot_design_matrix(M,subset) to plot design matrix for a subset of observations
+            % M.plot_design_matrix(subset) to plot design matrix for a subset of observations
             %
-            % plot_design_matrix(M,subset,dims)
-            % plot_design_matrix(M,subset,dims, init_weight)
+            % M.plot_design_matrix(subset,dims)
+                         % defines which dimension to project onto for each regressor
+            % (for multidimensional regressors). dims must be a vector or cell array of
+            % the same size as R. Default value is 1. Cell array allows to
+            % project over multiple dimensions (use 0 to project over all).
             %
-            % h = plot_design_matrix(...) provide graphic handles
+            % M.plot_design_matrix(subset,dims, init_weight) sets
+            % whether weights should be initialized (default:true).
+            %
+            % h = M.plot_design_matrix(...) provide graphic handles
             %
             % See gum.plot_vif
 
@@ -4013,7 +3983,6 @@ classdef gum
 
             set(gca, 'ydir','reverse');
             f = 1;
-            with_subsets = false;
             for m=1:obj.nMod
                 h_txt = [];
                 W = [M(m).Weights(dims{m})]; %weights structure
@@ -4043,7 +4012,7 @@ classdef gum
                         if W(d).dimensions(end)=="index" % concatenated regressors
                             subset_label = W(d).label(subset_label);
                         end
-                        xxval = [nRegCum(f)+.5 xval nRegCum(f+1)+.5];
+                        xxval = [nRegCum(f)+.5 xval' nRegCum(f+1)+.5];
                         for ss=1:length(subset_label)
                             text( mean(xxval(ss:ss+1)), 0.5, string(subset_label(ss)),...
                                 'verticalalignment','bottom','horizontalalignment','center');
@@ -4053,12 +4022,10 @@ classdef gum
                     f = f+1;
                 end
 
-
                 h.Objects = [h.Objects h_txt];
             end
 
             axis off;
-
         end
 
         %% PLOT VIF
@@ -4163,6 +4130,7 @@ classdef gum
             %
             % h = plot_prior_covariance(...) provide graphical handles
 
+            assert(isscalar(obj), 'plot_prior_covariance is callable only for single models');
 
             % plots posterior covariance separately
             h = obj.regressor.plot_prior_covariance(varargin{:});
@@ -4275,13 +4243,14 @@ classdef gum
             if length(Dataset)>1 && ~all(Dataset=="")
                 varargin{end+1} = 'Dataset';
                 if iscolumn(obj.score.Dataset)
-                varargin{end+1} = string(obj.score.Dataset)';
+                    varargin{end+1} = string(obj.score.Dataset)';
                 else
-                varargin{end+1} = string(obj.score.Dataset);
+                    varargin{end+1} = string(obj.score.Dataset);
                 end
             elseif iscell(obj.label)
                 varargin{end+1} = 'Dataset';
                 varargin{end+1} = string(obj.label);
+               % varargin{end+1} = obj.score.SplittingVariable;
             end
 
             % plot regressor weights
@@ -4439,82 +4408,43 @@ classdef gum
 
 
         %% PLOT SCORES (MODE COMPARISON)
-        function [h,X] = plot_score(obj, score, ref, labels, plottype)
-            %  plot_score(M, score)
+        function [h,X] = plot_score(obj, score, plottype, ref, labels)
+            %  M.plot_score(score)
             % plots score for different models (for model comparison)
             % score can be either
             % 'AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence','LogJoint','LogPrior','FittingTime'
             % It can also be a cell array, in which case each score is
             % plotted in a different subplot
             %
-            % plot_score(M, score, ref)
-            % ref provides an index to the reference model (its value is set to 0)
-            %
-            % plot_score(M, score, ref, labels)
-            % provides labels to each model - if not provided during model
-            % definition
-            %
-            % plot_score(M, score, ref, 'scatter') to use scatter plot
-            % plot_score(M, score, ref, 'bar') to use bar plots
+            % M.plot_score(score, plottype) with values of plottype:
+            % - 'scatter' (to use scatter plot)
+            % - 'bar' (to use bar plots)
+            % - 'hist' (to use histograms)
             % (default is scatter plot when comparing over multiple
             % datasets, bar plot otherwise
             %
+            % M.plot_score(score, plottype, ref)
+            % ref provides an index to the reference model (its value is
+            % set to 0) and plot difference of metrics between each model
+            % and reference model (i.e. DeltaAIC)
+            %
+            % M.plot_score(score, plottype, ref, labels)
+            % provides labels to each model - if not provided during model
+            % definition
+            %
             %  h = plot_score(...) provides graphical handles
 
-            if nargin<3
+            if nargin<4
                 ref = [];
+            end
+            if nargin<5
+                labels = [];
             end
             if any(ismember(score,{'AIC','AICc','BIC'})) && ~all(obj.isfitted,'all')
                 error('''AIC'',''BIC'' and ''AICc'' are restricted to fitted models - for inferred models, use ''AIC_infer'',''BIC_infer'' and ''AICc_infer'' instead');
-
             end
 
-            [dataset_dim,dataset_label] = dataset_dimension(obj);
-            with_dataset_dim = ~isnan(dataset_dim);
-
-            % define plot type
-            if nargin<5
-                if isnan(dataset_dim)
-                    plottype = 'bar';
-                else
-                    plottype = 'scatter';
-
-                end
-            else
-                assert(ismember(plottype, {'bar','scatter','hist'}));
-            end
-
-            % define labels
-            if nargin<4 || isempty(labels)
-                labels = {obj.label};
-                cnt = 1;
-                for m=1:numel(obj)
-                    if isempty(labels{m})
-                        labels{m} = ['unnamed' num2str(cnt)];
-                        cnt = cnt+1;
-                    end
-                end
-                labels = reshape(labels, size(obj));
-
-                % if comparing across different datasets, keep just one set
-                % of model labels
-                if with_dataset_dim
-                    C =cell(1,ndims(obj));
-                    for dd=1:ndims(obj)
-                        C{dd} = 1:size(obj,dd);
-                    end
-                    C{dataset_dim} = 1;
-                    labels = labels(C{:});
-
-                    % now use dataset labels instead
-                    if strcmp(plottype, 'bar')
-                        model_label = labels;
-                        labels = dataset_label;
-                    end
-                end
-            end
-
-            % if cell array of score, plot each one in a different subplot
+            %% if cell array of score, plot each one in a different subplot
             if iscell(score)
                 nScore = length(score);
                 X = cell(1,nScore);
@@ -4527,6 +4457,55 @@ classdef gum
                 return;
             end
 
+            %% concatenate scores of different models into single structure
+            Sc =  concatenate_score(obj);
+
+ assert(~isfield(Sc,'SplittingVariable') || isscalar(Sc.SplittingVariable),...
+     'not coded yet for more than one splitting variable');
+
+ DatasetLevels = Sc.Dataset(:,1); % datasets (repeated over columns)
+ different_datasets = ~isempty(DatasetLevels);
+
+                if iscolumn(Sc.LogLikelihood) %model is on last dimension
+                    model_dim = 1;
+                else
+                model_dim = ndims(Sc.LogLikelihood);
+                end
+
+            % define plot type
+            if nargin<3
+                if ~different_datasets
+                    plottype = 'bar';
+                else
+                    plottype = 'scatter';
+                end
+            else
+                assert(ismember(plottype, {'bar','scatter','hist'}));
+            end
+
+            % define labels
+            if isempty(labels)
+                labels = {obj.label}; % model labels
+
+ % if comparing across different datasets, keep just one set
+                % of model labels
+                if different_datasets
+                    labels = labels(1:length(DatasetLevels):end);
+                end
+                
+                %name unnamed models
+                Unlabelled = cellfun(@isempty, labels);
+                nUnlabelled = sum(Unlabelled);
+                labels(Unlabelled) = cellstr("model"+(1:nUnlabelled));
+
+       %         if different_datasets && strcmp(plottype, 'bar')
+                if different_datasets 
+                    % now use dataset labels instead
+                        model_label = labels;
+                        labels = DatasetLevels;
+                end                
+            end
+
             % list of all possible metrics
             metrics = metrics_list();
 
@@ -4537,24 +4516,38 @@ classdef gum
             end
             score = metrics{i_score};
 
-            % concatenate scores of different models into single structure
-            Sc =  concatenate_score(obj);
-            X = Sc.(score); % extract relevant data
+            % extract relevant data
+            X = Sc.(score);
             if isvector(X)
                 X = X(:);
             end
 
-            if dataset_dim==1
-                X = X';
-            end
+           % if dataset_dim==1
+           %     X = X';
+           % end
 
             if ~isempty(ref) % use one as reference
-                X = X - X(ref,:);
+                % when plotting over various datasets, dimension coding for model is
+                % the last
+                if isstring(ref) || ischar(ref)
+                    assert(ismember(ref, model_label),'''ref'' does not match any of the model labels');
+                    ref = find(strcmp(ref, model_label));
+                end
+
+                siz = size(X);
+
+                % reshape to 2D array with model id as column
+                X = reshape(X, numel(X)/siz(model_dim), siz(model_dim));
+
+                % compute difference relative to reference model
+                X = X - X(:,ref);
+            
+                X = reshape(X,siz); % back to original size
                 score = ['\Delta ' score];
             end
 
-            if  with_dataset_dim && strcmp(plottype, 'bar')
-                X = X';
+            if  different_datasets && strcmp(plottype, 'bar')
+              %  X = X';
             end
 
             % draw bars
@@ -4562,7 +4555,7 @@ classdef gum
                 case 'bar'
                     h = barh(X);
 
-                    if with_dataset_dim
+                    if different_datasets
                         legend(model_label);
                     end
                 case 'scatter'

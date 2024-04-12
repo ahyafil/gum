@@ -3456,7 +3456,7 @@ classdef regressor
             end
 
             % create lagged data array
-            [obj.Data, LagLevels] = create_lagged_data(obj.Data, Lags, nLag, Group, single_regressor);
+            [obj.Data, LagLevels, Lags] = create_lagged_data(obj.Data, Lags, nLag, Group, single_regressor);
 
             % labels when there's only lag 1 ("previous...")
             if nLag==1
@@ -4536,7 +4536,7 @@ end
 end
 
 %% CREATE LAGGED DATA
-function [Dlag, LagLevels] = create_lagged_data(D, Lags, nLag, Group, single_regressor)
+function [Dlag, LagLevels, Lags] = create_lagged_data(D, Lags, nLag, Group, single_regressor)
 
 S = size(D);
 
