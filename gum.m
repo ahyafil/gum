@@ -27,12 +27,6 @@ classdef gum
     % - 'constant': whether a regressor of ones is included (to capture the
     % intercept). Possible values: 'on' [default], 'off'
     %
-    % - 'mixture': for mixture of GUMs: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
-    % (e.g. 'hmm3' for 3-state HMM). The value can also be a user-defined mixture model (defined with mixturemodel). Other fields may be provided:
-    % - 'indexComponent': to which component each regressor object is assigned to. If not provided, all regressors are duplicated
-    % (i.e. each state corresponds to the same model but possibly with different weights). indexComponent must be a vector of indices of length K
-    % - 'mixture_regressors' (for 'regressionK' only): matrix of regressors defining which model is used for each observation.
-    % - 'mixture_category' (for 'multinomialK' only): vector of indices of length nObs defining which mixture model is used for each observation
     %
     % Principal methods to run on a GUM (see full list at the end):
     % - inference using M = M.infer();
@@ -200,6 +194,13 @@ classdef gum
     % - allow parallel processing for crossvalid & bootstrap
     % - add mixture object (lapses; built-in: dirichlet, multiple dirichlet, HMM, multinomial log reg)
     % - allow EM for infinite covariance:  we should remove these from computing logdet, i.e. treat them as hyperparameters (if no HP attached)
+    % - 'mixture': for mixture of GUMs: 'multinomialK', 'hmmK', 'regressionK' where K is the number of models.
+    % (e.g. 'hmm3' for 3-state HMM). The value can also be a user-defined mixture model (defined with mixturemodel). Other fields may be provided:
+    % - 'indexComponent': to which component each regressor object is assigned to. If not provided, all regressors are duplicated
+    % (i.e. each state corresponds to the same model but possibly with different weights). indexComponent must be a vector of indices of length K
+    % - 'mixture_regressors' (for 'regressionK' only): matrix of regressors defining which model is used for each observation.
+    % - 'mixture_category' (for 'multinomialK' only): vector of indices of length nObs defining which mixture model is used for each observation
+
 
     properties
         formula = ''
@@ -481,7 +482,11 @@ classdef gum
             else
                 typestr = 'GUM';
             end
-            fprintf('%16s: %14s     %16s: %14s\n', 'Type',typestr, 'Observations', obj.obs);
+            priorstr = prior_type(obj);
+            if strcmp(priorstr,'none')
+                priorstr = 'no';
+            end
+            fprintf('%16s: %s (%5s prior)   %16s: %14s\n', 'Type',typestr, priorstr, 'Observations', obj.obs);
             fprintf('%16s: %14d     %16s: %14d\n', 'nRegressorBlock',obj.nObs, 'ObservationBlock', obj.nMod);
 
             % add scores to summary
@@ -2435,6 +2440,25 @@ classdef gum
             end
         end
 
+        %% PRIOR TYPE
+        function str = prior_type(obj)
+            % str = prior_type(M) gives the type of prior over regressors
+            % possible values are 'none', 'L2' or 'mixed'
+
+            str = strings(size(obj));
+            for i=1:numel(obj)
+                P = [obj(i).regressor.Prior];
+                all_prior_types = {P.type};
+                if all(strcmp(all_prior_types,'none'))
+                    str(i) = "none";
+                elseif all(strncmp(all_prior_types,'L2',2))
+                    str(i) = "L2";
+                else
+                    str(i) = "mixed";
+                end
+            end
+        end
+
         %% TEST IF ANY REGRESSOR HAS INFINITE COVARIANCE
         function bool = is_infinite_covariance(obj)
             % bool = is_infinite_covariance(M) tests if any regressor in
@@ -3282,34 +3306,34 @@ classdef gum
                 sc = [obj.score];
                 lbl = string({obj.label}); % all model labels
                 AllSplittingLevels = cat(1,sc.Dataset); % dataset x splitting variable array
-                
+
                 AllSplittingLevels_and_ModelLabels = [AllSplittingLevels(:,~iConcat) lbl(:)]; % add also model labels
-                
+
                 [SplittingLevels,~,iSplittingLevels] = unique(AllSplittingLevels_and_ModelLabels,'rows');
 
                 if ~isrow(SplittingLevels) %% if there are different models or other splitting variables
 
-                % concatenate models that share levels of non-concatenating
-                % variables
-                concat_idx = false(size(obj));
-                for s=1:size(SplittingLevels,1)
-                    iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables and model label
+                    % concatenate models that share levels of non-concatenating
+                    % variables
+                    concat_idx = false(size(obj));
+                    for s=1:size(SplittingLevels,1)
+                        iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables and model label
 
-                    for m=1:length(iModel)
-                        obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
+                        for m=1:length(iModel)
+                            obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
+                        end
+                        % concatenate these models together
+                        %  obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
+                        obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,splitting_variable);
+
+                        obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
+
+                        concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
                     end
-                    % concatenate these models together
-                  %  obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
-                                        obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,splitting_variable);
 
-                    obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
+                    obj(~concat_idx) = [];
 
-                    concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
-                end
-
-                obj(~concat_idx) = [];
-
-                return;
+                    return;
                 end
             end
 
@@ -3349,7 +3373,7 @@ classdef gum
                 % appropriate
                 for d=1:nD(1)
                     obj(1).regressor(m).Weights(d).dimensions = string(obj(1).regressor(m).Weights(d).dimensions); % shouldn't be useful
-                   
+
                     obj(1).regressor(m).Weights(d).dimensions(end+1) = string(splitting_variable); % dataset
 
                     % check if different scales used across models
@@ -3494,8 +3518,8 @@ classdef gum
             end
 
             %% if models depend on datasets, concatenate first over datasets
-                            lbl = string({obj.label}); % all model labels
-                unique_model = isscalar(unique(lbl)); % just one model (then ignore)
+            lbl = string({obj.label}); % all model labels
+            unique_model = isscalar(unique(lbl)); % just one model (then ignore)
             if isfield(obj(1).score, 'SplittingVariable') && ~unique_model
                 % concatenate first over splitting variables
                 AllSplitVar = obj(1).score.SplittingVariable;
@@ -3553,9 +3577,9 @@ classdef gum
                     end
                 end
                 X = reshape(X, [new_siz n]);
-                % if isrow(X)
-                %     X = reshape(X,S);
-                % end
+                 if isrow(X)
+                     X = X';
+                 end
                 Sc.(mt) = X;
             end
 
@@ -3962,7 +3986,7 @@ classdef gum
             % M.plot_design_matrix(subset) to plot design matrix for a subset of observations
             %
             % M.plot_design_matrix(subset,dims)
-                         % defines which dimension to project onto for each regressor
+            % defines which dimension to project onto for each regressor
             % (for multidimensional regressors). dims must be a vector or cell array of
             % the same size as R. Default value is 1. Cell array allows to
             % project over multiple dimensions (use 0 to project over all).
@@ -4061,9 +4085,15 @@ classdef gum
 
             idx = [1:length(obj.regressor); D]; % 2-rows columns for which regressor to plot
 
-            % now plot
             obj.score.isEstimated = true; % to allow plotting
-            h = obj.plot_weights(idx);
+
+            % do not plot for offset (if included in model)
+            if ismember("offset", obj.regressor.weight_labels)
+                obj = obj.disable_plot("offset");
+            end
+
+            % now plot
+            h = obj.plot_weights(idx, 'ylabel','VIF');
 
             set_figure_name(gcf, obj, 'VIF'); % figure name
         end
@@ -4262,9 +4292,9 @@ classdef gum
                 end
             elseif iscell(obj.label)
                 varargin{end+1} = 'Dataset';
-                varargin{end+1} = string(obj.label);             
+                varargin{end+1} = string(obj.label);
             end
-% varargin{end+1} = obj.score.SplittingVariable;
+            % varargin{end+1} = obj.score.SplittingVariable;
 
             % plot regressor weights
             h = plot_weights(obj.regressor,U2, varargin{:});
@@ -4425,8 +4455,14 @@ classdef gum
             %  M.plot_score(score)
             % plots score for different models (for model comparison)
             % score can be either
-            % 'AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence','LogJoint','LogPrior','FittingTime'
-            % It can also be a cell array, in which case each score is
+            % 'AIC','AICc','BIC','LogEvidence','LogJoint','LogPrior','FittingTime'
+            % For non-fitted model (i.e. after using infer() method), AIC,
+            % AICc and BIC refer to the likelihood penalized by the number of free regressor weights.
+            % For fitted models (i.e. after using fit() method), AIC, AICc
+            % and BIC refer to the marginal evidence penalized by the
+            % number of free hyperparameters.
+            %
+            % score can also be a cell array, in which case each score is
             % plotted in a different subplot
             %
             % M.plot_score(score, plottype) with values of plottype:
@@ -4447,14 +4483,20 @@ classdef gum
             %
             %  h = plot_score(...) provides graphical handles
 
+            if nargin<3
+                plottype = [];
+            end
             if nargin<4
                 ref = [];
             end
             if nargin<5
                 labels = [];
             end
-            if any(ismember(score,{'AIC','AICc','BIC'})) && ~all(obj.isfitted,'all')
-                error('''AIC'',''BIC'' and ''AICc'' are restricted to fitted models - for inferred models, use ''AIC_infer'',''BIC_infer'' and ''AICc_infer'' instead');
+            if any(ismember(score,{'AIC','AICc','BIC'})) && ~all(obj.isfitted==obj(1).isfitted,'all')
+                error('Models should be either all fitted or non-fitted');
+            end
+            if any(ismember(score,{'AIC','AICc','BIC'})) && all(~obj.isfitted,'all') && ~all(strcmp(obj.prior_type, 'none'))
+                warning('Penalized likelihoods (AIC, AICc, BIC) of unfitted models are not recommended for models with priors. It is recommended to either remove the prior or fit the models.');
             end
 
             %% if cell array of score, plot each one in a different subplot
@@ -4465,28 +4507,34 @@ classdef gum
                 for s=1:nScore
                     subplot(1,nScore,s);
 
-                    [h{s},X{s}] = plot_score(obj, score{s}, ref, labels); % recursive call
+                    [h{s},X{s}] = plot_score(obj, score{s}, plottype, ref, labels); % recursive call
                 end
                 return;
             end
 
+            %% if AIC, BIC, AICc for non-fitted model, interpret as penalized likelihood
+            score_label = score;
+            score = strrep(score,'AIC','AIC_infer');
+            score = strrep(score,'AICc','AICc_infer');
+            score = strrep(score,'BIC','BIC_infer');
+
             %% concatenate scores of different models into single structure
             Sc =  concatenate_score(obj);
 
- assert(~isfield(Sc,'SplittingVariable') || isscalar(Sc.SplittingVariable),...
-     'not coded yet for more than one splitting variable');
+            assert(~isfield(Sc,'SplittingVariable') || isscalar(Sc.SplittingVariable),...
+                'not coded yet for more than one splitting variable');
 
- DatasetLevels = Sc.Dataset(:,1); % datasets (repeated over columns)
- different_datasets = ~isempty(DatasetLevels);
+            DatasetLevels = Sc.Dataset(:,1); % datasets (repeated over columns)
+            different_datasets = any(strlength(DatasetLevels)>0);
 
-                if iscolumn(Sc.LogLikelihood) %model is on last dimension
-                    model_dim = 1;
-                else
+            if iscolumn(Sc.LogLikelihood) %model is on last dimension
+                model_dim = 1;
+            else
                 model_dim = ndims(Sc.LogLikelihood);
-                end
+            end
 
             % define plot type
-            if nargin<3
+            if isempty(plottype)
                 if ~different_datasets
                     plottype = 'bar';
                 else
@@ -4500,23 +4548,22 @@ classdef gum
             if isempty(labels)
                 labels = {obj.label}; % model labels
 
- % if comparing across different datasets, keep just one set
+                % if comparing across different datasets, keep just one set
                 % of model labels
                 if different_datasets
                     labels = labels(1:length(DatasetLevels):end);
                 end
-                
+
                 %name unnamed models
                 Unlabelled = cellfun(@isempty, labels);
                 nUnlabelled = sum(Unlabelled);
                 labels(Unlabelled) = cellstr("model"+(1:nUnlabelled));
 
-       %         if different_datasets && strcmp(plottype, 'bar')
-                if different_datasets 
+                model_label = labels;
+                if different_datasets
                     % now use dataset labels instead
-                        model_label = labels;
-                        labels = DatasetLevels;
-                end                
+                    labels = DatasetLevels;
+                end
             end
 
             % list of all possible metrics
@@ -4535,9 +4582,9 @@ classdef gum
                 X = X(:);
             end
 
-           % if dataset_dim==1
-           %     X = X';
-           % end
+            % if dataset_dim==1
+            %     X = X';
+            % end
 
             if ~isempty(ref) % use one as reference
                 % when plotting over various datasets, dimension coding for model is
@@ -4554,13 +4601,13 @@ classdef gum
 
                 % compute difference relative to reference model
                 X = X - X(:,ref);
-            
+
                 X = reshape(X,siz); % back to original size
-                score = ['\Delta ' score];
+                score_label = ['\Delta ' score_label];
             end
 
             if  different_datasets && strcmp(plottype, 'bar')
-              %  X = X';
+                %  X = X';
             end
 
             % draw bars
@@ -4585,7 +4632,7 @@ classdef gum
                     histogram(X);
 
             end
-            xlabel(score);
+            xlabel(score_label);
 
             if ~isempty(labels) && ~strcmp(plottype,'hist')
                 yticks(1:length(labels))
@@ -6025,7 +6072,7 @@ end
 if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
     str = [str ' (' ];
     Ds = obj.score.Dataset;
-    if iscolumn(Ds) % single dataset   
+    if iscolumn(Ds) % single dataset
         for v=1:length(Ds)
             if isfield(obj.score,'SplittingVariable')
                 str = [str char(obj.score.SplittingVariable(v)) '='];

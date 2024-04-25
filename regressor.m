@@ -3833,7 +3833,7 @@ classdef regressor
             cols = defcolor;
             cols{1,2} = ''; % add variable column
 
-            if verLessThan('matlab', '9.9') || only_nsubplot
+           % if verLessThan('matlab', '9.9') || only_nsubplot
                 % cannot use nexttile-> compute number of subplots a priori
                 % (may be wrong)
                 nSubplotsReg = zeros(1,size(idx,2));
@@ -3852,7 +3852,7 @@ classdef regressor
                     h = nSubplots;
                     return;
                 end
-            end
+         %   end
 
             %% process extra arguments
             v = 1;
@@ -3926,14 +3926,14 @@ classdef regressor
         end
 
         %% DEFINE PLOTTING FUNCTION
-        function obj = define_plot(obj, fun, label)
+        function obj = define_plot(obj, label, fun)
             % R = R.define_plot(label, fun) where fun is a function handle to use
             % this function for plotting weights instead of default options.
             % R = R.define_plot(label,'none') to avoid plotting regressor set when
             % plotting model.
             % R = R.define_plot(label,'auto') to use default options.
 
-            if nargin>2
+            if nargin>1
                 idx = find_weights(obj,label);
             else
                 idx = find_weights(obj);
@@ -4166,19 +4166,21 @@ end
 
 %% define color
 plot_opt{end+1} = 'Color';
-if  ismember(plot_type,{'map','image'})|| nCurve>=6
+if  ismember(plot_type,{'map','image'})
     % use color map
     plot_opt{end+1} = color_map(cm);
     cm = cm + 1;
 else
     % select colours
-    reuse_color = any(strcmp(dim_label(end), cols(:,2)));
+    color_dim = min(length(dim_label),2);% dimension where colour is varied
+    color_dim_label = dim_label(color_dim); %corresponding label
+    reuse_color = any(strcmp(color_dim_label, cols(:,2)));
     if reuse_color
         % use same colour as used for same variable name
-        iCol = find(strcmp(dim_label(end), cols(:,2)),1);
+        iCol = find(strcmp(color_dim_label, cols(:,2)),1);
     else
         iCol = find(cellfun(@isempty,cols(:,2)),1); % first not-used colour
-        cols(iCol+(0:nCurve-1),2) = {dim_label(end)}; % assign this variable for all colour used
+        cols(iCol+(0:nCurve-1),2) = {char(color_dim_label)}; % assign this variable for all colour used
         if isempty(cols{end,1}) % already used all colours
             iMissing = find(cellfun(@isempty, cols(:,1)),1);
             cols(iMissing+(0:length(defcolor)-1),1) = defcolor; % assign same colours again
