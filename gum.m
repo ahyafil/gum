@@ -3270,6 +3270,9 @@ classdef gum
             if nargin==1 || isempty(place_first) % whether we put model index as first dimension in weights
                 place_first = true;
             end
+            if nargin<3
+                splitting_variable = [];
+            end
             nObj = length(obj);
 
             if nObj==1 % already a single model
@@ -3295,7 +3298,7 @@ classdef gum
                 return;
             end
 
-            withSplittingVariable = nargin>2 && ~isempty(splitting_variable);
+            withSplittingVariable = ~isempty(splitting_variable);
 
             if withSplittingVariable % concatenate over splitting variable
                 assert(ismember(splitting_variable, AllSplitVar),...
@@ -3374,7 +3377,9 @@ classdef gum
                 for d=1:nD(1)
                     obj(1).regressor(m).Weights(d).dimensions = string(obj(1).regressor(m).Weights(d).dimensions); % shouldn't be useful
 
+                    if withSplittingVariable
                     obj(1).regressor(m).Weights(d).dimensions(end+1) = string(splitting_variable); % dataset
+                    end
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
@@ -3446,7 +3451,7 @@ classdef gum
                 HP = cellfun(@(x) x(m).HP, {obj.regressor},'unif',0);
                 HP = cat(1,HP{:});
                 for d=1:size(HP,2)
-                    lbl = {HP.label};
+                    lbl = {HP(:,d).label};
 
                     % if uses different hyperparameters across models (e.g.
                     % GP vs basis functions)
@@ -3474,15 +3479,14 @@ classdef gum
 
                             % replace with larger arrays with nans for
                             % missing values
-                            HP(i).HP = pad_with_nan(HP(i).HP, nVal, idx);
+                            HP(i,d).HP = pad_with_nan(HP(i,d).HP, nVal, idx);
 
-                            newHP.UB(idx) = HP(i).UB;
-                            newHP.LB(idx) = HP(i).LB;
-                            newHP.fit(idx) = HP(i).fit;
-                            newHP.type(idx) = HP(i).type;
-
+                            newHP.UB(idx) = HP(i,d).UB;
+                            newHP.LB(idx) = HP(i,d).LB;
+                            newHP.fit(idx) = HP(i,d).fit;
+                            newHP.type(idx) = HP(i,d).type;
                         end
-                        obj(1).regressor(m).HP(d) = newHP;
+                        obj(1).regressor(m).HP(1,d) = newHP;
                     end
 
                     % concatenate HP values across models
