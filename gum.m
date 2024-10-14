@@ -99,6 +99,7 @@ classdef gum
     % - 'get_hyperparameter_structure': get structure for hyperparameter data
     % - 'freeze_weights': freezes weights and parameters in the model
     % - 'knockout': remove set of regressors from model
+    % - 'add_regressor': add regressor(s) to model
     % - 'clear_data': clear raw data to make lighter object
     % - 'save': save model into .mat file
     %
@@ -170,6 +171,8 @@ classdef gum
 
 
     % TODO
+    % - do not use spectral trick if not actually reducing weight space
+    % (CHECK)
     % - parameter recovery
     % - binary model: any values
     % - constraints: add custom field, i.e. "mean3"
@@ -185,6 +188,7 @@ classdef gum
     % - spectral trick (marginal likelihood in EM sometimes decreases - because of change of basis?)
     % - spectral trick for periodic: test; change prior (do not use Squared
     % Exp)
+    % - allow also L2, ard2 and no prior for fourier
     % - link functions as in glmfit
     % - test rank again
     % - add full cov prior (e.g. for GLMM w full cov matrix)
@@ -620,6 +624,39 @@ classdef gum
                 drop_unused = false;
             end
 
+            if length(obj)>1
+                if all([obj.nObs]==obj(1).nObs)
+                    % if all models have same number of observations, then
+                    % use same subset for all
+                    for i=1:numel(obj)
+                        obj(i) = obj(i).extract_observations(subset,drop_unused);
+                    end
+                    return;
+
+                else
+                    % split dataset, so use corresponing subset for all
+                    nObsTot = sum([obj.nObs]);
+                    if ~islogical(subset)
+                        assert(max(subset)<=nObsTot, 'indices of subset array should match total number of observations');
+
+                        % turn to logical array
+                        tmp = false(1,nObsTot);
+                        tmp(subset) = true;
+                        subset = tmp;
+                    else
+                        assert(length(subset)==nObsTot, 'length of subset logical array should match total number of observations');
+                    end
+                    for i=1:numel(obj)
+                        % use specific subset
+                        this_subset = subset(obj(i).param.split);
+                        obj(i) = obj(i).extract_observations(this_subset,drop_unused);
+                    end
+                    return;
+
+                end
+            end
+
+
             obj.T = obj.T(subset);
             n_obs = length(obj.T);
             obj.nObs = n_obs;
@@ -687,7 +724,7 @@ classdef gum
                 subset = find(idV==v);
 
                 objS(v) = obj.extract_observations(subset, true);
-                objS(v).param.split = idV; % know the index of selected datapoints is useful for stratified cross-validation
+                objS(v).param.split = idV==v; % know the index of selected datapoints is useful for stratified cross-validation
 
                 this_V = V(v,:);
                 if single_splitting_var
@@ -2198,7 +2235,8 @@ classdef gum
                     if strcmp(obj.param.verbose, 'on')
                         fprintf(DisplayChar(iter, any(FullHessianUpdate)));
                     elseif strcmp(obj.param.verbose, 'full')
-                        fprintf('iter %d, log-joint: %f\n',iter,logjoint);
+                        fprintf('iter %d, log-joint: %f%s\n',iter,logjoint,...
+                            repmat(' (full hessian update)',1,FullHessianUpdate(cc)));
                     end
 
                     logjoint_hist(iter) = logjoint;
@@ -3127,6 +3165,7 @@ classdef gum
             % weight.
             % If M is an array of GUM objects, W is a 2D structure array
             % where each row is for a different model.
+            assert(isscalar(obj),'get_weight_structure only works for scalar GUM object');
             for i=1:numel(obj)
                 if nargin>1
                     W(i,:) = get_weight_structure(obj.regressor,label);
@@ -3182,6 +3221,16 @@ classdef gum
             % M = M.knockout('all') creates an array of models, where in
             % each model one of the regressor is knocked-out
 
+            % if more than one object, recursive call
+            if length(obj)>1
+                Mc = cell(1,numel(obj));
+                for i=1:numel(obj)
+                    Mc{i} = knockout(obj(i),index);
+                end
+                obj = [Mc{:}];
+                return;
+            end
+
             % M.knockout("all") syntax
             if isequal(index,'all') || isequal(index,"all")
                 obj = repmat(obj,1,obj.nMod);
@@ -3207,6 +3256,49 @@ classdef gum
             % reset metrics
             obj.score.isEstimated = 0;
             obj.score.isFitted = 0;
+            obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
+            obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
+        end
+
+        %% ADD REGRESSOR
+        function obj = add_regressor(obj, R, pos)
+            % M = M.add_regressor(R) to add regressor(s) to model
+            % R can be either a regressor object or a numerical array
+            %
+            % M = M.add_regressor(R, pos) to add regressors at specific
+            % positions
+            %
+            % See also regressor, gum.knockout
+
+            if ~isa(R,'regressor')
+                % turn into regressor object if not already
+                R = regressor(R,'linear');
+            end
+            assert(obj.nObs==R.nObs, 'cannot add regressor: number of observations do not match');
+
+            % add regressors
+            n_newR = length(R);
+            obj.regressor(end+1:end+n_newR) = R;
+
+            if nargin>2
+                nR = length(obj.regressor);
+                assert(length(pos)==n_newR, 'pos must be the same length as number of regressors to be added');
+                assert( pos>0 && pos<=nR,...
+                    'pos values must be integers larger than 0 and not larger than the total number of regressors');
+
+                assert(n_newR==1,'not coded yet when more than one added regressor');
+                % reorder regressors
+                ord = [1:pos-1, nR pos:nR-n_newR];
+                obj.regressor = obj.regressor(ord);
+            end
+
+            % update relevant fields
+            obj.nMod = obj.nMod+ n_newR;
+            obj.score.isEstimated = 0;
+            obj.score.isFitted = 0;
+
+            obj.regressor = obj.regressor.check_unique_weight_labels(); % check labels of regressors
+
             obj = obj.compute_n_parameters_df; % compute number of parameters and degrees of freedom
             obj = obj.compute_n_free_hyperparameters; % compute number of free HPs
         end
@@ -3378,7 +3470,7 @@ classdef gum
                     obj(1).regressor(m).Weights(d).dimensions = string(obj(1).regressor(m).Weights(d).dimensions); % shouldn't be useful
 
                     if withSplittingVariable
-                    obj(1).regressor(m).Weights(d).dimensions(end+1) = string(splitting_variable); % dataset
+                        obj(1).regressor(m).Weights(d).dimensions(end+1) = string(splitting_variable); % dataset
                     end
 
                     % check if different scales used across models
@@ -3581,9 +3673,9 @@ classdef gum
                     end
                 end
                 X = reshape(X, [new_siz n]);
-                 if isrow(X)
-                     X = X';
-                 end
+                if isrow(X)
+                    X = X';
+                end
                 Sc.(mt) = X;
             end
 
@@ -4401,8 +4493,8 @@ classdef gum
 
             [~,rho] = Predictor(obj);
 
-            if nargin<2 || isempty(Q) % number of quantiles: by default scales with square root of number of observations
-                Q = ceil(sqrt(obj.nObs)/2);
+            if nargin<2 || isempty(Q) % number of quantiles: by default scales with cubic root of number of observations (!!check for optimal methods)
+                Q = ceil((obj.nObs).^(1/3)/2);
             end
 
             H = quantile(rho,Q);
@@ -5072,7 +5164,9 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     nHP = length(HPs.HP);
 
     % compute basis functions and gradient of basis fun w.r.t HP
+    wrn = warning('off','gum:nullbasisfunction');
     [B,~, gradB] = compute_basis_functions(B, B(1).scale, HPs);
+    warning(wrn);
     Bmat = B(1).B;
 
     % gradient for K for basis hyperparameter
@@ -5168,7 +5262,9 @@ end
 
 %% PARSE FORMULA OF GUM (FOR TABLE SYNTAX)
 function [M,T, param] = parse_formula(Tbl,fmla, param)
-if ~ischar(fmla)
+if isstring(fmla)
+    fmla = char(fmla);
+elseif ~ischar(fmla)
     error('if the first argument is a table, then the second must be a formula string');
 end
 VarNames = Tbl.Properties.VariableNames; % list of all columns
@@ -5241,7 +5337,8 @@ O = ''; % list of operators
 OpenBracketPos = []; % position of opening brackets
 CloseBracketPos = []; % position of closing brackets
 
-option_list = {'sum','mean','tau','variance','basis','binning','constraint', 'ref','type', 'period','fit','prior'}; % possible option types
+option_list = {'sum','mean','tau','variance','basis','binning','constraint', ...
+    'ref','type', 'period','fit','prior','label','odd'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
 FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
@@ -5302,15 +5399,19 @@ while ~isempty(fmla)
         LS.ini = length(O); % position of start of lag operator
     end
 
-    transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'gamma[\d]+(',};
+    % possible strings for functions
+    transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'fodd(',...
+        'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'gamma[\d]+(',};
     [transfo, fmla, transfo_no_number] = starts_with_word(fmla,transfo_label);
     if ~isempty(transfo) % for syntax f(..) or cat(...)
 
         opts = struct();
         switch transfo_no_number
-            case {'f(', 'poly(','exp(', 'raisedcosine(','gamma('}
+            case {'f(', 'poly(','exp(', 'raisedcosine(','gamma(','fodd('}
                 type = 'continuous';
-                if ~strcmp(transfo, 'f(')
+                if strcmp(transfo, 'fodd(') % odd function
+                    opts.odd = true;
+                elseif ~strcmp(transfo, 'f(') % then it's calling basis functions
                     opts.basis = transfo(1:end-1);
                 end
             case 'flin('
@@ -5345,7 +5446,6 @@ while ~isempty(fmla)
             [new_v, fmla] = starts_with_word(fmla, VarNames);
             assert(~isempty(new_v),'| in formula f(x|y) must be followed by a valid variable name');
             opts.split = string(new_v);
-
         end
 
         %% process regressor options
@@ -5440,6 +5540,14 @@ while ~isempty(fmla)
                         error('incorrect formula, could not parse the value of prior');
                     end
                     opts.prior = fmla(1:i-1);
+                    fmla(1:i-1) = [];
+                case 'label'
+                    i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
+                    opts.label = fmla(1:i-1);
+                    fmla(1:i-1) = [];
+                case 'odd'
+                    i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
+                    opts.odd = eval(fmla(1:i-1));
                     fmla(1:i-1) = [];
             end
         end
@@ -5775,8 +5883,8 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
     % if possible, concatenate regressors within parenthesis into single
     % regressor (useful e.g. for later multiplying with other term) -
     % unless for x|(x2+x3)
-    if (iReg==1 || O(iReg-1)~='|') && cat_regressor(V{iReg}, 1, 1)
-        V{iReg} = cat_regressor(V{iReg}, 1);
+    if (iReg==1 || O(iReg-1)~='|') && cat_regressor(V{iReg}, [], 1)
+        V{iReg} = cat_regressor(V{iReg}, []);
         this_idxC(length(V{iReg})+1:end) = [];
     end
 
@@ -6070,13 +6178,17 @@ end
 %% model label+dataset
 function str = model_full_label(obj)
 str = '';
+
+% include model label if there's one
 if ~isempty(obj.label) && ~iscell(obj.label)
     str = [str ' ' char(obj.label)];
 end
+
+% now include dataset information
 if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
     str = [str ' (' ];
     Ds = obj.score.Dataset;
-    if iscolumn(Ds) % single dataset
+    if isrow(Ds) % single dataset (it looks like this is sometimes a row, sometimes a column...)
         for v=1:length(Ds)
             if isfield(obj.score,'SplittingVariable')
                 str = [str char(obj.score.SplittingVariable(v)) '='];
@@ -6084,7 +6196,7 @@ if isfield(obj.score,'Dataset') && ~isempty(obj.score.Dataset)
             str = [str char(obj.score.Dataset(v)) ','];
         end
     else % concatenated over datasets
-        str = [str num2str(size(Ds,2)) ' '];
+        str = [str num2str(size(Ds,1)) ' '];
         if isfield(obj.score,'SplittingVariable')
             Sv = obj.score.SplittingVariable;
             for v=1:length(Sv)

@@ -28,7 +28,7 @@ nScale = length(tau);
 
 %% set value of hyperparameters
 HH.HP = [log(tau) 0]; % default values for log-scale and log-variance [tau 1 1];
-if isfield(HP, 'value')
+if isfield(HP, 'value') && ~isempty(HP.value)
     assert(length(HP.value)==length(HH.HP), 'incorrect number of hyperparameters for Squared Exponential kernel');
     HH.HP = HP.value;
 else

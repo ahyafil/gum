@@ -712,14 +712,14 @@ classdef sparsearray
                                 b = sparsearray(b);
                             end
 
-                             b = reshape(b,nsub);
+                            b = reshape(b,nsub);
 
                         end
 
                         %                         if length(nsub)>1
                         %                             b = sparsearray(b);
                         %                         end
-                      %  b = reshape(b,nsub);
+                        %  b = reshape(b,nsub);
 
                     end
 
@@ -779,30 +779,132 @@ classdef sparsearray
 
                         obj.value(s.subs{:}) = varargin{1};
                     else
-
-                        % get linear indices from sub-indices
-                        [ind,nsub] = get_indices(obj.siz, s.subs);
                         V = varargin{1};
+                        %  nonColon = ~strcmp(s.subs,':');
+                        %                         if sum(nonColon)==1 && obj.onehotencoding(nonColon) && isempty(V)
+                        %                             % calls X(:,:,idx,:) = []; when corresponding
+                        %                             % dim is one-hot-encoded
+                        %    % !! should improve computational cost for
+                        %
+                        %                         d = find(nonColon);
+                        %
+                        %                         subset = s.subs{d}; % subset of values to be removed along dimension d
+                        %                         if islogical(subset)
+                        %                             subset = find(subset);
+                        %                         end
+                        %                         assert(max(subset)<=obj.size(d), 'incorrect indices');
+                        %
+                        %                         % construct mapping from old to new along OHE dim
+                        %                         mapping = 1:obj.size(d);
+                        %                         for i=1:length(subset)
+                        %                             sbs = subset(i);
+                        % mapping(sbs+1:end) = mapping(sbs+1:end)- 1; % if I remove element at position sbs, remove one position for all elements coming after
+                        %                         end
+                        %                         mapping(subset)= 0; % elements to be removed get a 0 in OHE
+                        %
+                        %                         % apply mapping one-hot-encoding
+                        %                         obj.sub{d} = mapping(obj.sub{d});
+                        %                         error('WIP');
+                        %
+                        %                         elseif isempty(V) % remove elements from array
 
-                        if isempty(V) % remove elements from array
 
-                            % !! should improve computational cost for
-                            % calls X(:,:,idx,:) = []; when corresponding
-                            % dim is one-hot-encoded
+                        if  isempty(V) % remove elements from array
+                            if ~issparse(obj.value)
+                                obj.value = reshape(obj.value, obj.siz);
+                                obj.value =  subsasgn(obj.value, s, varargin{:});
+                                % finish this
+                                return;
+                            end
 
-                            nonColon = find(obj.siz ~= nsub);
-                            if length(nonColon)>1
+                            nonColon = ~strcmp(s.subs,':');
+                            if sum(nonColon)>1
                                 error('A null assignment can have only one non-colon index.');
                             end
+                            if ~any(nonColon) % remove all elements
+                                obj = sparsearray([]);
+                            end
+                            d = find(nonColon);
 
-                            obj.value(ind) = [];
-                            obj.siz(nonColon) = obj.siz(nonColon) - nsub(nonColon); % new size
+                            if d==1 % remove along first dimension
 
-                            if nonColon==length(obj.siz) && obj.siz(nonColon)==1
-                                obj.siz(nonColon) = []; % remove last dimension if it has become singleton
+                                obj.value = reshape(obj.value, obj.size(1), prod(obj.size(2:end))); % reshape as dim 1 x (all other dims)
+                                s.subs(3:end) = [];
+                                obj.value =  subsasgn(obj.value, s, varargin{:}); % remove rows
+                                obj.siz(1) = size(obj.value,1);
+                                obj.value = obj.value(:);
+
+                            elseif d==obj.ndims % remove along last dimension
+                                obj.value = reshape(obj.value,prod(obj.size(1:end-1)), obj.size(end)); % reshape as  (all other dims)x last dim
+                                s.subs(2:end-1) = [];
+                                obj.value =  subsasgn(obj.value, s, varargin{:}); % remove columns ( "X(:,idx) = [];")
+                                obj.siz(d) = size(obj.value,2); % new number of elements along last dimension
+                                obj.value = obj.value(:);
+
+                            else % we remove along an intermediate dimension
+                                ind = find(obj.value(:)); % indices of nonzeros
+                                val = obj.value(ind); % corresponding values
+
+                                % get corresponding indices along dim d (and group dimensions before and
+                                % after)
+                                size_3d = [prod(obj.size(1:d-1)), obj.size(d), prod(obj.size(d+1:end))];
+                                [ifirst,i_sub, ilast] = ind2sub(size_3d, ind);
+
+                                % subset of values to be removed along dimension d
+                                subset = s.subs{d};
+                                if islogical(subset)
+                                    subset = find(subset);
+                                end
+                                subset(subset<0) = [];
+                                subset(subset>obj.size(d)) = [];
+                                subset = unique(subset);
+
+                                % construct mapping from old to new along OHE dim
+                                mapping = 1:obj.size(d);
+                                for i=1:length(subset)
+                                    sbs = subset(i);
+                                    mapping(sbs+1:end) = mapping(sbs+1:end)- 1; % if I remove element at position sbs, remove one position for all elements coming after
+                                end
+                                mapping(subset)= 0; % elements to be removed
+
+                                i_sub = mapping(i_sub)'; % apply mapping to positions along corresponding dim
+
+                                % remove elements that gets mapped to 0
+                                ifirst(~i_sub)= [];
+                                ilast(~i_sub)= [];
+                                val(~i_sub)= [];
+                                i_sub(~i_sub)= [];
+
+                                % update size
+                                new_size = obj.size(d) - length(subset);  % withdraw number of deleted indices
+                                size_3d(2) = new_size;
+                                obj.siz(d) = new_size;
+
+                                % rebuild indices
+                                ind = sub2ind(size_3d, ifirst,i_sub, ilast);
+
+                                % recreate sparse value vector
+                                obj.value = sparse(ind,ones(size(ind)), val, prod(obj.size),1);
                             end
 
+                            %                             % get linear indices from sub-indices
+                            %                         [ind,nsub] = get_indices(obj.siz, s.subs);
+                            %
+                            %                             nonColon = find(obj.siz ~= nsub);
+                            %                             if length(nonColon)>1
+                            %                                 error('A null assignment can have only one non-colon index.');
+                            %                             end
+                            %
+                            %                             obj.value(ind) = [];
+                            %                             obj.siz(nonColon) = obj.siz(nonColon) - nsub(nonColon); % new size
+                            %
+                            %                             if nonColon==length(obj.siz) && obj.siz(nonColon)==1
+                            %                                 obj.siz(nonColon) = []; % remove last dimension if it has become singleton
+                            %                             end
+
                         else % assign new values to array
+                            % get linear indices from sub-indices
+                            [ind,nsub] = get_indices(obj.siz, s.subs);
 
                             if numel(V) ~= prod(nsub)
                                 error('Unable to perform assignment because the size of the left and right sides do not coincide');
@@ -1044,7 +1146,7 @@ classdef sparsearray
             noprodDims = find(cellfun(@isempty,U)); % dimensions with no tensor product
 
             %% collapse first over non-one-hot-encoding coding dimensions which are not used by
-            % subindex dimensions
+            % OHE dimensions
             BoolMat = true(length(OneHotDims),n); % by default singleton doms
             for ee =1:length(OneHotDims)
                 ss = size(obj.sub{OneHotDims(ee)})==1; % singleton dimensions for these regressors (i.e. onehotencoding regressor does not vary along that dimension)
@@ -1063,150 +1165,80 @@ classdef sparsearray
 
             end
 
-            %% now project over subindex coding dimensions
+            %% now project over OHE coding dimensions
             if isempty(OneHotDims)
                 OneHotDims = zeros(1,0);
             end
-            if any(setdiff(OneHotDims,noprodDims))
+            if any(setdiff(OneHotDims,noprodDims)) % if any projecting one-hot-encoding dim
+                % create copy of object where OHE dimensions are reduced to
+                % singleton
                 V = sparsearray(obj.value);
                 S = size(obj);
-                SS = ones(1,ndims(obj));
+                SS = ones(1,ndims(obj)); % OHE dims are reduced to singleton
                 SS(~onehotencoding(obj)) = S(~onehotencoding(obj));
                 V = reshape(V,SS);
 
-                for f= setdiff(OneHotDims,noprodDims)
-                    UU = [zeros(nRow(f),1) U{f}]; % weights for that sparse dimension (add 0 first if 0 index)
+                for f= setdiff(OneHotDims,noprodDims) % loop through projecting one-hot-encoding dims
+                    UU = [zeros(nRow(f),1) U{f}]; % projection for that OHE dimension (add 0 first for 0 index)
+                    % perhaps should work on the case when U is sparse
 
-                    S = size(obj.sub{f});
+                    % create a tensor VV with values of U that should be
+                    S = size(obj.sub{f}); % size of VV, same as OHE array
                     S(end+1:f-1) = 1;
-                    S(f) = nRow(f);
-                    C = cell(1,length(S));
+                    S(f) = nRow(f); % except for new dimension
+                    VV = zeros(S); % preallocate VV
+
+                    C = cell(1,length(S)); % cell array of indices
                     for ddd=1:length(S)
                         C{ddd} = 1:S(ddd);
                     end
-                    VV = zeros(S);
 
+                    % build iteratively for each row
                     for r=1:nRow(f)
                         uu = UU(r,:);
-                        C{f} = r;
-                        VV(C{:}) = uu(1+obj.sub{f});
+                        C{f} = r; % current row
+                        VV(C{:}) = uu(1+obj.sub{f}); %
                     end
 
+                    % pointwise multiply with data
                     V =  V .* VV;
 
 
-                    %if isvector(obj.sub{f})
-                    %    obj.value = obj.value .* UU(1+obj.sub{f})';
-                    %else
-                    %    obj.value = obj.value .* UU(1+obj.sub{f});
-                    %end
-                    U{f} = []; % remove this one
-                    OneHot(f) = 0;
+                    U{f} = []; % remove projecting vector from list
+                    OneHot(f) = 0; % no longer OHE dim
                     obj.sub{f} = [];
                     obj.siz(f) = nRow(f);
                 end
 
                 obj.value = matrix(reshape(V, size(V,1), numel(V)/size(V,1)));
-
-
             end
 
-            %             %% if any dimension with no product is sub-index coding
-            %             if ~isempty(noprodDims) && any(subcode(noprodDims))
-            %                 dd = noprodDims(subcode(noprodDims)); % sub-index coding dim
-            %                 dd = dd(1); % let's work with the first one first
-            %                 % otherd = setdiff(noprodDims,dd); % other dimensions
-            %                 mm = size(U{dd},2); % size along this dimension
-            %
-            %                 % allocate matrix P
-            %                 sizeP = ones(1,n);
-            %                 sizeP(noprodDims) = size(U{noprodDims},2);% non-singleton dimensions only where we project
-            %                 if isempty(U{1})
-            %                     sizeP(1) = obj.siz(1);
-            %                 end
-            %                 P = zeros(sizeP);
-            %
-            %                 % spd2 = subcode;
-            %                 % spd2(dd) = false;
-            %
-            %                 % index for projected matrix
-            %                 Sub = obj.sub{dd};
-            %                 nonSingleton = setdiff(1:ndims(Sub),find(size(Sub)==1)); % number of non-singleton dimensions for the subindex array
-            %                 for o=1:mm %% for each value along that dimension
-            %                     U2 = U;
-            %                     %  Uobs2 = Uobs;
-            %                     nonnull = any(Sub(:,:)==o,2); % check which observations have this value of the regressor
-            %
-            %                     if any(nonnull)
-            %                         for q=1:length(sizeP), idx{q} = 1:sizeP(q); end
-            %                        % if ~all(nonnull) % select subset of values of dimension 1
-            %                        %     obj3 = sub_along_dimension(obj,nonnull,1);
-            %                        % else
-            %                        %     obj3 = obj;
-            %                        % end
-            %                         % if isempty(U{1})
-            %                         %     idx{1} = nonnull; % select group of observations in P
-            %                         % else
-            %                         %     Uobs2 = Uobs(nonnull); % set weight vector for observations
-            %                         % end
-            %
-            %                         % check and select other dimensions of stim that have
-            %                         % non-zero values for this value of the regressor
-            %                         anyt = any(obj3.sub{dd}==o,1); % any non-null value for the observation
-            %                         for pp = nonSingleton % for all non-singleton dimensions (except first one that we just did)
-            %                             nonnull = anyt;
-            %                             for qq=setdiff(nonSingleton,[1 pp])
-            %                                 nonnull = any(nonnull,qq);
-            %                             end
-            %                             nonnull = nonnull(:); % row vector
-            %                             if ~all(nonnull)
-            %                                 if any(pp-1==noprodDims)
-            %                                     idx{pp} = nonnull;
-            %                                 end
-            %
-            %                                 % select only non-null data
-            %                                 obj3 = sub_along_dimension(obj,nonnull,pp);
-            %                                 U2{pp} = U2{pp}(:,nonnull);
-            %                                 if sum(nonnull) ==1 % if we're left with single weight
-            %                                     obj3.value = obj3.value*U2{pp};
-            %                                     obj3.size(pp) = nRow(pp);
-            %                                     U2{pp} = [];
-            %                                 end
-            %                             end
-            %                         end
-            %                         obj3.value = obj3.value .* (obj3.sub{dd} ==o); % all data points corresponding to this index
-            %                         obj3.sub{dd} = []; % remove corresponding regressor from here
-            %                         obj3.size(dd) = nRow(dd);
-            %
-            %                         if nRow(dd) ==1
-            %                            U2{dd} = [];
-            %                            obj3.value = U{dd}(o) *obj3.value;
-            %                         else
-            %                                 U2{dd} = U{dd}(:,o);
-            %                         end
-            %                         idx{dd} = o;
-            %                         if all(cellfun(@isempty, U2))
-            %                             % if ~isempty(Uobs)
-            %                             %     obj3{1} = Uobs2*obj3{1};
-            %                             % end
-            %                             P(idx{:}) = obj3.value;
-            %
-            %                         else
-            %                             P(idx{:}) = tensorprod(obj3,U2);  % now perform product with other dimensions
-            %                         end
-            %                     end
-            %                 end
-            %
-            %             else
-            %                %% all projection dimensions are non-subindex coding
+            %% deal with special case when we only need to project over one dummy dimension (should be faster this way)
+            still_to_do = ~cellfun(@isempty,U);
+            if sum(still_to_do==1)
+                d = find(still_to_do);
+                if isrow(U{d}) && all(U{d}==1) && sum(obj.onehotencoding)==1 &&...
+                        size(obj.sub{obj.onehotencoding},d)>1 && nnz(obj.value)==nnz(obj.sub{obj.onehotencoding})% dummy variable for OHE
+                    d_onehot = find(obj.onehotencoding);
+                    [I,J,V] = find(obj.value);
+                    obj.sub{d_onehot} = reshape(obj.sub{d_onehot},size(obj.value,1),size(obj.value,2));
+                    [I2,J2,ind_newdim] = find(obj.sub{d_onehot});
+                    if all(I==I2) && all(J==J2) % make extra sure the non-zero values coincide
+                          P = sparse(I,ind_newdim,V,obj.size(1),obj.size(d_onehot));
+                          S = obj.size;
+                          S(d)=1;
+                          if length(S)>2
+                              P = sparsearray(P);
+                              P = reshape(P,S);
+                              return;
+                          end
+                    end
+                end
+            end
 
-            obj = fullcoding(obj);
+            %% project remaining non-OHE dimensions
+                        obj = fullcoding(obj);
 
-            % project non-sparse index dimensions
-            % UU =  U; %[{Uobs} U(r,:)]; % for tensor projection
-            % for f=subcodeDims
-            %     UU{f} = [];
-            % end
             [P,S] = tprod(obj.value, U, obj.siz); % tensor product
 
             if issparse(P) && length(S)>2
@@ -1294,7 +1326,7 @@ elseif isscalar(obj1) % between scalar and sparse array
     return;
 end
 
-% now prpcess the hard case: operation between one sparse array and another (possibly sparse) array
+% now process the hard case: operation between one sparse array and another (possibly sparse) array
 
 % convert both to sparse arrays
 obj1 = sparsearray(obj1);
@@ -1371,19 +1403,12 @@ elseif isequal(fun, @times) && prod(Snonsub)==numel(obj1.value) && all(obj2.valu
     x = obj1.value;
 
 else
-    % first replicate each object with required dimensions
-
-    % dim_R1 = S1==1 & S2>1;
-    % R1(dim_R1) = S2(dim_R1);
+    % first replicate each object with required dimensions to equate dims
     obj1 = repmat(obj1, R1);
-
-    %  dim_R2 = S2==1 & S1>1;
-    %  R2(dim_R2) = S1(dim_R2);
     obj2 = repmat(obj2, R2);
 
-    %S = size(obj1);
+    % now apply function
     x = fun(obj1.value, obj2.value);
-    % x = fun(allvalues(obj1),allvalues(obj2));
 end
 
 obj = sparsearray(x);

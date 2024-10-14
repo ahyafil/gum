@@ -938,6 +938,7 @@ switch nDim %number of dimension
 
         for s1 = 1:siz(dd)
             for s2 = 1:siz(ee)
+                s = s1+s2*(siz(dd)-1);
                 if layout
                     subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
                 elseif s1*s2>1

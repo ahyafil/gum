@@ -72,18 +72,89 @@ else
     nFreq = params.nFreq;
 end
 nBasisFun = 2*nFreq + 1; % number of basis functions
-nBasisFun = min(nBasisFun, length(X)); % no more basis functions than sample points
 
-X = X - min(X); % start at 0
+% whether we actually use transform
+params.noTransform = nBasisFun>=length(X);
 
-% compute transformation matrix and vector of spectral coordinates
-% for just one process
-[B,scale] = realnufftbasis(X,Tcirc,nBasisFun); % make Fourier basis
+if params.noTransform
+    % in case that there are more basis functions than datapoints, then
+    % forget about transform, we're better with the original space
+    % (where the data can stay in sparse format)
+    % note:perhaps should lower to a fraction of length(X)
+    B = speye(length(X)); % basis functions: identity matrix
+    scale = X;
+else
+    % use basis functions
 
-scale = scale'; % row vector
-params.Tcirc = Tcirc;
-params.nFreq = nFreq;
+    %nBasisFun = min(nBasisFun, length(X)); % no more basis functions than sample points
 
+    X = X - min(X); % start at 0
+
+    % compute transformation matrix and vector of spectral coordinates
+    % for just one process
+    [B,scale] = fftbasis(X,Tcirc,nBasisFun); % make Fourier basis
+
+    scale = scale'; % row vector
+    params.Tcirc = Tcirc;
+    params.nFreq = nFreq;
+end
+
+% gradient is null as HP only used to define frequency cutoff
 if nargout>3
-    gradB = zeros([size(B) length(HP)]); % gradient is null as HP only used to define frequency cutoff
+    gradB = zeros([size(B) length(HP)]);
+end
+end
+
+%% 
+function [B,wvec,wcos,wsin] = fftbasis(tvec,T,N)
+% Real basis for non-uniform discrete fourier transform
+% (adapted from Pillowlab code)
+%
+% [B,wvec] = fftbasis(tvec,T,N)
+%
+% Makes basis of sines and cosines B for a function sampled at nonuniform
+% time points in tvec, with a circular boundary on [0, T], and spacing of
+% frequencies given by integers m*(2pi/T) for m \in [-T/2:T/2].
+%
+% If maxw input given, only returns frequencies with abs value < maxw
+%
+% INPUTS:
+%  tvec [nt x 1] - column vector of non-uniform time points for signal
+%     T  [1 x 1] - circular boundary for function in time
+%     N  [1 x 1] - number of Fourier frequencies to use
+%
+% OUTPUTS:
+%      B [ni x N] - basis matrix for mapping Fourier representation to real
+%                   points on lattice of points in tvec.
+%    wvec [N x 1] - DFT frequencies associated with columns of B
+
+% make column vec if necessary
+if size(tvec,1) == 1
+    tvec = tvec';
+end
+
+if max(tvec+1e-6)>T
+    error('max(tvec) greater than circular boundary T!');
+end
+
+% Make frequency vector
+ncos =  ceil((N+1)/2); % number of cosine terms (positive freqs)
+nsin = floor((N-1)/2); % number of sine terms (negative freqs)
+wcos = (0:ncos-1)'; % cosine freqs
+wsin = (-nsin:-1)'; % sine freqs
+wvec = [wcos;wsin]; % complete frequency vector for realfft representation
+
+if nsin > 0
+    B = [cos((2*pi/T)*wcos*tvec'); sin((2*pi/T)*wsin*tvec')]/sqrt(T/2);
+else
+    B = cos((2*pi/T)*wcos*tvec')/sqrt(T/2);
+end
+
+% make DC term into a unit vector
+B(1,:) = B(1,:)/sqrt(2);
+
+% if N is even, make Nyquist (highest-freq cosine) term into unit vector
+if (mod(N,2)==0) && (N==T)
+    B(ncos,:) = B(ncos,:)/sqrt(2);
+end
 end

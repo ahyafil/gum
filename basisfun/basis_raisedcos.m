@@ -52,10 +52,10 @@ Phi = Phi_1 + pi/2*(0:nCos-1); % Pi/2 spacing between each function
 
 non_neg = X+c>0;
 if a*log(min(X(non_neg))+c)-Phi_1-pi>=0
-    warning('Phi_1 hyperparameter is too small, some basis functions stay null over entire range of values')
+    warning('gum:nullbasisfunction','Phi_1 hyperparameter is too small, some basis functions stay null over entire range of values')
 end
 if a*log(max(X(non_neg))+c)-Phi(end)+pi<=0
-    warning('Phi_1 hyperparameter is too large, some basis functions stay null over entire range of values')
+    warning('gum:nullbasisfunction','Phi_1 hyperparameter is too large, some basis functions stay null over entire range of values')
 end
 for p=1:nCos
     alog = a*log(X+c)-Phi(p);

@@ -8,6 +8,7 @@ assert(ismatrix(V), 'V should be a matrix');
 [n,m] = size(V);
 assert(m<=n, 'the number of columns in V should not be larger than the rows of columns');
 
+assert(all(any(V~=0,1)), 'at least one of columns is null');
 % normalize rows of V to avoid numerical issues (that does not affect the
 % subspace its rows form)
 for i=1:m

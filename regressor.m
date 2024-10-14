@@ -101,6 +101,10 @@ classdef regressor
     % Default value is 'free' (unconstrained) for first dimension, 'mean1' for other
     % dimensions. C must be a character array of length D (or rank x D matrix)
     %
+    % V = regressor(...,'odd',bool) forces the mapping to be an odd
+    % function if bool is set to true (for categorical, continuous and
+    % periodic type).
+    %
     % V = regressor(...,'label', N) to add label to regressor
     %
     % Main method for regressors: .
@@ -158,6 +162,7 @@ classdef regressor
             plot = [];
             prior = [];
             ref = [];
+            odd = false;
 
             if nargin<2
                 type = 'linear';
@@ -215,6 +220,9 @@ classdef regressor
                         if ~isempty(binning)
                             assert(any(strcmp(type, {'continuous','periodic'})), 'binning option only for continuous or periodic variable');
                         end
+                    case 'odd'
+                        assert(isscalar(odd), 'odd argument expects a scalar');
+                        odd = logical(varargin{v+1});
                     case 'label'
                         label = string(varargin{v+1});
                     case 'dimensions'
@@ -386,6 +394,16 @@ classdef regressor
                 label = [strings(1,nD-1) label];
             end
 
+            if odd
+                assert(ismember(lower(type),{'categorical','continuous','periodic'}))
+                % if function is taken to be odd, store sign of X
+                % and use function of absolute value
+                sgnX = sign(X);
+                sgnX(isnan(X)) = 0;
+
+                X = abs(X);
+            end
+
             %% build data and variables depending on coding type
             switch lower(type)
                 %% constant regressor (no fitted weight)
@@ -463,6 +481,9 @@ classdef regressor
                     if isnumeric(this_scale)
                         this_scale(isnan(this_scale)) = []; % remove nan values
                     end
+                    if odd
+                        this_scale(this_scale ==0) = []; % remove 0 which would be assigned 0 value if even mapping
+                    end
                     if ~isempty(obj.Weights(nD).scale)
                         if any(~ismember(obj.Weights(nD).scale,this_scale))
                             warning('exclude scale values not present in data');
@@ -519,6 +540,9 @@ classdef regressor
                             this_scale = unique(X)'; % use unique values as scale
                         end
                         this_scale(:,any(isnan(this_scale),1)) = []; % remove nan values
+                        if odd
+                            this_scale(this_scale ==0) = []; % remove 0 which would be assigned 0 value if even mapping
+                        end
                         nVal = size(this_scale,2);
                         obj.Data = one_hot_encoding(X, this_scale, OneHotEncoding(nD),nD);
                     else % user-provided scale
@@ -603,6 +627,14 @@ classdef regressor
                 end
             end
 
+
+            if odd
+                % if odd function, multiply by sign
+                %         % multiply by sign (fixed)
+                obj = obj * sgnX;
+            end
+
+            % split or separate if needed
             obj = obj.split_or_separate(summing);
 
         end
@@ -1230,8 +1262,14 @@ classdef regressor
                             W.(f)(:,drop_these) = [];
                         end
                     end
-
                     W.nWeight = W.nWeight - sum(drop_these);
+
+                    % remove from constraint structure
+                    if isstruct(W.constraint)
+                        W.constraint.nWeight = W.nWeight;
+                        W.constraint.V(drop_these,:) = [];
+                    end
+
                     obj.Weights(d) = W;
 
                     % remove also from data
@@ -1534,7 +1572,7 @@ classdef regressor
 
                 % what type of prior are we using for this dimension
                 switch summing{d}
-                    case {'weighted','linear'}
+                    case {'weighted','linear','split'}
 
                         % hyperpameters for first dimension
                         if isempty(prior{d})
@@ -1601,8 +1639,9 @@ classdef regressor
 
             if nargin<6 || strcmp(basis,'auto')
                 %  if size(scale,2)>100 && ~any(strcmp(summing{d},{'split','separate'})) && size(scale,1)==1
-                if size(scale,2)>100
+                if size(scale,2)>100 && nScaleDim==1
                     % Fourier basis is the default if more than 100 levels
+                    % and single dim
                     basis = 'fourier';
                 else % otherwise no basis functions
                     basis = [];
@@ -1635,7 +1674,7 @@ classdef regressor
                 else % 'fourier': number of basis functions is calculated automatically
                     nBasisFun = nan;
                 end
-                obj.Prior(d).CovFun = @covSquaredExp_Fourier;
+                obj.Prior(d).CovFun = @covSquaredExp;
 
                 B.fun = @basis_fourier;
                 B.fixed = true; % although the actual number of regressors do change
@@ -2069,8 +2108,12 @@ classdef regressor
 
                         % apply change of basis to data (tensor product)
                         Bcell = cell(1,obj(m).nDim+1);
-                        Bcell{d+1} = Bmat;
-                        obj(m).Data = tensorprod(obj(m).Data, Bcell);
+                        if ~isequal(Bmat, eye(new_nWeight)) || ~isequal(Bmat, speye(new_nWeight))
+                            % let's avoid the stupid case when Bmat is
+                            % identity (can happen with spectral trick)
+                            Bcell{d+1} = Bmat;
+                            obj(m).Data = tensorprod(obj(m).Data, Bcell);
+                        end
 
                         [B.projected] = deal(true); % set projected boolean to true
                         W.basis = B;
@@ -2090,16 +2133,12 @@ classdef regressor
                 for d=1:obj(m).nDim
                     B = obj(m).Weights(d).basis;
                     if ~isempty(B) && any([B.projected])
-
-
-
                         tmp_nWeight = B(1).nWeight;
                         tmp_scale = B(1).scale;
                         B(1).nWeight = obj(m).Weights(d).nWeight;
                         B(1).scale = obj(m).Weights(d).scale;
                         obj(m).Weights(d).nWeight = tmp_nWeight;
                         obj(m).Weights(d).scale = tmp_scale;
-
 
                         % save weights (mean, covariance, T-stat, p-value) in basis space in basis structure
                         W = obj(m).Weights(d); % weight structure
@@ -2108,7 +2147,6 @@ classdef regressor
                         B(1).PosteriorCov = W.PosteriorCov;
                         B(1).T = W.T;
                         B(1).p = W.p;
-
 
                         % compute posterior back in original domain
                         W.PosteriorMean = W.PosteriorMean * B(1).B;
@@ -2875,8 +2913,7 @@ classdef regressor
                     SharedDimOk = isnumeric(SharedDim) && isvector(SharedDim) && ...
                         all(SharedDim>0) && all(SharedDim<obj1.nDim) && all(SharedDim<obj2.nDim);
                     assert(SharedDimOk, 'SharedDim must be a vector of dimensions');
-                    %  nWeight1 = cellfun(@sum, {obj1.Weights(SharedDim).nWeight});
-                    %  nWeight2 = cellfun(@sum, {obj2.Weights(SharedDim).nWeight});
+
                     nWeight1 = [obj1.Weights(SharedDim).nWeight];
                     nWeight2 = [obj2.Weights(SharedDim).nWeight];
                     assert(all(nWeight1== nWeight2),...
@@ -2910,6 +2947,21 @@ classdef regressor
                     obj = include_polynomial_intercept(obj);
                 end
                 return;
+            end
+
+            % if either R1 or R2 is an array of regressors, convert into
+            % single regressor
+            if ~isscalar(obj1)
+                D = obj1.cat_regressor([],1);
+                assert(D,"regressors cannot be concatenated before applying multiplication");
+                %   obj1 = deal_with_concatenated_categorical(obj1,D);
+                obj1 = obj1.cat_regressor(D);
+            end
+            if ~isscalar(obj2)
+                D = obj2.cat_regressor([],1);
+                assert(D, "regressors cannot be concatenated before applying multiplication");
+                %    obj2 = deal_with_concatenated_categorical(obj2,D);
+                obj2 = obj2.cat_regressor(D);
             end
 
             if obj1.nObs ~= obj2.nObs
@@ -3037,18 +3089,32 @@ classdef regressor
 
             % If both regressors are dimension 1 and continuous type and no constraint
             if any([obj1.nDim] ==1) && any([obj2.nDim]==1)
-                i1 = [obj1.nDim] ==1;
+                i1 = find([obj1.nDim] ==1);
                 i2 = find([obj2.nDim] ==1);
                 W1 = [obj1(i1).Weights];
                 W2 = [obj2(i2).Weights];
                 free_continuous1 = strcmp({W1.type}, 'continuous') & constraint_type(W1)=="free";
                 free_continuous2 = strcmp({W2.type}, 'continuous') & constraint_type(W2)=="free";
 
-                if    any(free_continuous1) && any(free_continuous2)
+                % make sure that this are one-hot-encoding (not the case
+                % when using timeregressor)
+                i1free = i1(free_continuous1);
+                cnt = 1;
+                isOneHot_obj1 = false;
+                while ~isOneHot_obj1 && cnt<=length(i1free)
+                    this_one_OHE = all(full(sum(obj1(i1free(cnt)).Data,2))==1); % check if data is one-hot
+                    isOneHot_obj1 = isOneHot_obj1||this_one_OHE;
+                    cnt = cnt+1;
+                end
+
+                if isOneHot_obj1 && any(free_continuous2)
                     %  change second constraint to zero-sum to avoid identifiability issues with the likelihood.
                     chg = i2(free_continuous2);
                     for i=chg
-                        obj2(i).Weights.constraint = "nullsum";
+                        % again make sure that this is one-hot-encoding
+                        if all(sum(obj2(i).Data,2)==1) % check if data is one-hot
+                            obj2(i).Weights.constraint = "nullsum";
+                        end
                     end
                 end
             end
@@ -3381,7 +3447,7 @@ classdef regressor
             %
             % R = R.laggedregressor(Lags, argument1, value1, ...) with possible
             % arguments:
-            % 'group': value G is a group indicator vector indicating the group corresponding to each observation to build
+            % - 'group': value G is a group indicator vector indicating the group corresponding to each observation to build
             % regressors separately for each group.
             % - 'basis': using basis functions for lag weights (e.g. 'exp3'). Default:
             % no basis.
@@ -3505,12 +3571,12 @@ classdef regressor
 
         %% CONCATENATE REGRESSORS
         function obj = cat_regressor(obj, D, check_dims_only)
-            % M = cat_regressor(M);
+            % R = cat_regressor(R);
             % vector of regressors is turned into a single regressor
-            % M = cat_regressor(M, D); concatenates along dimension D (default: D=1)
+            % R = cat_regressor(R, D); concatenates along dimension D (default: where size disagree)
             %
-            % bool =  cat_regressor(obj, D, 1) returns a boolean telling if
-            % the concatenation operation is possible (if dimensions of regressors are compatible)
+            % D =  cat_regressor(R, [], 1) returns the first dimension
+            % where the concatenation operation is possible (if any, 0 otherwise)
 
             n = length(obj); % number of regressors
             if n==1 % if only one regressor, don't need to do anything
@@ -3521,7 +3587,7 @@ classdef regressor
             end
 
             if nargin<2
-                D = 1;
+                D = [];
             end
             if nargin<3
                 check_dims_only = false;
@@ -3531,17 +3597,19 @@ classdef regressor
             assert(all([obj.nObs]==n_Obs), 'number of observations do not match');
 
             nD = max([obj.nDim]);
-            if nD==1 && check_dims_only
-                obj = true;
-                return;
+            if nD==1
+                if check_dims_only % if all regressors are dimension 1, they can always be concatenated
+                    obj = 1;
+                    return;
+                else
+                    D =1;
+                end
             end
 
             %% deal with formula ( x1 + x2...)
             fmla = string({obj.formula});
             fmla(2,:) = "+";
             obj(1).formula = join(fmla(1:end-1),"");
-            % fmla = cellstr(fmla(1:end-1));
-            % obj(1).formula = [fmla{:}];
 
             %% process special case when all are single linear regressors (e.g. x1+x2+...)
             W = [obj.Weights];
@@ -3577,15 +3645,34 @@ classdef regressor
             for i=1:n
                 nWeight(i,1:obj(i).nDim) = [obj(i).Weights.nWeight];
             end
-            otherdims = setdiff(1:nD,D);
-            check_dims = all(nWeight(:,otherdims)==nWeight(1,otherdims),'all'); % check that dimensions allow for concatenation
-            if check_dims_only % return only boolean telling whether regressors can be concatenated
-                obj = check_dims;
-                return;
+
+            % determine concatenation dimension (if not provided)
+            same_dim = all(nWeight==nWeight(1,:),1); % which dimension are preserved along all objects
+            if isempty(D) % determine dimension of concatenation
+                if all(same_dim) % if all same dim, then just pick dim 1
+                    D=1;
+                else % should differs along one dim only
+                    D = find(~same_dim,1);
+                end
+                check_dims = sum(~same_dim)<2; % can be different for at most one dimension (concatenating dim)
+                if check_dims_only % return only boolean telling whether regressors can be concatenated
+                    obj = D*check_dims;
+                    return;
+                end
+                assert(check_dims, 'cannot concatenate regressors whose size differ in more than one dimension');
+
+            else % if D is provided
+
+                otherdims = setdiff(1:nD,D);
+                check_dims = all(same_dim(otherdims),2); % check that dimensions allow for concatenation
+                if check_dims_only % return only boolean telling whether regressors can be concatenated
+                    obj = check_dims*D;
+                    return;
+                end
+
+                assert(check_dims, 'number of elements in regressor does not match along non-concatenating dimensions');
             end
 
-            assert(check_dims, 'number of elements in regressor does not match along non-concatenating dimensions');
-            % nWeight(1,D) = sum(nWeight(:,D)); % number of elements along dimension D are summed
             nWeight_cat = nWeight(:,D);  % number of elements along dimension D are concatenated
             nWeight = nWeight(1,:); % select from first regressor
 
@@ -3654,7 +3741,7 @@ classdef regressor
             W.dimensions = [repmat("",1,scale_dim2) allWeights(imax).dimensions(scale_dim2+1:scale_dim) "index"]; % keep dimension labels from regressor with more dimensions, leave common ones empty
             for i=1:n
                 if isempty(F{i})
-                    F{i} = 1:allWeights{i}.nWeight;
+                    F{i} = 1:allWeights(i).nWeight;
                 end
                 F{i}(end+1:scale_dim,:) = nan; % fill extra dimensions with nan if needed
                 F{i}(scale_dim+1,:) = i; % add extra dimension with group index
@@ -3674,7 +3761,20 @@ classdef regressor
             end
 
             % deal with constraint
-            if ~all(constraint_type(allWeights)=="free") && ~all(constraint_type(allWeights)=="fixed")
+            ct_type = constraint_type(allWeights);
+
+            % if at least two categorical regressors get concatenated,
+            % keep the first with constraint, the others should have no
+            % constraint
+            categ_reg = find(ismember(ct_type, ["first0","first1"])); % identify categorical regressors
+            for ii=categ_reg(2:end)
+                allWeights(ii).constraint= "free";
+                ct_type(ii) = "free";
+            end
+
+            keep_same_constraint = all(ct_type=="free") ||  all(ct_type=="fixed") || ... % do not touch if all free or all fixed
+                (ismember(ct_type(1),["first0","first1"]) && all(ct_type(2:end)=="free")); % or if first reg has first0/first1 constraint and others are free
+            if ~keep_same_constraint
                 S_ct = constraint_structure(allWeights);
 
                 % convert first0 to first1 (assuming we're going this is a
@@ -3833,26 +3933,26 @@ classdef regressor
             cols = defcolor;
             cols{1,2} = ''; % add variable column
 
-           % if verLessThan('matlab', '9.9') || only_nsubplot
-                % cannot use nexttile-> compute number of subplots a priori
-                % (may be wrong)
-                nSubplotsReg = zeros(1,size(idx,2));
-                for j=1:size(idx,2) % for each set of regressor
-                    m = idx(1,j);
-                    isFW = isFixedWeightSet(obj(m));
-                    d = idx(2,j);
-                    do_plot = ~isFW(d); % do not plot regressors with constant
-                    do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
-                    nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
-                end
-                idx(:,~nSubplotsReg) = []; % remove non_plotted weights
-                nSubplots = sum(nSubplotsReg); % number of subplots
+            % if verLessThan('matlab', '9.9') || only_nsubplot
+            % cannot use nexttile-> compute number of subplots a priori
+            % (may be wrong)
+            nSubplotsReg = zeros(1,size(idx,2));
+            for j=1:size(idx,2) % for each set of regressor
+                m = idx(1,j);
+                isFW = isFixedWeightSet(obj(m));
+                d = idx(2,j);
+                do_plot = ~isFW(d); % do not plot regressors with constant
+                do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
+                nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
+            end
+            idx(:,~nSubplotsReg) = []; % remove non_plotted weights
+            nSubplots = sum(nSubplotsReg); % number of subplots
 
-                if only_nsubplot % only ask for number of subplots
-                    h = nSubplots;
-                    return;
-                end
-         %   end
+            if only_nsubplot % only ask for number of subplots
+                h = nSubplots;
+                return;
+            end
+            %   end
 
             %% process extra arguments
             v = 1;
@@ -4112,6 +4212,7 @@ end
 
 if ~isempty(Dataset) % when plotting weights from different datasets
     scale = interaction_levels(scale', Dataset)';
+    dim_label(end+1) = "dataset";
 end
 if size(scale,2)>1
     % try to convert to matrix representation
@@ -4129,13 +4230,13 @@ end
 if ~iscolumn(U)
     % order variables by descending size (with some penalty for changing
     % order)
- weighted_siz = size(U) ./ 1.5.^(1:length(size(U)));
-        [~,ord] = sort(weighted_siz,'descend');
+    weighted_siz = size(U) ./ 1.5.^(1:length(size(U)));
+    [~,ord] = sort(weighted_siz,'descend');
 
-        U = permute(U,ord);
-        se = permute(se,ord);
-        scale = scale(ord);
-        dim_label = dim_label(ord);
+    U = permute(U,ord);
+    se = permute(se,ord);
+    scale = scale(ord);
+    dim_label = dim_label(ord);
 end
 
 %if ~isempty(Dataset) % when plotting weights from different datasets
@@ -5354,6 +5455,24 @@ S.V = [V1 V2];
 S.u =  [u1 u2];
 
 S.nConstraint = size(S.V,2);
+end
+
+%% deal with constraints when R1*(R2+R3+...) when R2 and R3 are categorical
+% to remove the identifiability issue, only the first concatenated
+% regressor needs to be "first1"
+function  obj = deal_with_concatenated_categorical(obj,D)
+W = get_weight_structure(obj, [1:numel(obj);D*ones(1,numel(obj))]); %where I is a two-row matrix of
+categ_reg = find(ismember(constraint_type(W), ["first0","first1"])); % identify categorical regressors
+if length(categ_reg)<2
+    return;
+end
+
+% if at least two categorical regressors get concatenated,
+% keep the first with constraint, the others should have no
+% constraint
+for ii=categ_reg(2:end)
+    obj(ii).Weights(D).constraint= "free";
+end
 end
 
 %% number of regressor set (for concatenated regressors)
