@@ -505,6 +505,10 @@ classdef gum
                 this_score = Sc.(ScoreLabel{s});
                 if isscalar(this_score) || ischar(this_score)
                     ScoreString = [ScoreString '%16s: %14'];
+                    if islogical(this_score) % convert boolean to yes/no
+                        yesno = {'no','yes'};
+                        this_score = yesno{1+this_score};
+                    end
                     if ischar(this_score)
                         ScoreString(end+1) = 's';
                     elseif any(strcmp(ScoreLabel{s},Integer_scores))
@@ -2450,7 +2454,7 @@ classdef gum
 
             bool = false(size(obj));
             for m=1:numel(obj)
-                bool(m) = obj.score.isEstimated;
+                bool(m) = all([obj(m).score.isEstimated]);
             end
         end
 
@@ -3597,6 +3601,9 @@ classdef gum
 
             %% concatenate labels
             obj(1).label = {obj.label};
+            if isscalar(unique(obj(1).label)) % just one label (i.e. concatenated over datasets)
+                obj(1).label = obj(1).label{1};
+            end
 
             %% keep only first model
             obj(2:end) = [];
@@ -4359,7 +4366,10 @@ classdef gum
                         end
                     end
 
-                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h{:}, varargin{:});
+                    % if more than one dataset, pass it as extra possible label
+                    extra_args = plot_weights_extra_args(obj(mm).score.Dataset, obj(mm).label);
+
+                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h{:}, varargin{:}, extra_args{:});
 
                     % remove redundant labels and titles
                     if mm>1 && nsub>1
@@ -4378,22 +4388,10 @@ classdef gum
             end
 
             % if more than one dataset, pass it as extra possible label
-            Dataset = string(obj.score.Dataset);
-            if length(Dataset)>1 && ~all(Dataset=="")
-                varargin{end+1} = 'Dataset';
-                if iscolumn(obj.score.Dataset)
-                    varargin{end+1} = string(obj.score.Dataset)';
-                else
-                    varargin{end+1} = string(obj.score.Dataset);
-                end
-            elseif iscell(obj.label)
-                varargin{end+1} = 'Dataset';
-                varargin{end+1} = string(obj.label);
-            end
-            % varargin{end+1} = obj.score.SplittingVariable;
+            extra_args = plot_weights_extra_args(obj.score.Dataset, obj.label);
 
             % plot regressor weights
-            h = plot_weights(obj.regressor,U2, varargin{:});
+            h = plot_weights(obj.regressor,U2, varargin{:}, extra_args{:});
 
             set_figure_name(gcf, obj, 'Weights');
         end
@@ -6174,6 +6172,24 @@ function set_figure_name(gcf, obj, str)
 str = [str model_full_label(obj)];
 set(gcf, 'name',str);
 end
+
+%% extra arguments to be passed to plot_weights function
+function C = plot_weights_extra_args(Dataset, lbl)
+C = {};
+Dts = string(Dataset);
+if length(Dts)>1 && ~all(Dts=="")
+    C{1} = 'Dataset';
+    if iscolumn(Dataset)
+        C{2} = Dts';
+    else
+        C{2} = Dts;
+    end
+elseif iscell(lbl)
+    C{1} = 'Dataset';
+    C{2} = string(lbl);
+end
+end
+
 
 %% model label+dataset
 function str = model_full_label(obj)

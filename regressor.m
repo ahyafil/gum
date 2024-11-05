@@ -105,7 +105,7 @@ classdef regressor
     % function if bool is set to true (for categorical, continuous and
     % periodic type).
     %
-    % V = regressor(...,'label', N) to add label to regressor
+    % V = regressor(...,'label', lbl) to add label to regressor
     %
     % Main method for regressors: .
     % (TODO ADD)
@@ -364,7 +364,12 @@ classdef regressor
             end
 
             % bin data (if requested)
-            if ~isempty(binning)
+            if ismember(type, {'categorical','continuous','periodic'}) && isempty(binning) && length(unique(X(:)))>5000
+                % too many datapoints, bin to be able to compute
+                % posterior cov
+                binning = (max(X(:))- min(X(:)))/5e3; % more or less 5000 points
+            end
+            if ~isempty(binning) && ~isequal(binning,'none')
                 if ischar(binning) && strcmp(binning,'auto')
                     binning = (max(X(:))- min(X(:)))/100; % ensore more or less 100 points spanning range of input values
                 end
@@ -2096,7 +2101,11 @@ classdef regressor
                             W.PosteriorMean = zeros(obj(m).rank,size(Bmat,1));
                             for r=1:obj(m).rank
                                 % use pseudo-inverse to project back
-                                W.PosteriorMean(r,:) = pinv(Bmat')* U';
+                                if issparse(Bmat) && isdiag(Bmat)
+                                    W.PosteriorMean(r,:) = U'./diag(Bmat);
+                                else
+                                    W.PosteriorMean(r,:) = pinv(Bmat')* U';
+                                end
                             end
                         end
                         W.PosteriorStd = [];
@@ -2154,7 +2163,12 @@ classdef regressor
                         % compute posterior covariance, standard error
                         % of weights in original domain
                         rk = obj(m).rank;
-                        if ~isempty(B(1).PosteriorCov)
+                        compute_posterior_cov = ~isempty(B(1).PosteriorCov);
+                        if compute_posterior_cov && W.nWeight>1e4
+                            fprintf('too many values (%d) to compute posterior covariance for regressor ''%s'', try binning\n',W.nWeight, char(W.label));
+                            compute_posterior_cov = false;
+                        end
+                        if compute_posterior_cov
                             W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
                             W.PosteriorStd = zeros(rk, W.nWeight);
                             for r=1:rk
@@ -2363,7 +2377,6 @@ classdef regressor
                 grad_sf = [grad_sf{:}]; % concatenate over modules
                 GHP = blkdiag3(grad_sf{:}); % overall gradient of covariance matrices w.r.t hyperparameters
             end
-
         end
 
         %% UPDATE PRIOR COVARIANCE
@@ -2380,15 +2393,15 @@ classdef regressor
         end
 
         %% COMPUTE PRIOR MEAN
-        function obj = compute_prior_mean(obj, redo)
+        function obj = compute_prior_mean(obj, recompute)
             if nargin<2
-                redo = true;
+                recompute = true;
             end
 
             % if more than one object, compute iteratively
             if length(obj)>1
                 for i=1:numel(obj)
-                    obj(i) = compute_prior_mean(obj(i), redo);
+                    obj(i) = compute_prior_mean(obj(i), recompute);
                 end
                 return;
             end
@@ -2399,7 +2412,7 @@ classdef regressor
                 for r=1:rk
                     W = obj.Weights(d);
                     nW = W.nWeight;
-                    if  ~isempty(obj.Prior(r,d).PriorMean) && ~redo
+                    if  ~isempty(obj.Prior(r,d).PriorMean) && ~recompute
                         mu = obj.Prior(r,d).PriorMean;
                         assert( size(mu,2) ==nW, 'incorrect length for prior mean');
                         %if isvector(Mu) && rk>1
@@ -2532,32 +2545,30 @@ classdef regressor
 
         %% SAMPLE WEIGHTS FROM PRIOR
         function obj = sample_weights_from_prior(obj)
+
+            % compute prior mean and covariance if not done
+            obj = obj.compute_prior_mean(false);
+            obj = obj.compute_prior_covariance(false);
+
             for i=1:numel(obj)
-                %PP = ProjectionMatrix(obj(i));
                 nFreeWeights = obj(i).nFreeParameters;
-                for r=1:obj(i).rank
                     for d=1:obj(i).nDim
-                        P = obj(i).Prior(r,d);
-                        % cc = obj(i).Weights(d).constraint(r);
+                                                P = obj(i).Prior(d);
                         W = obj(i).Weights(d);
                         C = constraint_structure(W);
+                        obj(i).Weights(d).PosteriorMean = zeros(obj(i).rank, W.nWeight);
+
+                                        for r=1:obj(i).rank
+
                         if C.type == "fixed"
-                            % fixed weights: set to 1
-                            obj(i).Weights(d).PosteriorMean(r,:) = ones(1,W.nWeight);
+                            UU = 1; % fixed weights: set to 1
                         else
 
                             if d==first_update_dimension(obj(i))
                                 % first dimension to update should be zero (more generally: prior mean)
                                 UU = P.PriorMean;
                             else % other dimensions are sampled for mvn distribution with linear constraint
-                                % [Sigma,pp] = obj(i).projected_prior_covariance(d);
-                                % Sigma = P.PriorCovariance;
-                                %pp = PP{r,d};
-                                %Sigma = pp*P.PriorCovariance*pp';
-                                %if ~issymmetric(Sigma) % sometimes not symmetric for numerical reasons
-                                %    Sigma = (Sigma+Sigma')/2;
-                                %end
-                                if any(isinf(P.PriorCovariance(:)))
+                               if any(isinf(P.PriorCovariance(:)))
                                     % if no prior (i.e. infinite covariance), we sample from
                                     % standard normal distribution
                                     x = randn(1,nFreeWeights(r,d));
@@ -2568,11 +2579,9 @@ classdef regressor
                                     x = x*C.P;
                                 end
                                 UU =  P.PriorMean + x;
-                            end
-
-                            obj(i).Weights(d).PosteriorMean(r,:) = UU;
-
+                            end                           
                         end
+                         obj(i).Weights(d).PosteriorMean(r,:) = UU;
                     end
                 end
             end
@@ -3507,11 +3516,6 @@ classdef regressor
                 assert(isvector(Group),'Group should be a vector of group indices');
                 assert(all(diff(Group)>=0), 'indices in Group should be monotically non-decreasing');
             end
-            %    Gunq = unique(Group); % group unique values
-            %    nGroup = length(Gunq); % number of group
-            %
-            %   D = obj.Data;
-            %   S = size(D);
             nLag = length(Lags); % number of lags
 
             single_regressor = obj.nDim==1 && obj.Weights(1).nWeight ==1;
