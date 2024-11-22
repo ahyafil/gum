@@ -377,8 +377,14 @@ classdef sparsearray
             sz = size(obj);
             sz  = sz(NonOneHot);
 
-            Sub = cell(1,length(NonOneHot));
-            [Sub{:}] = ind2sub(sz, Ind); % indices of values for non-one-hot coding position
+            if isempty(NonOneHot)
+                Sub = {};
+            elseif isscalar(NonOneHot)
+                Sub = {Ind};
+            else
+                Sub = cell(1,length(NonOneHot));
+                [Sub{:}] = ind2sub(sz, Ind); % indices of values for non-one-hot coding position
+            end
             NOHE = NonOneHot;
 
             for dd=d % for all dimensions to change from one-hot encoding
