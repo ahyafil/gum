@@ -96,8 +96,6 @@ function varargout = wu(varargin)
 % - 'legend': use 'color' to use coloured text for legend (default),
 % 'standard' to use matlab built-in legend style, or 'none' to avoid
 % plotting legend
-% - 'axis' : on which axis dependent measure is plotted along:
-%'Y' (e.g. plot vertical bars, default value) or 'X' (underconstruction)
 % - 'permute': permute the order of dimensions: 'auto' to optimize figure
 % readability, or a permutation order
 % - 'layout': whether to use tiled layout (when more than one subplot)
@@ -894,10 +892,12 @@ switch nDim %number of dimension
         for s = 1:siz(dd)
             if layout
                 [h_ax(s), nRowSubplot,nColSubplot] = subplot2(siz(dd),s);
-            elseif s>1
+            else
                 h_ax(s) = nexttile;
-            else 
-                h_ax(s) = gca;
+                % elseif s>1
+                %     h_ax(s) = nexttile;
+                % else
+                %     h_ax(s) = gca;
             end
             setclim(clim);
             if ~isempty(levels{dd})
@@ -943,8 +943,8 @@ switch nDim %number of dimension
                     subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
                 elseif s1*s2>1
                     h_ax(s) = nexttile;
-                    else 
-                h_ax(s) = gca;
+                else
+                    h_ax(s) = gca;
                 end
 
                 setclim(clim); % colour limits

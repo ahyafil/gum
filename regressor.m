@@ -2552,13 +2552,13 @@ classdef regressor
 
             for i=1:numel(obj)
                 nFreeWeights = obj(i).nFreeParameters;
-                    for d=1:obj(i).nDim
-                                                P = obj(i).Prior(d);
-                        W = obj(i).Weights(d);
-                        C = constraint_structure(W);
-                        obj(i).Weights(d).PosteriorMean = zeros(obj(i).rank, W.nWeight);
+                for d=1:obj(i).nDim
+                    P = obj(i).Prior(d);
+                    W = obj(i).Weights(d);
+                    C = constraint_structure(W);
+                    obj(i).Weights(d).PosteriorMean = zeros(obj(i).rank, W.nWeight);
 
-                                        for r=1:obj(i).rank
+                    for r=1:obj(i).rank
 
                         if C.type == "fixed"
                             UU = 1; % fixed weights: set to 1
@@ -2568,7 +2568,7 @@ classdef regressor
                                 % first dimension to update should be zero (more generally: prior mean)
                                 UU = P.PriorMean;
                             else % other dimensions are sampled for mvn distribution with linear constraint
-                               if any(isinf(P.PriorCovariance(:)))
+                                if any(isinf(P.PriorCovariance(:)))
                                     % if no prior (i.e. infinite covariance), we sample from
                                     % standard normal distribution
                                     x = randn(1,nFreeWeights(r,d));
@@ -2579,9 +2579,9 @@ classdef regressor
                                     x = x*C.P;
                                 end
                                 UU =  P.PriorMean + x;
-                            end                           
+                            end
                         end
-                         obj(i).Weights(d).PosteriorMean(r,:) = UU;
+                        obj(i).Weights(d).PosteriorMean(r,:) = UU;
                     end
                 end
             end
@@ -4652,11 +4652,32 @@ Gunq = unique(Group); % group unique values
 nGroup = length(Gunq); % number of group
 
 % create data with lagged regressor(for now, last dimension is lag)
+doOHE = false;
 if issparse(D)
     if single_regressor
         Dlag = spalloc(S(1),nLag,nnz(D)*nLag);
     else
         Dlag =  sparsearray('empty',[S nLag],nnz(D)*nLag);
+    end
+    doOHE = isa(D, "sparsearray") && any(D.onehotencoding) && nGroup==1 && ~iscell(Lags);% faster if we use one-hot-encoding
+    if doOHE
+        % pre-allocate OHE arrays
+        OHE_dims = find(D.onehotencoding);
+        for dd=OHE_dims
+            this_dim = size(D.sub{dd});
+            this_dim(end+1:ndims(Dlag)-1)=1;
+            this_dim(ndims(Dlag)) = nLag;
+            Dlag.sub{dd} = zeros(this_dim, 'like',D.sub{dd});
+        end
+
+        % non OHE dimensions
+        S(OHE_dims)=1;
+        D.value = reshape(D.value, S); %
+        if nLag>1
+            Dlag.value = repmat(D.value,[ones(1,ndims(D)),nLag]);
+        else
+            Dlag.value = D.value;
+        end
     end
 elseif single_regressor
     Dlag = zeros([S(1) nLag]);
@@ -4673,56 +4694,125 @@ end
 
 
 % cell array of data indices
-Cin = cell(1,ndims(D));
-Cout = cell(1,ndims(Dlag));
-for d=2:ndims(D)
-    Cin{d} = 1:S(d);
-    Cout{d} = 1:S(d);
-end
+%Cin = cell(1,ndims(D));
+%Cout = cell(1,ndims(Dlag));
+Cout = allindices(S);
+%for d=1:ndims(D)
+% Cin{d} = 1:S(d);
+%   Cout{d} = 1:S(d);
+%end
+lag_dim = ndims(Dlag);% dimension corresponding to lag
 
 for l=1:nLag % for each lag group
     if nLag>1
-        Cout{end} = l; % position in last dimension of output array
+        Cout{lag_dim} = l; % position in last dimension of output array
     end
 
     for idx = 1:length(Lags{l}) % for each lag within that group
         lg = Lags{l}(idx); % this lag
 
-        for g=1:nGroup % for each observation group
-
-            Cin{1} = find(Group==Gunq(g)); % observations for this group
-            Cout{1} = Cin{1};
-            if lg>0
-                Cin{1}(end-lg+1:end) = []; % remove last observations according to lag
-            elseif lg<0 % negative lag
-                Cin{1}(1:-lg) = []; % remove first observations according to lag
+        if doOHE % when using one-hot encoding (and no group, and one lag per level)
+            % lag values for non-OHE dimensions
+            Dlag.value(Cout{:}) = zeropad_data(D.value, lg);
+            for dd=OHE_dims
+                % lag values for OHE dimensions
+                Cout_ohe = allindices(size(Dlag.sub{dd}));                
+                Cout_ohe{lag_dim} = l;
+                Dlag.sub{dd}(Cout_ohe{:}) = zeropad_data(D.sub{dd}, lg);
             end
+        else
 
-            this_D = D(Cin{:}); % input data for this group
+            for g=1:nGroup % for each observation group
 
-            % pad with zeros
-            if isa(D, 'sparsearray')
-                Dzeros = sparsearray('empty',[abs(lg) S(2:end)]);
-            elseif issparse(D)
-                Dzeros = spalloc(abs(lg),S(2));
-            else
-                Dzeros = zeros([abs(lg) S(2:end)]);
-            end
+                if nGroup>1
+                    Cout{1} = find(Group==Gunq(g)); % observations for this group
+                end
+                %           Cin{1} = Cout{1};
 
-            if lg>0 % positive lag: place zeros first
-                this_D = cat(1,Dzeros, this_D);
-            elseif lg<0 % negative lag: place zeros last
-                this_D = cat(1,this_D,Dzeros);
-            end
+                this_D = zeropad_data(D, lg, Cout{1});
+                %             if lg>0
+                %                 Cin{1}(end-lg+1:end) = []; % remove last observations according to lag
+                %             elseif lg<0 % negative lag
+                %                 Cin{1}(1:-lg) = []; % remove first observations according to lag
+                %             end
+                %
+                %             this_D = D(Cin{:}); % input data for this group
+                %
+                %             % pad with zeros
+                %             if isa(D, 'sparsearray')
+                %                 Dzeros = sparsearray('empty',[abs(lg) S(2:end)]);
+                %             elseif issparse(D)
+                %                 Dzeros = spalloc(abs(lg),S(2));
+                %             else
+                %                 Dzeros = zeros([abs(lg) S(2:end)]);
+                %             end
+                %
+                %             if lg>0 % positive lag: place zeros first
+                %                 this_D = cat(1,Dzeros, this_D);
+                %             elseif lg<0 % negative lag: place zeros last
+                %                 this_D = cat(1,this_D,Dzeros);
+                %             end
 
-            % place in output data
-            if idx==1
-                Dlag(Cout{:}) = this_D;
-            else % if more than one lag in lag group, add regressor values
-                Dlag(Cout{:}) = this_D + Dlag(Cout{:});
+                % place in output data (!! should speed up using subsasign)
+                if idx==1
+                    Dlag(Cout{:}) = this_D;
+                else % if more than one lag in lag group, add regressor values
+                    Dlag(Cout{:}) = this_D + Dlag(Cout{:});
+                end
             end
         end
     end
+end
+
+if doOHE
+    Dlag.value = Dlag.value(:); % back to column vector
+end
+end
+
+%% ZERO-PAD DATA FOR LAGGED REGRESSORS
+function this_D = zeropad_data(D, lg, obs_subset)
+S = size(D);
+
+Cin = allindices(S);
+%Cin = cell(1,ndims(D));
+%for d=2:ndims(D)
+%    Cin{d} = 1:S(d);
+%end
+if nargin>2
+    Cin{1}= obs_subset;
+end
+
+if lg>0
+    Cin{1}(end-lg+1:end) = []; % remove last observations according to lag
+elseif lg<0 % negative lag
+    Cin{1}(1:-lg) = []; % remove first observations according to lag
+end
+
+this_D = D(Cin{:}); % input data for this group
+
+% pad with zeros
+if isa(D, 'sparsearray')
+    Dzeros = sparsearray('empty',[abs(lg) S(2:end)]);
+elseif issparse(D)
+    Dzeros = spalloc(abs(lg),S(2));
+else
+    Dzeros = zeros([abs(lg) S(2:end)]);
+end
+
+if lg>0 % positive lag: place zeros first
+    this_D = cat(1,Dzeros, this_D);
+elseif lg<0 % negative lag: place zeros last
+    this_D = cat(1,this_D,Dzeros);
+end
+
+
+end
+
+%% CELL ARRAY WITH ALL INDICES
+function C = allindices(S)
+C = cell(1,length(S));
+for i=1:length(S)
+    C{i} = 1:S(i);
 end
 end
 
@@ -4908,7 +4998,7 @@ for s=1:nSet
     W.nWeight = sum( index_weight==s);
     %  index_weight = iWeight(s)+1:iWeight(s+1);
     this_scale = W.scale(:, index_weight==s); % scale for this set of weights
-    if nSet>1
+    if nSet>1 && size(this_scale,1)>1
         this_scale(end,:) = []; % remove dimension encoding set index
     end
     iHP = HP.index ==s & covHP; % covariance hyperparameter for this set of weight
@@ -5159,7 +5249,9 @@ for s=1:nSet
     W(s).scale(dummy_scale_dim,:) = [];
     if isempty(Wc.basis) || isequal(Wc.basis(s).fun,'none')
         W(s).basis = [];
+        if ~isempty( Wc.U_allstarting)
         W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
+        end
     else
         W(s).basis = Wc.basis(s);
         W(s).U_allstarting = [];

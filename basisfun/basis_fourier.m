@@ -6,7 +6,7 @@ function [B,scale,params, gradB] = basis_fourier(X, HP, params)
 %
 % [B,scale,params]= basis_fourier(...)
 
-if nargin<3
+if nargin<3 || isnan(params.nFreq) 
     params.condthresh = 1e12; % threshold on condition number of covariance matrix
     params.padding = true; % whether to add virtual padding
 end
@@ -64,7 +64,7 @@ else
 end
 
 % set up Fourier frequencies
-if ~isnan(params.condthresh)
+if ~isempty(params.condthresh) && ~isnan(params.condthresh)
     % the number of basis functions is pased on threshold
     nFreq = floor((Tcirc/(pi*minl)) * sqrt(.5*log(params.condthresh)));
 else

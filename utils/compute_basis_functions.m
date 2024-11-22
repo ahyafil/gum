@@ -14,7 +14,7 @@ if ~isConcatenated % if no splitting or concatenating
     if nargout>2
     assert(size(gradB,3)==sum(isBasisHP), 'dimension 3 of gradient should match the number of basis functions hyperparameters');
 
-    gradB(:,:,~HP.fit) = []; % remove fixed HPs from gradient
+    gradB(:,:,~HP.fit(isBasisHP)) = []; % remove fixed HPs from gradient
     end
 else
     % more rows in scale means we fit different

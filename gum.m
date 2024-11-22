@@ -178,6 +178,7 @@ classdef gum
     % - constraints: add custom field, i.e. "mean3"
     % - basis functions:  allow for change (L2/ARD/none) - done?
     % - plot_variance_vs_predictor (for normal and Poisson/lognorm)
+    % - speed up computation of Dlag for lag(f(x))
     % - crossvalidation: set cv weights as initial weights, do not infer on
     % full dataset at every iteration
     % - test if residual is linear in one predictor (normal, expand for
@@ -5172,7 +5173,7 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     nW = size(Bmat,2);
     gradK_tmp = zeros(nW, nW,nHP);
 
-    basisHP = find(contains(HPs.type, "basis"));
+    basisHP = find(contains(HPs.type, "basis") & HPs.fit);
 
     for p=1:length(basisHP) % for all fitted hyperparameter
         BKgradB =Bmat'*K*gradB(:,:,p);
@@ -5343,8 +5344,8 @@ FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options f
 summing_opts =  {'joint', 'weighted', 'linear','equal','split','continuous'};% possible values for 'sum' options for multidim nonlinearity
 constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
 
-basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier('}; % regular expressions for 'basis' options
-lag_option_list = {'Lags','group','basis', 'split','placelagfirst'}; % options for lag operator
+basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier(','fourier([\d]+)('}; % regular expressions for 'basis' options
+lag_option_list = {'Lags','group','basis', 'split','placelagfirst','tau'}; % options for lag operator
 
 inLag = false; % if we're within a lag operator
 LagStruct = {};
@@ -5644,7 +5645,12 @@ while ~isempty(fmla)
                 is_null_regressor = true;
 
             else
-                V{end+1} = struct('variable',Num, 'type','constant','opts',struct());
+                if Num==1
+                    type = 'linear';
+                else
+                    type = 'constant';
+                end
+                V{end+1} = struct('variable',Num, 'type',type,'opts',struct());
             end
             fmla = trimspace(fmla);
 
@@ -5688,7 +5694,6 @@ while ~isempty(fmla)
                 fmla(1:i) = [];
                 fmla = trimspace(fmla);
 
-
                 switch lower(option)
                     case 'lags'
                         i = find(fmla==')' | fmla==separator,1);
@@ -5711,6 +5716,13 @@ while ~isempty(fmla)
                     case 'group'
                         [GroupVar, fmla] = starts_with_word(fmla, VarNames);
                         LS.group = Tbl.(GroupVar);
+                         case 'tau'
+                        [Num, fmla] = starts_with_number(fmla, strcmpi(option,'tau'));
+                   
+                    if isnan(Num)
+                        error('Value for option ''%s'' should be numeric',option);
+                    end
+                    LS.tau = Num;
                 end
                 fmla = trimspace(fmla);
 
@@ -5943,7 +5955,7 @@ while length(V)>1
 
     elseif any(O==':' | O=='^') % then process interaction
 
-        v = find(O==':' || O=='^',1);
+        v = find(O==':' | O=='^',1);
         if O(v) == ':'
             V{v} = V{v} : V{v+1}; % compose interaction
         else

@@ -1215,7 +1215,7 @@ classdef sparsearray
 
             %% deal with special case when we only need to project over one dummy dimension (should be faster this way)
             still_to_do = ~cellfun(@isempty,U);
-            if sum(still_to_do==1)
+            if sum(still_to_do)==1
                 d = find(still_to_do);
                 if isrow(U{d}) && all(U{d}==1) && sum(obj.onehotencoding)==1 &&...
                         size(obj.sub{obj.onehotencoding},d)>1 && nnz(obj.value)==nnz(obj.sub{obj.onehotencoding})% dummy variable for OHE
@@ -1224,20 +1224,20 @@ classdef sparsearray
                     obj.sub{d_onehot} = reshape(obj.sub{d_onehot},size(obj.value,1),size(obj.value,2));
                     [I2,J2,ind_newdim] = find(obj.sub{d_onehot});
                     if all(I==I2) && all(J==J2) % make extra sure the non-zero values coincide
-                          P = sparse(I,ind_newdim,V,obj.size(1),obj.size(d_onehot));
-                          S = obj.size;
-                          S(d)=1;
-                          if length(S)>2
-                              P = sparsearray(P);
-                              P = reshape(P,S);
-                              return;
-                          end
+                        P = sparse(I,ind_newdim,V,obj.size(1),obj.size(d_onehot));
+                        S = obj.size;
+                        S(d)=1;
+                        if length(S)>2
+                            P = sparsearray(P);
+                            P = reshape(P,S);
+                            return;
+                        end
                     end
                 end
             end
 
             %% project remaining non-OHE dimensions
-                        obj = fullcoding(obj);
+            obj = fullcoding(obj);
 
             [P,S] = tprod(obj.value, U, obj.siz); % tensor product
 
