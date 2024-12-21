@@ -42,17 +42,19 @@ end
 
 % now let's complete V to form a basis of R^n
 % we'll find the first m-by-m subset of V that forms a basis of R^m
-Q = nchoosek(1:n,m); % all possible subsets of m dimensions
-i=1;
+%Q = nchoosek(1:n,m); % all possible subsets of m dimensions
+subs = [];
+%i=1;
 gotit = false;
 while ~gotit
-    subs = Q(i,:); % subset of m dimensions
+    subs = nextcombi(subs,n,m);
+    % subs = Q(i,:); % subset of m dimensions
     W = V(subs,:); % square matrix of size m
 
     [~,flag] = chol(W'*W);
     gotit = ~flag; % if FLAG is 0, then vectors are not colinear
 
-    i = i+1;
+   % i = i+1;
 end
 
 % now if we reorder the n dimensions to place subs first and then the other
@@ -84,3 +86,28 @@ for i=1:n
 end
 
 P = U(:,m+1:n)';
+end
+
+function subs = nextcombi(subs,n,k)
+% find next possible combination of k integers in 1...N
+% code is adapted from NCHOOSEK
+% We use this instead of NCHOOSEK to avoid issues for large k
+
+if isempty(subs)
+    subs = 1:k; % first combination: first k integers
+    return;
+end
+
+% Find right-most index to increase
+% j = find(ind < n-k+1:n, 1, 'last');
+for j = k:-1:1
+    if subs(j)<n-k+j
+        break;
+    end
+end
+
+% Increase index j, initialize all indices to j's right.
+indj = subs(j) - j + 1;
+subs(j:k) = indj + (j:k);
+
+end

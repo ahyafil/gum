@@ -1,6 +1,10 @@
-function [theAxis, m1, m2] = subplot2(varargin)
-%[theAxis n1 n2] = subplot2(n1, n2, x1, x2)
-% ou [theAxis n1 n2] = subplot(n, x)
+function [h, m1, m2, x1, x2] = subplot2(varargin)
+%[h, n1 n2] = subplot2(n1, n2, x1, x2)
+% or [h, n1, n2] = subplot2(n, x)
+% creates subplot at position x out of n.
+% h: axis handles
+%
+% See SUBPLOT
 
 if nargin==2
     n2 = varargin{1};
@@ -8,7 +12,6 @@ if nargin==2
     x2 = varargin{2};
     x1 =1;
 %    theAxis = subplot(n1, n2, x);
-    
 else
     n1 = varargin{1};
     n2 = varargin{2};
@@ -47,4 +50,4 @@ end
 m1 = round(m1);
 m2 = round(m2);
 
-theAxis = subplot(m1,m2, x);
+h = subplot(m1,m2, x);

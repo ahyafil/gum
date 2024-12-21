@@ -106,7 +106,7 @@ end
 end
 
 %% 
-function [B,wvec,wcos,wsin] = fftbasis(tvec,T,N)
+function [B,wvec] = fftbasis(tvec,T,N)
 % Real basis for non-uniform discrete fourier transform
 % (adapted from Pillowlab code)
 %

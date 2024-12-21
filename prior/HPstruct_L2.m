@@ -14,7 +14,7 @@ end
 
 S.label = "log \lambda";  % HP labels
 if nargin>2 && ~isempty(HPfit)
-    S.fit = HPfit; % if HP is fittable
+    S.fit = logical(HPfit); % if HP is fittable
 else
     S.fit = true;
 end

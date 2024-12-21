@@ -1,6 +1,12 @@
 function [B, scale, params, gradB] = basis_raisedcos(X,HP, params)
 %computes basis functions as raised cosine
 %[B, scale, params, gradB] = basis_raisedcos(X,[a,c,Phi_1], params)
+%
+% b_i(x) = 1/2 + cos(a*log(x+c)-Phi(i))/2;
+% if -pi<=a*log(x+c)-Phi(i)<=pi,
+% b_i(x) = 0 otherwise
+% with Phi(i) = Phi_1 + pi*(i-1)/2
+
 
 if size(X,1)>1
     %% another scale: separate set of basis functions for each level

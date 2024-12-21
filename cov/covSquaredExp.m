@@ -19,7 +19,7 @@ if nargin<2
     return;
 end
 
-%X = double(X);
+X = double(X); % e.g. if scale is a string due to splitting variable
 
 % whether we express covariance in original or spectral space
 noTransform = isempty(B) || B.params.noTransform;

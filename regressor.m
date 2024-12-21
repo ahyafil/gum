@@ -163,6 +163,7 @@ classdef regressor
             prior = [];
             ref = [];
             odd = false;
+            even = false;
 
             if nargin<2
                 type = 'linear';
@@ -221,8 +222,11 @@ classdef regressor
                             assert(any(strcmp(type, {'continuous','periodic'})), 'binning option only for continuous or periodic variable');
                         end
                     case 'odd'
-                        assert(isscalar(odd), 'odd argument expects a scalar');
                         odd = logical(varargin{v+1});
+                        assert(isscalar(odd), 'odd argument expects a scalar');
+                    case 'even'
+                        even = logical(varargin{v+1});    
+                        assert(isscalar(even), 'even argument expects a scalar');
                     case 'label'
                         label = string(varargin{v+1});
                     case 'dimensions'
@@ -238,7 +242,7 @@ classdef regressor
                 end
                 v = v +2;
             end
-
+            assert(~odd || ~even, 'a function cannot be odd and even at the same time');
 
             %% which hyparameters are estimated
             % default values
@@ -295,7 +299,6 @@ classdef regressor
             else
                 HPfit = logical(HPfit);
             end
-
 
             if isrow(X)
                 X = X';
@@ -364,11 +367,11 @@ classdef regressor
             end
 
             % bin data (if requested)
-            if ismember(type, {'categorical','continuous','periodic'}) && isempty(binning) && length(unique(X(:)))>5000
-                % too many datapoints, bin to be able to compute
-                % posterior cov
-                binning = (max(X(:))- min(X(:)))/5e3; % more or less 5000 points
-            end
+            %if ismember(type, {'categorical','continuous','periodic'}) && isempty(binning) && length(unique(X(:)))>5000
+            %    % too many datapoints, bin to be able to compute
+            %    % posterior cov
+            %    binning = (max(X(:))- min(X(:)))/5e3; % more or less 5000 points
+            %end
             if ~isempty(binning) && ~isequal(binning,'none')
                 if ischar(binning) && strcmp(binning,'auto')
                     binning = (max(X(:))- min(X(:)))/100; % ensore more or less 100 points spanning range of input values
@@ -399,12 +402,14 @@ classdef regressor
                 label = [strings(1,nD-1) label];
             end
 
-            if odd
+            if odd || even
                 assert(ismember(lower(type),{'categorical','continuous','periodic'}))
                 % if function is taken to be odd, store sign of X
                 % and use function of absolute value
-                sgnX = sign(X);
-                sgnX(isnan(X)) = 0;
+                if odd
+                    sgnX = sign(X);
+                    sgnX(isnan(X)) = 0;
+                end
 
                 X = abs(X);
             end
@@ -463,8 +468,6 @@ classdef regressor
                             obj.Prior(nD).CovFun = @ard_covfun;
                     end
                     obj.Prior(nD).type = prior{nD};
-
-                    % obj.HP(nD).fit = HPfit;
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh,dimensions);
@@ -588,8 +591,10 @@ classdef regressor
             if ~strcmpi(type, 'constant')
                 noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint}) | cellfun(@(x) x=="",{obj.Weights.constraint});
                 FreeDim = find(~SplitOrSeparate & noDefinedConstraint,1);
+                SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
+                SplitOrSeparate(end+1:obj.nDim) = false;
                 for d= find(noDefinedConstraint)
-                    if any([obj.Weights.constraint] == "free")
+                    if any([obj.Weights.constraint] == "free") && ~SplitOrSeparate(d)
                         obj.Weights(d).constraint = "mean1"; % mean-one constraint if already a free dimension
                     else
                         obj.Weights(d).constraint = "free"; % otherwise free
@@ -622,7 +627,6 @@ classdef regressor
                     end
                 end
             end
-
             if ~isempty(constraint)
                 constraint = [strings(1,obj.nDim-length(constraint)) constraint];
                 for d=1:obj.nDim
@@ -632,7 +636,6 @@ classdef regressor
                 end
             end
 
-
             if odd
                 % if odd function, multiply by sign
                 %         % multiply by sign (fixed)
@@ -641,7 +644,6 @@ classdef regressor
 
             % split or separate if needed
             obj = obj.split_or_separate(summing);
-
         end
 
         %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1106,7 +1108,7 @@ classdef regressor
             %
             % M = set_weights(M,U, dims, field) or M = set_weights(M,U, [],
             % field) to apply to specific field: 'PosteriorMean' (default),
-            % 'PosteriorStd', 'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'
+            % 'PosteriorStd', 'U_allstarting','U_CV', 'U_bootstrap','ci_bootstrap'
 
             if isa(U, 'regressor')
                 % if regressor object, extract vector of weights
@@ -1139,7 +1141,7 @@ classdef regressor
                     nW = obj(m).Weights(d).nWeight; % number of regressors
                     this_constraint = constraint_type(obj(m).Weights(d));
 
-                    if any(strcmp(fild,{'U_allstarting','U_CV', 'U_bootstrap','ci_boostrap'} ))
+                    if any(strcmp(fild,{'U_allstarting','U_CV', 'U_bootstrap','ci_bootstrap'} ))
 
                         idx = ii+(1:nW*rk);
                         this_U = reshape(U(idx,:), [nW, rk, size(U,2)]); % weights x rank x initial point
@@ -1234,7 +1236,6 @@ classdef regressor
 
                 obj(i).Prior(d) = empty_prior_structure(1); % remove prior
                 obj(i).HP(d) =  HPstruct(); % empty HP structure
-                %  obj(i).HP(d).fit(:) = 0;
             end
         end
 
@@ -1673,11 +1674,11 @@ classdef regressor
             elseif strncmpi(basis, 'fourier',7)
 
                 if length(basis)>7 % 'fourierN'
-                    nBasisFun = str2double(basis(8:end));
-                    assert(~isnan(nBasisFun), 'incorrect basis label');
+                    nFreq = str2double(basis(8:end));
+                    assert(~isnan(nFreq), 'incorrect basis label');
                     condthresh = nan;
                 else % 'fourier': number of basis functions is calculated automatically
-                    nBasisFun = nan;
+                    nFreq = nan;
                 end
                 obj.Prior(d).CovFun = @covSquaredExp;
 
@@ -1685,7 +1686,7 @@ classdef regressor
                 B.fixed = true; % although the actual number of regressors do change
                 padding = ~strcmpi(type, 'periodic'); % virtual zero-padding if non-periodic transform
 
-                B.params = struct('nDim',size(scale,1),'nFreq',nBasisFun,'condthresh',condthresh, 'padding', padding);
+                B.params = struct('nDim',size(scale,1),'nFreq',nFreq,'condthresh',condthresh, 'padding', padding);
                 if strcmpi(type,'periodic')
                     B.params.Tcirc = period;
                 end
@@ -1755,8 +1756,6 @@ classdef regressor
                 B.projected = false;
                 obj.Weights(d).basis = B;
             end
-
-            % remove constraints from number of free weights
             if isempty(obj.Weights(d).constraint)
                 obj.Weights(d).constraint = "free";
             end
@@ -2163,20 +2162,31 @@ classdef regressor
                         % compute posterior covariance, standard error
                         % of weights in original domain
                         rk = obj(m).rank;
+                        W.PosteriorStd = zeros(rk, W.nWeight);
                         compute_posterior_cov = ~isempty(B(1).PosteriorCov);
-                        if compute_posterior_cov && W.nWeight>1e4
-                            fprintf('too many values (%d) to compute posterior covariance for regressor ''%s'', try binning\n',W.nWeight, char(W.label));
-                            compute_posterior_cov = false;
-                        end
-                        if compute_posterior_cov
+                      if compute_posterior_cov
+                        %  if compute_posterior_cov && W.nWeight>1e4
+                          if W.nWeight>1e2
+                      % too many data points to compute full
+                            % posterior covariance, only compute along the
+                            % diagonal
+                            for  r=1:rk
+                                diag_pcov = sum(B(1).B .* (B(1).PosteriorCov(:,:,r) * B(1).B),1);
+                                W.PosteriorCov = spdiags(diag_pcov); % !should change to sparsearrays if rk>1
+                                W.PosteriorStd(r,:) = sqrt(diag_pcov);
+                            end
+                            %fprintf('too many values (%d) to compute posterior covariance for regressor ''%s'', try binning\n',W.nWeight, char(W.label));
+                            %compute_posterior_cov = false;
+                        %end
+                        %if compute_posterior_cov
+                          else
                             W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
-                            W.PosteriorStd = zeros(rk, W.nWeight);
                             for r=1:rk
                                 PCov  = B(1).B' * B(1).PosteriorCov(:,:,r) * B(1).B;
                                 W.PosteriorCov(:,:,r) = PCov;
                                 W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
                             end
-
+                          end
                             % compute T-statistic and p-value
                             W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
                             W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
@@ -3105,7 +3115,7 @@ classdef regressor
                 free_continuous1 = strcmp({W1.type}, 'continuous') & constraint_type(W1)=="free";
                 free_continuous2 = strcmp({W2.type}, 'continuous') & constraint_type(W2)=="free";
 
-                % make sure that this are one-hot-encoding (not the case
+                % make sure that these are one-hot-encoding (not the case
                 % when using timeregressor)
                 i1free = i1(free_continuous1);
                 cnt = 1;
@@ -3140,8 +3150,6 @@ classdef regressor
             end
             assert(isscalar(obj1) && isscalar(obj2), 'interaction should be between scalar regressor objects');
             assert(obj2.nObs==obj1.nObs, 'number of observations do not match');
-            % assert(obj1.nDim ==1 && obj2.nDim ==1 && strcmp(obj1.Weights.type,'categorical') && strcmp(obj2.Weights.type,'categorical'),...
-            %     'regressors must be one-dimensional categorical');
             assert(obj1.nDim ==1 && obj2.nDim ==1, 'regressors must be one-dimensional');
 
             obj = obj1;
@@ -3328,17 +3336,20 @@ classdef regressor
         end
 
         %% SPLIT DIMENSION
-        function obj = split_dimension(obj,D)
+        function obj = split_dimension(obj,D, varargin)
             % R = R.split_dimension(D) splits dimension D
 
             assert(all(D<=obj.nDim),'values of D cannot be larger than number of dimensions in regressor');
             summing = cell(1,obj.nDim);
             summing(D) = {'split'};
-            obj = split_or_separate(obj, summing);
+            obj = split_or_separate(obj, summing, varargin{:});
         end
 
         %% SPLIT OR SEPARATE
-        function   obj = split_or_separate(obj, summing)
+        function   obj = split_or_separate(obj, summing, keeplabel)
+            if nargin<3
+                keeplabel= true;
+            end
 
             % whether splitting or separate regressors options are
             % requested
@@ -3372,7 +3383,9 @@ classdef regressor
                 obj.Weights(dd).nWeight = nWeightCombination; % one set of weights in dim 1 for each level of dim 2
                 obj.Weights(dd).scale = interaction_levels(W(dd).scale, W(d).scale);
                 obj.Weights(dd).dimensions = [obj.Weights([dd d]).dimensions];
+                if ~keeplabel
                 obj.Weights(dd).label = W(d).label;
+                end
             else
 
                 for d=SplitDims
@@ -3552,7 +3565,9 @@ classdef regressor
 
             HH(nDim_new) = struct;
             obj = define_priors_across_dims(obj, nDim_new, summing, {}, HH, scale, basis, true, [], dimensions);
-            obj.Weights(nDim_new).label = "lag";
+            if isempty(obj.Weights(nDim_new).label) % not clear when this should happen, at least not for the basic case
+                obj.Weights(nDim_new).label = "lag";
+            end
             if any(SplitValue) || isempty(SplitValue) || all(~isFreeWeightSet(obj,1:nDim_new-1))
                 obj.Weights(nDim_new).constraint = "free";
             else % if no splitting, i.e multidimensional regressor, need to set some constraint
@@ -3568,7 +3583,7 @@ classdef regressor
             % split dimensions
             if any(SplitValue)
                 SplitDims = find(SplitValue) + PlaceLagFirst;
-                obj = obj.split_dimension(SplitDims);
+                obj = obj.split_dimension(SplitDims,false);
             end
             obj.formula = "lag("+ obj.formula +")";
         end
@@ -3914,6 +3929,7 @@ classdef regressor
             % subplots
 
             Dataset = [];
+            use_bootstrap = false;
 
             if nargin<2 || isequal(label, 'nsubplot')
                 if nargin>=2 && isequal(label, 'nsubplot') % R.plot_weights('nsubplot',...)
@@ -3971,6 +3987,12 @@ classdef regressor
                 elseif isequal(varg,'Dataset') %plot_weights(...,'Dataset',lbl,...)
                     Dataset = varargin{v+1};
                     varargin(v:v+1) = [];  % remove from list of arguments
+                elseif isequal(varg,'bootstrap') || isequal(varg,"bootstrap") ||...
+                        isequal(varg,'bootstraps') || isequal(varg,"bootstraps") 
+                    use_bootstrap = true;
+                    varargin(v) = []; % remove from list of arguments
+                    assert(isfield(obj(1).Weights, 'ci_bootstrap'),...
+                        'Boostrap value have not been computed - use bootstrapping() before plotting');
                 else % argument for wu
                     v = v+1;
                 end
@@ -4021,7 +4043,7 @@ classdef regressor
                         W(s).plot = varargin;
                     end
 
-                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, Dataset);
+                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, Dataset,use_bootstrap);
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
@@ -4188,7 +4210,7 @@ end
 
 
 %% PLOT SINGLE WEIGHTS
-function [h_nu, cols, cm] = plot_single_weights(W, P, HP, rk, cols, cm, Dataset)
+function [h_nu, cols, cm] = plot_single_weights(W, P, HP, rk, cols, cm, Dataset,use_bootstrap)
 if isa(W.plot, 'function_handle')
     %% custom-defined plot
     h_nu = W.plot(W);
@@ -4208,10 +4230,17 @@ end
 
 % error bar values
 U = W.PosteriorMean'; % concatenate over ranks
-if isempty(W.PosteriorStd)
-    se = nan(size(U));
+if use_bootstrap
+    UE = W.ci_bootstrap(2,:)' - U; % upper error
+    LE = U - W.ci_bootstrap(1,:)'; % lower error
 else
-    se = W.PosteriorStd';
+if isempty(W.PosteriorStd) % no error
+    UE = nan(size(U));
+    LE = UE;
+else
+    UE = W.PosteriorStd'; % symmetric errors
+    LE = UE;
+end
 end
 
 if ~isempty(Dataset) % when plotting weights from different datasets
@@ -4220,11 +4249,12 @@ if ~isempty(Dataset) % when plotting weights from different datasets
 end
 if size(scale,2)>1
     % try to convert to matrix representation
-    [scale, U, se] = mesh_to_matrix(scale, U, se);
+    [scale, U, UE,LE] = mesh_to_matrix(scale, U, UE,LE);
 end
 if size(U,1)==1
     U = shiftdim(U,1);
-    se = shiftdim(se,1);
+    UE = shiftdim(UE,1);
+    LE = shiftdim(LE,1);
 end
 if ~iscell(scale)
     scale = {scale};
@@ -4238,7 +4268,8 @@ if ~iscolumn(U)
     [~,ord] = sort(weighted_siz,'descend');
 
     U = permute(U,ord);
-    se = permute(se,ord);
+    UE = permute(UE,ord);
+    LE = permute(LE,ord);
     scale = scale(ord);
     dim_label = dim_label(ord);
 end
@@ -4367,7 +4398,7 @@ switch plot_type
         collapse = verLessThan('matlab', '9.9'); % collapse into single subplot when cannot use nexttile
 
         % call plotting function
-        [~,~,h_nu] = wu([],U,se,scale,plot_opt{:},dim_label, 'collapse',collapse);
+        [~,~,h_nu] = wu([],U,LE,UE,scale,plot_opt{:},dim_label, 'collapse',collapse);
 
         % add horizontal line for reference value
         if W.nWeight >= 8
@@ -4422,8 +4453,12 @@ for i=1:nSubplots
 end
 
 i = 1; % subplot counter
-cm = 1; % colormap counter
+%cm = 1; % colormap counter
 h.Objects = {};
+
+% blue to white to red colormap
+nCol = 100;
+cmap = [0:1/nCol:1 ones(1,nCol); 0:1/nCol:1-1/nCol 1:-1/nCol:0; ones(1,nCol) 1:-1/nCol:0]';
 
 %% plot
 for j=1:size(idx,2) % loop between subpots
@@ -4458,8 +4493,14 @@ for j=1:size(idx,2) % loop between subpots
             yticks(1:length(sc));
             yticklabels(sc);
         end
-        h.Objects{i} = colormap(h.Axes(i), color_map(cm));
-        cm = cm+1;
+       % h.Objects{i} = colormap(h.Axes(i), color_map(cm));
+       h.Objects{i} = colormap(h.Axes(i), cmap);
+
+       % use symmetrical colorscale
+       this_clim = get(h.Axes(i),'CLim');
+       this_clim = max(abs(this_clim))*[-1 1];
+       set(h.Axes(i),'CLim',this_clim);
+       % cm = cm+1;
     else
         bar(W.PosteriorCov);
     end
@@ -4538,12 +4579,12 @@ end
 % end
 
 %% RECONSTRUCT MATRIX FROM MESH
-function [Uniq, U, se] = mesh_to_matrix(S, U, se, cutoff)
-% [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
+function [Uniq, U, UE, LE] = mesh_to_matrix(S, U, UE, LE,cutoff)
+% [S, U, UE,LE] = mesh_to_matrix(S, U, UE,LE [,cutoff])
 % to transform mesh data to matrix form (if the inoccupancy ratio is
 % smaller than cutoff)
 
-if nargin<4
+if nargin<5
     cutoff = 3;
 end
 
@@ -4570,8 +4611,9 @@ if ratio>cutoff
     return;
 end
 
-U2 = nan(nUnique);
-se2 = nan(nUnique);
+U_tmp = nan(nUnique);
+UE_tmp = nan(nUnique);
+LE_tmp = nan(nUnique);
 idx = cell(1,length(nUnique));
 for i=1:nCombi
     [idx{:}] = ind2sub(nUnique,i); % value in each dimension
@@ -4583,12 +4625,14 @@ for i=1:nCombi
         bool = bool & equal_numeric_or_cell(Scell{d},this_val);
     end
     if any(bool)
-        U2(i) = U(find(bool,1));
-        se2(i) = se(find(bool,1));
+        U_tmp(i) = U(find(bool,1));
+        UE_tmp(i) = UE(find(bool,1));
+        LE_tmp(i) = LE(find(bool,1));
     end
 end
-U = squeeze(U2);
-se = squeeze(se2);
+U = squeeze(U_tmp);
+UE = squeeze(UE_tmp);
+LE = squeeze(LE_tmp);
 end
 
 %% compare cell or numeric arrays

@@ -19,7 +19,7 @@ function varargout = wu(varargin)
 % wu(Y,errortype) specifies how error values are computed. Possible values
 % are:
 % - 'std' :standard deviation (default option for 'mean')
-% - 'ste': standard error of the mean
+% - 'sem': standard error of the mean
 % - 'correctedste': standard error of the mean removing mean value over
 % all data in the same line (i.e. removing variance due to random factor),
 % provides a visual hint of significance of t-test
@@ -228,7 +228,7 @@ if do_median
     errorbars = 'quartile'; % default option
 else
     avg_fun = @nmean;
-    errorbars = 'ste';
+    errorbars = 'sem';
 end
 
 switch syntax
@@ -433,7 +433,7 @@ while v<=length(varargin)
                     linestyle = string(varg);
                 case {'.','o','x','+','*','s','d','v','^','<','>','p','h'}
                     marker = string(varg);
-                case {'ste', 'std', 'correctedste', 'quartile','noerror'}
+                case {'sem','ste', 'std', 'correctedste', 'quartile','noerror'}
                     errorbars = varg;
                 case {'curve', 'bar', 'xy', 'imagesc'}  %'noplot'
                     plottype = varg;
@@ -535,7 +535,7 @@ end
 if isempty(L)
     if isnumeric(Yraw) || islogical(Yraw)
         switch errorbars
-            case 'ste'
+            case {'sem','ste'}
                 if islogical(Yraw)
                     nobs = sum(~isnan(Yraw),1);
                     L = sqrt( shiftdim(M.*(1-M),-1) ./ nobs); % estimated s.e.m for binary observations
@@ -568,15 +568,15 @@ if isempty(L)
         end
     else
         switch errorbars
-            case 'ste'
-                L = cellfun(@ste, Yraw);
+            case {'sem','ste'}
+                L = cellfun(@sem, Yraw);
                 U = L;
             case 'std'
                 L = cellfun(@std, Yraw);
                 U = L;
             case 'correctedste'
                 warning('cannot correct for random factor variance if data is not paired, using classical standard error instead');
-                L = cellfun(@ste, Yraw);
+                L = cellfun(@sem, Yraw);
                 U = L;
             case 'quartile'
                 L = M - cellfun(@(x) quantile(x,.25), Yraw);
@@ -861,10 +861,6 @@ if strcmp(plottype,'imagesc') && nDim>2
     clim = [min(M(:)) max(M(:))];
 end
 
-% whether figure is currently on hold
-is_hold = ishold;
-hold on;
-
 %% layout
 if isempty(layout) && nDim>2
     % by default, we use layout if there's not any axes already in figure,
@@ -872,6 +868,10 @@ if isempty(layout) && nDim>2
     noTiling = verLessThan('matlab', '9.13'); % we need tilerowcol
     layout = isempty(get(gcf,'child')) || noTiling;
 end
+
+% whether figure is currently on hold
+is_hold = ishold;
+hold on;
 
 %% plot
 is_xy = strcmp(plottype,'xy');
@@ -941,10 +941,12 @@ switch nDim %number of dimension
                 s = s1+s2*(siz(dd)-1);
                 if layout
                     subplot(siz(ee), siz(dd), s1 + siz(dd)*(s2-1));
-                elseif s1*s2>1
-                    h_ax(s) = nexttile;
                 else
-                    h_ax(s) = gca;
+                    h_ax(s) = nexttile;
+               % elseif s1*s2>1
+               %     h_ax(s) = nexttile;
+               % else
+               %     h_ax(s) = gca;
                 end
 
                 setclim(clim); % colour limits
@@ -1473,3 +1475,24 @@ str2 = repelem(str2(:),n1,1);
 str = str1 + ", " + str2; %concatenate
 end
 
+%% standard error of the mean
+function S = sem(dat)
+% standard error of the mean and t-values,
+%ignoring NaN values
+%
+%sem(dat,dim) performs it on required dimension
+%by default columnwise
+%
+% does NOT use n - 1
+
+if size(dat,1) ==1
+    dim = 2;
+else
+    dim = 1;
+end
+
+nNanValues = sum(isnan(dat),dim);
+nNonNanValues = size(dat,dim)-nNanValues;
+
+S = std(dat,[],dim,'omitnan')./ sqrt(nNonNanValues);
+end
