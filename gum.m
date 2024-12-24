@@ -116,7 +116,8 @@ classdef gum
     % prior
     % - 'sample_weights_from_posterior': assign weight values sampling from
     % posterior
-    % - 'Predictor': compute the predictor for each observation
+    % - 'Predictor': computes the predictor for each observation
+    % - 'compute_latent': computes the value of latent variables
     % - 'ExpectedValue': computes the expected value for each observation
     % - 'LogPrior': computes the LogPrior of the model
     % - 'LogLikelihood': computes the LogLikelihood of the model
@@ -130,7 +131,7 @@ classdef gum
     % - 'Sample_Observations_From_Posterior': generate observations from
     % model sampling from weight posterior
     % - 'ExplainedVariance': computes model explained variance
-    % - 'predictor_variance': computes the variance of the predictors across
+    % - 'latent_variance': computes the variance of the predictors across
     % datapoints
     % - 'compute_rho_variance': computes variance of predictor for each
     % datapoint
@@ -143,6 +144,7 @@ classdef gum
     % - 'plot_prior_covariance': plot prior covariance for each
     % regressor
     % - 'plot_weights': plot estimated weights and functions
+    % - 'plot_latent': plot latent variables
     % - 'define_plot' to use custom plotting function
     % - 'disable_plot' to disable plotting a certain regressor set
     % - 'enable_plot' to enable plotting
@@ -1125,7 +1127,7 @@ classdef gum
 
                 % for decomposition in basis functions, convert weights back to
                 % original domain
-                obj.regressor = project_from_basis( obj.regressor);
+                obj = obj.project_from_basis();
 
                 % has converged if improvement in LLH is smaller than epsilon
                 iter = iter + 1; % update iteration counter;
@@ -1429,7 +1431,6 @@ classdef gum
             %Covariance
             P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
             Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
-            % invHinvK = P'*invHinvK*P;
 
             % standard error of estimates
             all_se = sqrt(diag(Sfit.covb))';
@@ -1456,7 +1457,7 @@ classdef gum
 
             % LLH at inferred params
             [obj,Sfit.LogLikelihood] = LogLikelihood(obj);
-            obj = predictor_variance(obj);
+            obj = latent_variance(obj);
 
             % number of free parameters
             nFreePar = sum(cellfun(@(x) sum(x,'all'), {M.nFreeParameters}));
@@ -1808,7 +1809,7 @@ classdef gum
 
                 %% generate random starting points
                 if ip>1
-                    M = sample_weights_from_prior(M);
+                    M = sample_weights_from_prior(M, true);
                     obj.regressor = M;
                 end
                 [~,logprior] = LogPrior(obj);
@@ -2230,15 +2231,15 @@ classdef gum
 
                 %% compute variance of each order components and sort
 
-                obj = predictor_variance(obj);
+                obj = latent_variance(obj);
                 for m=1:nM
 
                     if all([M(m).Weights.nWeight]>0) && M(m).ordercomponent && rank(m)>1
-                        [~,order] = sort(obj.score.PredictorVariance(:,m),'descend'); % sort variances by descending order
+                        [~,order] = sort(obj.score.LatentVariance(:,m),'descend'); % sort variances by descending order
                         for d=1:M(m).nDim
                             M(m).Weights(d).PosteriorMean = M(m).Weights(d).PosteriorMean(order,:); % reorder
                         end
-                        obj.score.PredictorVariance(:,m) = obj.score.PredictorVariance(order,m);
+                        obj.score.LatentVariance(:,m) = obj.score.LatentVariance(order,m);
                     end
                 end
 
@@ -2359,6 +2360,18 @@ classdef gum
                 end
             end
             obj.Predictions.rho = rho;
+        end
+
+        %% COMPUTE LATENT VARIABLES
+        function obj = compute_latent(obj)
+            % M = M.compute_latent() compute latent variables
+            % Latent variable mean and standard deviations are stored in
+            % fields 'latent' and 'latent_std' in M.Predictions.Latent
+            for i=1:numel(obj)
+                [obj(i).Predictions.latent,obj(i).Predictions.latent_std] = obj(i).regressor.Latent();
+                obj(i).Predictions.latent_label =  latent_labels(obj(i).regressor);
+            end
+
         end
 
         %% GET TOTAL NUMBER OF REGRESSORS
@@ -3660,8 +3673,8 @@ classdef gum
                 for m=1:n
                     if ~isempty(all_score{m}) && isfield(all_score{m}, mt) && ~isempty(all_score{m}.(mt))
                         xx = all_score{m}.(mt);
-                        if ~strcmp(mt, 'PredictorVariance') || size(X,1)==numel(xx)
-                            % still need to code predictor variance for
+                        if ~strcmp(mt, 'LatentVariance') || size(X,1)==numel(xx)
+                            % still need to code latent variance for
                             % models with different regressors
                             X(:,m) =  xx(:);
                         end
@@ -3688,7 +3701,7 @@ classdef gum
             else
                 S = obj.score;
             end
-            NoIncludeField =  {'PredictorVariance', 'PredictorExplainedVariance','exitflag_allstarting','LogJoint_allstarting','LogJoint_hist_allstarting','FreeCovariance','covb'};
+            NoIncludeField =  {'LatentVariance', 'LatentExplainedVariance','exitflag_allstarting','LogJoint_allstarting','LogJoint_hist_allstarting','FreeCovariance','covb'};
             NoIncludeField = NoIncludeField(ismember(NoIncludeField, fieldnames(S)));
             S = rmfield(S,NoIncludeField);
 
@@ -3862,61 +3875,60 @@ classdef gum
         end
 
         %% COMPUTE PREDICTOR VARIANCE FROM EACH MODULE
-        function [obj, PV] = predictor_variance(obj)
-            % M = predictor_variance(M)
-            % computes raw variance PV over dataset for each module in model.
-            % PV is an array of length nMod. The variance is not
-            % normalized. For normalized variance see gum.predictor_explained_variance
+        function [obj, LV] = latent_variance(obj)
+            % M = latent_variance(M)
+            % computes raw variance PV over dataset for each latent variable in model.
+            % LV is an array of length nMod. The variance is not
+            % normalized. For normalized variance see gum.latent_explained_variance
             %
-            % [M, PV] = predictor_variance(M)
+            % [M, LV] = latent_variance(M)
             %
             % Not to be confounded with compute_rho_variance or
-            % predictor_explained_variance
+            % latent_explained_variance
 
             if ~isscalar(obj)
-                PV = cell(size(obj));
+                LV = cell(size(obj));
                 for m=1:numel(obj)
-                    [obj(m),PV{m}] = predictor_variance(obj(m));
+                    [obj(m),LV{m}] = latent_variance(obj(m));
                 end
                 return;
             end
 
             rank = [obj.regressor.rank];
-            PV = nan(max(rank),obj.nMod);
+            LV = nan(max(rank),obj.nMod);
 
             for m=1:obj.nMod
                 for r=1:obj.regressor(m).rank
-                    PV(r,m) = var(Predictor(obj.regressor(m),r));
+                    LV(r,m) = var(Predictor(obj.regressor(m),r));
                 end
             end
 
-            obj.score.PredictorVariance = PV;
+            obj.score.LatentVariance = LV;
         end
 
         %% COMPUTE PREDICTOR EXPLAINED VARIANCE FROM EACH MODULE
-        function [obj, PEV, lbl] = predictor_explained_variance(obj)
-            % M = predictor_explained_variance(M)
-            % computes explained variance PEV over dataset for each regressor set in model.
-            % This is computed
+        function [obj, LEV, lbl] = latent_explained_variance(obj)
+            % M = latent_explained_variance(M)
+            % computes explained variance PEV over dataset for each latent variable in model.
             %
-            % [M, PEV, lbl] = predictor_explained_variance(M)
-            % PEV is a vector with the value for of each regressor set,
+            % [M, LEV, lbl] = latent_explained_variance(M)
+            % LEV is a vector with the value for of each regressor set,
             % and lbl provides the corresponding labels.
             %
-            % The PEV is NaN for the offset regressor.
+            % The LEV is NaN for the offset regressor.
             %
-            % Not to be confounded with predictor_variance or compute_rho_variance
+            % Not to be confounded with latent_variance or compute_rho_variance
             if ~isscalar(obj) % recursive call
-                PEV = cell(size(obj));
+                LEV = cell(size(obj));
                 lbl = cell(size(obj));
                 for m=1:numel(obj)
-                    [obj(m),PEV{m},lbl{m}] = predictor_explained_variance(obj(m));
+                    [obj(m),LEV{m},lbl{m}] = latent_explained_variance(obj(m));
                 end
                 return;
             end
 
             rk = [obj.regressor.rank];
-            PEV = nan(1,sum(rk));
+            LEV = nan(1,sum(rk));
 
             cnt = 1;
             for m=1:obj.nMod
@@ -3930,20 +3942,15 @@ classdef gum
                         % parameter: offset
                         Msingle = gum(rho, obj.T, 'observations',obj.obs,'ObservationWeight', obj.ObservationWeight);
                         Msingle = Msingle.infer('verbose','off');
-                        [~,PEV(cnt)] = Msingle.ExplainedVariance; % compute explained variance
+                        [~,LEV(cnt)] = Msingle.ExplainedVariance; % compute explained variance
                     end
                     cnt = cnt+1;
                 end
             end
 
-            if isgam(obj)
-                % use weight labels if 1D
-                lbl = obj.regressor.weight_labels;
-            else
-                lbl = [obj.regressor.formula];
-            end
+            lbl  = latent_labels(obj.regressor);
 
-            obj.score.PredictorExplainedVariance = PEV;
+            obj.score.LatentExplainedVariance = LEV;
         end
 
         %% COMPUTE ESTIMATED VARIANCE OF PREDICTOR
@@ -4220,6 +4227,13 @@ classdef gum
             end
         end
 
+        %% PROJECT REGRESSOR FROM BASIS FUNCTION
+        function obj = project_from_basis(obj)
+            for i=1:numel(obj)
+                obj(i).regressor = obj(i).regressor.project_from_basis;
+            end
+        end
+
         %% PLOT VIF
         function h = plot_vif(obj,D)
             % plot_vif(M) to plot Variance Inflation Factor.
@@ -4254,13 +4268,13 @@ classdef gum
         end
 
         %% PLOT PREDICTOR EXPLAINED VARIANCE
-        function h = plot_predictor_explained_variance(obj)
+        function h = plot_latent_explained_variance(obj)
             % plots predictor explained variance, i.e. the variance
             % explained by each set of regressors
             %
-            % See gum.predictor_explained_variance
+            % See gum.latent_explained_variance
             assert(isscalar(obj),'only implemented for scalar GUM object');
-            [~,PEV,lbl] = obj.predictor_explained_variance;
+            [~,PEV,lbl] = obj.latent_explained_variance;
 
             % remove offset
             is_offset = strcmp(lbl,"offset");
@@ -4286,6 +4300,9 @@ classdef gum
             % plot_posterior_covariance(M, label) plots the posterior
             % covariance of the set of weights indicated in label
             %
+            % plot_posterior_covariance(M, label,'basis') or plot_posterior_covariance(M, [],'basis')
+            % to plot prior covariance in the space of basis functions
+
             % h = plot_posterior_covariance(...) provide graphical handles
 
 
@@ -4347,6 +4364,9 @@ classdef gum
             %
             % plot_prior_covariance(M, label) plots the prior
             % covariance of the set of weights indicated in label
+            %
+            % plot_prior_covariance(M, label,'basis') or plot_prior_covariance(M, [],'basis')
+            % to plot prior covariance in the space of basis functions
             %
             % h = plot_prior_covariance(...) provide graphical handles
 
@@ -4524,6 +4544,37 @@ classdef gum
             obj.regressor = obj.regressor.define_plot(label,'auto');
         end
 
+        %% PLOT LATENT VARIABLES
+        function h = plot_latent(obj,subset)
+
+            assert(isscalar(obj),'only works with scalar GUM object - plot one model at a time');
+            obj = obj.compute_latent();
+
+            if nargin<2
+                subset = 1:obj.nObs;
+            end
+            Prd = obj.Predictions;
+lbl= Prd.latent_label;
+
+            % do not plot offset
+            is_offset = strcmp(lbl,"offset");
+            Prd.latent(:,is_offset) = [];
+            Prd.latent_std(:,is_offset) = [];
+            lbl(is_offset) = [];
+
+            if iscolumn(Prd.latent) % only one latent
+                leg_lbl = {}; % no legend
+                y_lbl = lbl + " latent";
+            else
+                leg_lbl=lbl;
+                y_lbl = 'latent';
+            end
+            h = wu(subset,Prd.latent(subset,:),Prd.latent_std(subset,:),...
+                {{},leg_lbl});
+
+            ylabel(y_lbl);
+        end
+
         %% PLOT HYPERPARAMETERS
         function h = plot_hyperparameters(obj)
             % M.plot_hyperparameters() plots values of hyperparameters in model
@@ -4575,7 +4626,7 @@ classdef gum
         end
 
         %% PLOT DATA GROUPED BY VALUES OF PREDICTOR
-        function [h,Q] = plot_data_vs_predictor(obj, Q)
+        function [h,Q] = plot_data_vs_predictor(obj, Q, G)
             % h = plot_data_vs_predictor(M) plots the predicted vs actual
             % average of the dependent variable per bins of the predictor
             % rho (i.e. posterior predictive checks). For example for
@@ -4591,10 +4642,13 @@ classdef gum
                 if nargin<2
                     Q = [];
                 end
+                if nargin<3
+                    G= [];
+                end
                 h = cell(size(obj));
                 for i=1:numel(obj)
                     [~, nRow, nCol] = subplot2(length(obj), i);
-                    h{i} = obj(i).plot_data_vs_predictor(Q); % recursive call
+                    h{i} = obj(i).plot_data_vs_predictor(Q,G); % recursive call
                     if mod(i,nCol)~=1
                         ylabel('');
                     end
@@ -4607,8 +4661,18 @@ classdef gum
 
             [~,rho] = Predictor(obj);
 
+            if nargin>2&& ~isempty(G) % using groups
+                [G_unq, ~,G] = unique(G);
+                G_unq = string(G_unq);
+                nGroup = length(G_unq);
+            else
+                nGroup = 1;
+               % G = ones(1,obj.nObs);
+                G_unq = [];
+            end
+
             if nargin<2 || isempty(Q) % number of quantiles: by default scales with cubic root of number of observations (!!check for optimal methods)
-                Q = ceil((obj.nObs).^(1/3)/2);
+                Q = ceil((obj.nObs/nGroup).^(1/3)/2);
             end
 
             H = quantile(rho,Q);
@@ -4622,26 +4686,33 @@ classdef gum
                 w = obj.ObservationWeight;
             end
 
-            M = zeros(1,nQ+1);
-            sem = zeros(1,nQ+1);
+            M = zeros(nQ+1,nGroup);
+            sem = zeros(nQ+1,nGroup);
+            for g=1:nGroup
             for q=1:nQ+1
-                idx = rho>H(q) & rho<=H(q+1);
-                nobs = sum(w(idx));
-                M(q) = sum(obj.T(idx) .* w(idx)) /  nobs;
-                if strcmp(obj.obs,'binomial')
-                    sem(q) = sqrt( M(q)*(1-M(q)) / nobs);
-                else
-                    sem(q) = std( obj.T(idx), w(idx)) / sqrt(nobs);
+                idx = rho>H(q) & rho<=H(q+1); % belongs to quantile
+                if nGroup>1
+                    idx = idx & (G==g); % and belongs to group if using groups
                 end
-
+                nobs = sum(w(idx));
+                M(q,g) = sum(obj.T(idx) .* w(idx)) /  nobs;
+                if strcmp(obj.obs,'binomial') % standard error for binary daa
+                    sem(q,g) = sqrt( M(q,g)*(1-M(q,g)) / nobs);
+                else % standard error for normal data
+                    sem(q,g) = std( obj.T(idx), w(idx)) / sqrt(nobs);
+                end
+            end
             end
 
+            % values of bins
             H = [H(2:end-1) max(rho)];
 
-            h =  wu(H, M, sem);
+            % plot
+            h =  wu(H, M, sem,{{},G_unq});
             axis tight; hold on;
 
             % plot inverse link function as reference
+            if nGroup==1
             xx = linspace(min(xlim), max(xlim), 200);
             yy = obj.inverse_link_function(xx);
             switch obj.link
@@ -4653,6 +4724,7 @@ classdef gum
                     plot([0 0],ylim, 'color',.7*[1 1 1]);
             end
             plot(xx,yy,'b');
+            end
             xlabel('\rho');
             ylabel('dependent variable');
 
@@ -5121,7 +5193,7 @@ obj = obj.infer(param);
 
 % for decomposition on basis functions, convert weights back to
 % original domain
-obj.regressor = project_from_basis(obj.regressor);
+obj = obj.project_from_basis();
 
 % negative marginal evidence
 negME = -obj.score.LogEvidence;
@@ -5202,7 +5274,7 @@ end
 
 % for decomposition on basis functions, convert weights back to
 % original domain
-obj.regressor = project_from_basis(obj.regressor);
+obj = obj.project_from_basis();
 
 % if best parameter so far, update the value for initial parameters
 if errorscore < fval
@@ -6287,7 +6359,7 @@ end
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
 metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence',...
-    'accuracy','scaling','ExplainedVariance','PredictorVariance','PredictorExplainedVariance','validationscore','r2','isEstimated','isFitted','FittingTime'};
+    'accuracy','scaling','ExplainedVariance','LatentVariance','LatentExplainedVariance','validationscore','r2','isEstimated','isFitted','FittingTime'};
 end
 
 %%

@@ -225,7 +225,7 @@ classdef regressor
                         odd = logical(varargin{v+1});
                         assert(isscalar(odd), 'odd argument expects a scalar');
                     case 'even'
-                        even = logical(varargin{v+1});    
+                        even = logical(varargin{v+1});
                         assert(isscalar(even), 'even argument expects a scalar');
                     case 'label'
                         label = string(varargin{v+1});
@@ -2164,29 +2164,29 @@ classdef regressor
                         rk = obj(m).rank;
                         W.PosteriorStd = zeros(rk, W.nWeight);
                         compute_posterior_cov = ~isempty(B(1).PosteriorCov);
-                      if compute_posterior_cov
-                        %  if compute_posterior_cov && W.nWeight>1e4
-                          if W.nWeight>1e2
-                      % too many data points to compute full
-                            % posterior covariance, only compute along the
-                            % diagonal
-                            for  r=1:rk
-                                diag_pcov = sum(B(1).B .* (B(1).PosteriorCov(:,:,r) * B(1).B),1);
-                                W.PosteriorCov = spdiags(diag_pcov); % !should change to sparsearrays if rk>1
-                                W.PosteriorStd(r,:) = sqrt(diag_pcov);
+                        if compute_posterior_cov
+                            %  if compute_posterior_cov && W.nWeight>1e4
+                            if W.nWeight>1e2
+                                % too many data points to compute full
+                                % posterior covariance, only compute along the
+                                % diagonal
+                                for  r=1:rk
+                                    diag_pcov = sum(B(1).B .* (B(1).PosteriorCov(:,:,r) * B(1).B),1);
+                                    W.PosteriorCov = spdiags(diag_pcov); % !should change to sparsearrays if rk>1
+                                    W.PosteriorStd(r,:) = sqrt(diag_pcov);
+                                end
+                                %fprintf('too many values (%d) to compute posterior covariance for regressor ''%s'', try binning\n',W.nWeight, char(W.label));
+                                %compute_posterior_cov = false;
+                                %end
+                                %if compute_posterior_cov
+                            else
+                                W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
+                                for r=1:rk
+                                    PCov  = B(1).B' * B(1).PosteriorCov(:,:,r) * B(1).B;
+                                    W.PosteriorCov(:,:,r) = PCov;
+                                    W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
+                                end
                             end
-                            %fprintf('too many values (%d) to compute posterior covariance for regressor ''%s'', try binning\n',W.nWeight, char(W.label));
-                            %compute_posterior_cov = false;
-                        %end
-                        %if compute_posterior_cov
-                          else
-                            W.PosteriorCov = zeros(W.nWeight, W.nWeight,rk);
-                            for r=1:rk
-                                PCov  = B(1).B' * B(1).PosteriorCov(:,:,r) * B(1).B;
-                                W.PosteriorCov(:,:,r) = PCov;
-                                W.PosteriorStd(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
-                            end
-                          end
                             % compute T-statistic and p-value
                             W.T = W.PosteriorMean ./ W.PosteriorStd; % wald T value
                             W.p = 2*normcdf(-abs(W.T)); % two-tailed T-test w.r.t 0
@@ -2478,9 +2478,7 @@ classdef regressor
                 for d=1:numel(obj(i).Prior)
                     C{i}{d} = obj(i).Prior(d).PriorMean;
                 end
-
             end
-
         end
 
         %% INITIALIZE WEIGHTS
@@ -2554,11 +2552,15 @@ classdef regressor
         end
 
         %% SAMPLE WEIGHTS FROM PRIOR
-        function obj = sample_weights_from_prior(obj)
+        function obj = sample_weights_from_prior(obj, first_dim_frozen)
+                    % sample weights from prior
+            if nargin<2
+                first_dim_frozen= false;
+            end
 
             % compute prior mean and covariance if not done
-            obj = obj.compute_prior_mean(false);
             obj = obj.compute_prior_covariance(false);
+            obj = obj.compute_prior_mean(false);
 
             for i=1:numel(obj)
                 nFreeWeights = obj(i).nFreeParameters;
@@ -2573,8 +2575,9 @@ classdef regressor
                         if C.type == "fixed"
                             UU = 1; % fixed weights: set to 1
                         else
-
-                            if d==first_update_dimension(obj(i))
+                            if first_dim_frozen&& d==first_update_dimension(obj(i))
+                                % this is only when generating initial
+                                % weights in IRLS:
                                 % first dimension to update should be zero (more generally: prior mean)
                                 UU = P.PriorMean;
                             else % other dimensions are sampled for mvn distribution with linear constraint
@@ -2709,10 +2712,9 @@ classdef regressor
                 error('cannot compute predictor, data has been cleared');
             end
             rho = zeros(obj.nObs,1);
-            % nW = cellfun(@sum, {obj.Weights.nWeight});
-            nW = [obj.Weights.nWeight];
 
-            if any(nW==0) % empty regressor
+            nW = [obj.Weights.nWeight];
+            if all(nW==0) % empty regressor
                 return;
             end
             if nargin<2 || isempty(rr) % default: use all ranks
@@ -2721,9 +2723,49 @@ classdef regressor
                 assert(all(ismember(rr, 1:obj.rank)));
             end
             for r=rr
-                rho = rho + ProjectDimension(obj,r,zeros(1,0)); % add activation due to this component
+                rho = rho + ProjectDimension(obj,r,zeros(1,0)); % add activation due to this latent
             end
+        end
 
+        %% COMPUTE LATENT
+        function  [Z, Z_std] = Latent(obj)
+            % compute predictor from regressor
+            % Z = Latent(R) provides the posterior mean of each latent for
+            % each observation
+            %
+            %[Z,Z_std] = Latent(R) provides the posterior std. Currently
+            %not coded if regressor is multidimensional (outputs NaNs)
+
+            Z = zeros(obj(1).nObs,numel(obj));
+            Z_std = nan(obj(1).nObs,numel(obj));
+
+            for m=1:numel(obj)
+                Z(:,m) = ProjectDimension(obj(m),1,zeros(1,0)); % this latent
+
+                if nargout>1 && obj(m).nDim==1
+                    
+                    % if unidimensional, latent is normal since it's a linear transform of
+                    % normal posterior
+                    Z_var = sum((obj(m).Data * obj(m).Weights.PosteriorCov) .* obj(m).Data,2);
+                    Z_std(:,m) = sqrt(Z_var); 
+
+                    % for multidim should sample weights from posterior
+                end
+            end
+        end
+
+        %% LATENT LABELS
+        function lbl = latent_labels(obj)
+            % labels for latent_variables
+            lbl = strings(size(obj));
+            for i=1:numel(obj)
+            if obj(i).nDim==1
+                % use weight labels if 1D
+                lbl(i) = obj(i).weight_labels;
+            else % multidim
+                lbl(i) = obj(i).formula;
+            end
+            end
         end
 
         %% PROJECT REGRESSOR DIMENSION
@@ -3384,7 +3426,7 @@ classdef regressor
                 obj.Weights(dd).scale = interaction_levels(W(dd).scale, W(d).scale);
                 obj.Weights(dd).dimensions = [obj.Weights([dd d]).dimensions];
                 if ~keeplabel
-                obj.Weights(dd).label = W(d).label;
+                    obj.Weights(dd).label = W(d).label;
                 end
             else
 
@@ -3988,7 +4030,7 @@ classdef regressor
                     Dataset = varargin{v+1};
                     varargin(v:v+1) = [];  % remove from list of arguments
                 elseif isequal(varg,'bootstrap') || isequal(varg,"bootstrap") ||...
-                        isequal(varg,'bootstraps') || isequal(varg,"bootstraps") 
+                        isequal(varg,'bootstraps') || isequal(varg,"bootstraps")
                     use_bootstrap = true;
                     varargin(v) = []; % remove from list of arguments
                     assert(isfield(obj(1).Weights, 'ci_bootstrap'),...
@@ -4087,6 +4129,8 @@ classdef regressor
 
         %% PLOT PRIOR COVARIANCE
         function h = plot_prior_covariance(obj,varargin)
+            % compute prior cov if not already done
+            obj = obj.compute_prior_covariance(false);
             h = plot_covariance(obj, 'prior',varargin{:});
         end
 
@@ -4143,14 +4187,14 @@ classdef regressor
             end
 
             % prior mean
-            PM = {P.PriorMean};
-            for i=1:length(W) % if using basis function, project prior mean on full space
-                if ~iscell(W(i).basis) && ~isempty(W(i).basis)
-                    B = W(i).basis.B;
-                    PM{i} = PM{i}*B;
-                end
-            end
-            T.PriorMean = [PM{:}]';
+            %PM = {P.PriorMean};
+            %for i=1:length(W) % if using basis function, project prior mean on full space
+            %    if ~iscell(W(i).basis) && ~isempty(W(i).basis)
+            %        B = W(i).basis.B;
+            %        PM{i} = PM{i}*B;
+            %    end
+            %end
+            T.PriorMean = prior_mean(P,W,'original');
         end
 
         %% EXPORT WEIGHTS TO CSV FILE
@@ -4234,13 +4278,13 @@ if use_bootstrap
     UE = W.ci_bootstrap(2,:)' - U; % upper error
     LE = U - W.ci_bootstrap(1,:)'; % lower error
 else
-if isempty(W.PosteriorStd) % no error
-    UE = nan(size(U));
-    LE = UE;
-else
-    UE = W.PosteriorStd'; % symmetric errors
-    LE = UE;
-end
+    if isempty(W.PosteriorStd) % no error
+        UE = nan(size(U));
+        LE = UE;
+    else
+        UE = W.PosteriorStd'; % symmetric errors
+        LE = UE;
+    end
 end
 
 if ~isempty(Dataset) % when plotting weights from different datasets
@@ -4423,7 +4467,19 @@ drawnow;
 end
 
 %% PLOT COVARIANCE
-function h = plot_covariance(obj, type, label, varargin)
+function h = plot_covariance(obj, type, label, space)
+
+% by default plot in original space
+if nargin<4 
+    space = 'original';
+end
+
+% whether we plot in original space of weights or inbasis functions
+if strcmpi(space,'basis')
+    obj = obj.project_to_basis;
+elseif strcmp(type,'posterior') % see later how we deal with prior case
+    obj = obj.project_from_basis;
+end
 
 %% select corresponding regressors to be plotted
 if nargin<3 || isempty(label)
@@ -4453,7 +4509,6 @@ for i=1:nSubplots
 end
 
 i = 1; % subplot counter
-%cm = 1; % colormap counter
 h.Objects = {};
 
 % blue to white to red colormap
@@ -4477,6 +4532,12 @@ for j=1:size(idx,2) % loop between subpots
         end
         sc = W.scale;
 
+        % project prior covariance to original space if needed
+        if strcmpi(space,'original')&& strcmp(type,'prior') && ~isempty(W.basis) && W.basis.projected 
+            C = W.basis.B'* C*W.basis.B;
+            sc = W.basis.scale;
+    end
+
         if isrow(sc) && isnumeric(sc)
             xx = sc;
         else
@@ -4493,14 +4554,12 @@ for j=1:size(idx,2) % loop between subpots
             yticks(1:length(sc));
             yticklabels(sc);
         end
-       % h.Objects{i} = colormap(h.Axes(i), color_map(cm));
-       h.Objects{i} = colormap(h.Axes(i), cmap);
+        h.Objects{i} = colormap(h.Axes(i), cmap);
 
-       % use symmetrical colorscale
-       this_clim = get(h.Axes(i),'CLim');
-       this_clim = max(abs(this_clim))*[-1 1];
-       set(h.Axes(i),'CLim',this_clim);
-       % cm = cm+1;
+        % use symmetrical colorscale
+        this_clim = get(h.Axes(i),'CLim');
+        this_clim = max(abs(this_clim))*[-1 1];
+        set(h.Axes(i),'CLim',this_clim);
     else
         bar(W.PosteriorCov);
     end
@@ -4760,7 +4819,7 @@ for l=1:nLag % for each lag group
             Dlag.value(Cout{:}) = zeropad_data(D.value, lg);
             for dd=OHE_dims
                 % lag values for OHE dimensions
-                Cout_ohe = allindices(size(Dlag.sub{dd}));                
+                Cout_ohe = allindices(size(Dlag.sub{dd}));
                 Cout_ohe{lag_dim} = l;
                 Dlag.sub{dd}(Cout_ohe{:}) = zeropad_data(D.sub{dd}, lg);
             end
@@ -5267,6 +5326,19 @@ end
 %HP = rmfield(HP, 'index');
 end
 
+%% prior mean in original or basis functions space
+function PM = prior_mean(P,W,space)
+            PM = {P.PriorMean};
+            for i=1:length(W) % if using basis function, project prior mean on full space
+                if ~iscell(W(i).basis) && ~isempty(W(i).basis)
+                    if strcmp(space,'original')
+                    PM{i} = PM{i}*W(i).basis.B;                    
+                    end
+                end
+            end
+PM = [PM{:}]';
+end
+
 %% split concatenated weight structure (for plotting)
 function [W,set_index] = split_concatenated_weights(W)
 % warning: does not check that weights indeed are concatenated
@@ -5294,7 +5366,7 @@ for s=1:nSet
     if isempty(Wc.basis) || isequal(Wc.basis(s).fun,'none')
         W(s).basis = [];
         if ~isempty( Wc.U_allstarting)
-        W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
+            W(s).U_allstarting = Wc.U_allstarting(:,index_weight);
         end
     else
         W(s).basis = Wc.basis(s);
