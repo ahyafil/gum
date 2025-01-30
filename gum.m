@@ -6365,7 +6365,7 @@ end
 %%
 function c = char_type(X)
 if isnumeric(X)
-    if isint(X)
+    if mod(X,1)==0 % integer
         c = 'd';
     else
         c = 'f';

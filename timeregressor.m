@@ -33,7 +33,9 @@ function R = timeregressor(EventTime, dt, Tbnd, varargin)
 % (L2 regularization for independent kernel). Use Inf for no variance
 % (default:1)
 %
-% R = timeregressor(..., 'modulation', M)
+% R = timeregressor(..., 'modulation', M) to define modulation of each
+% event. M is a vector of the same length as EventTime, or a regressor
+% object.
 %
 % R = timeregressor(..., 'split', S)
 % R = timeregressor(..., 'split', S, 'split_label',{'val1','val2',...})
@@ -92,7 +94,7 @@ kerneltype = 'independent';
 variance = 1;
 nEvent = length(EventTime);
 label = '';
-use_reg = false;
+use_regressor = false;
 
 v = 1;
 while v<length(varargin)
@@ -121,8 +123,8 @@ while v<length(varargin)
         case 'modulation'
             v = v+1;
             M = varargin{v};
-            use_reg = isa(M, 'regressor');
-            if ~use_reg
+            use_regressor = isa(M, 'regressor');
+            if ~use_regressor
                 if isscalar(M)
                     M = M*ones(nEvent,1);
                 elseif ~isempty(M) && (~isvector(M) || length(M) ~=nEvent)
@@ -154,7 +156,7 @@ while v<length(varargin)
     v = v+1;
 end
 
-if use_reg && ~isempty(split)
+if use_regressor && ~isempty(split)
     error('regressor modulation and split variables are not compatible at the moment');
 end
 
@@ -170,19 +172,22 @@ if isequal(duration, 'untilnext')
     duration = diff([EventTime;Tbnd(2)]);
 end
 
-if any(EventTime<Tbnd(1)) || any(EventTime>Tbnd(2))
-    nRemove = sum(EventTime<Tbnd(1) | EventTime>Tbnd(2));
+    out_of_bounds = EventTime<Tbnd(1) | EventTime>Tbnd(2);
+if any(out_of_bounds)
+    nRemove = sum(out_of_bounds);
     if ~isempty(label)
         fprintf('%s regressor: removing %d events outside of bounds\n', label, nRemove);
     else
         fprintf('removing %d events outside of bounds\n', label, nRemove);
     end
-    if modulation
-        M(EventTime<Tbnd(1),:) = [];
-        M(EventTime>Tbnd(2),:) = [];
+    if modulation % removing corresponding modulation values
+        if use_regressor
+            M = M.extract_observations(~out_of_bounds);
+        else
+        M(out_of_bounds,:) = [];
+        end
     end
-    EventTime(EventTime<Tbnd(1)) = [];
-    EventTime(EventTime>Tbnd(2)) = [];
+    EventTime(out_of_bounds) = [];
     nEvent = length(EventTime);
 end
 
@@ -271,7 +276,7 @@ if isempty(duration) % if discrete events
             J(select_from_val(split,split_value,u)) = u;
         end
         J = repmat(J,1,2);
-    elseif use_reg % use event as column, as we will later project regressor from event to time
+    elseif use_regressor % use event as column, as we will later project regressor from event to time
         J = [1:nEvent 1:nEvent];
     else
         J = ones(2*nEvent,1);
@@ -279,7 +284,7 @@ if isempty(duration) % if discrete events
 
     % values
     V = [1-deci deci]; % relative part assigned to each time bin
-    if modulation && ~use_reg
+    if modulation && ~use_regressor
         V = V .* M;
         %      V = V .* [M;M]';
     end
@@ -326,7 +331,7 @@ else % if modelling response with certain duration (uniform or ramp)
         end
 
         %end
-        if modulation && ~use_reg
+        if modulation && ~use_regressor
             K = K*M(i); % modulation
         end
 
@@ -359,7 +364,7 @@ else % if modelling response with certain duration (uniform or ramp)
 
         if doSplit % for split, to which column we should assign it
             J(idx) = find(select_from_val(split_value, split,i));
-        elseif use_reg % for regressor input, columns represent event index
+        elseif use_regressor % for regressor input, columns represent event index
             J(idx) = i;
         end
 
@@ -374,7 +379,7 @@ else % if modelling response with certain duration (uniform or ramp)
 
 end
 
-if use_reg % number of columns
+if use_regressor % number of columns
     nCol = nEvent;
 else
     nCol = nSplit;
@@ -437,7 +442,7 @@ if ~isempty(kernel)
 
     if doSplit % 3d sparse array
         DM = sparsearray([II JJ KK],VV, [n,nK,nSplit]); % time step x regressor x split value array
-    elseif use_reg
+    elseif use_regressor
         DM = sparsearray([II KK JJ],VV, [n,nEvent,nK]); % time step x event x regressor array
 
         DM_dummy = sparse(II,JJ,VV, n, nK); % dummy design matrix (time step x regressor array)
@@ -513,7 +518,7 @@ else % no convolution
 end
 
 
-if use_reg
+if use_regressor
     % if uses regressor object as modulation
     if isempty(kernel)
         % project event to time in regressor array
