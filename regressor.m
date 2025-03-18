@@ -64,6 +64,7 @@ classdef regressor
     % Squared Exponential prior; for 'fourier' the number of basis
     % functions is determined automatically)
     % - 'raisedcosineN'
+    % - 'powerlaw' or 'powerlawN' for powerlaw functions
     % - 'gammaN' for gamma distribution
     %
     % V = regressor('basis','fourier','condthresh', c) to define conditional threshold for defining number of basis functions (default:1e12)
@@ -160,7 +161,7 @@ classdef regressor
             dimensions = "";
             color = [];
             plot = [];
-            prior = [];
+            prior = '';
             ref = [];
             odd = false;
             even = false;
@@ -195,12 +196,10 @@ classdef regressor
                     case 'scale'
                         scale = varargin{v+1};
                     case 'variance'
-                        %variance = varargin{v+1};
                         HP.variance = varargin{v+1};
                         assert(all(HP.variance>0),'variance hyperparameter must be positive');
                     case 'tau'
                         HP.tau = varargin{v+1};
-                        % tau = varargin{v+1};
                     case 'k'
                         HP.k = varargin{v+1};
                         assert(all(HP.k>0),'shape of gamma basis functions must be positive');
@@ -244,62 +243,10 @@ classdef regressor
             end
             assert(~odd || ~even, 'a function cannot be odd and even at the same time');
 
-            %% which hyparameters are estimated
-            % default values
-            if is_covfun
-                %  nPar = str2double(type()); % number of parameters
-                %  HPfit_def = ones(1,nPar);
-                HPfit_lbl = {};
-            else % data type
-                switch type
-                    case 'constant'
-                        %  HPfit_def = [];
-                        HPfit_lbl = {};
-                    case {'linear','categorical'}
-                        if isempty(prior)
-                            prior = 'L2';
-                        end
-                        switch prior
-                            case 'L2'
-                                HPfit_lbl = {'variance'};
-                            case 'none'
-                                HPfit_lbl = {};
-                            case 'ARD'
-                                HPfit_lbl = num2strcell('variance_%d',1:size(X,ndims(X)));
-                            otherwise
-                                error('incorrect prior type: %s',prior);
-                        end
+            % which hyparameters are estimated
+            HPfit = define_fitted_hyperparameters(HPfit, is_covfun, type, prior,size(X,ndims(X)));
 
-                    case 'continuous'
-                        HPfit_lbl = {'tau','variance'};
-                    case 'periodic'
-                        HPfit_lbl = {'tau','variance'};
-                    otherwise
-                        error('incorrect type: ''%s''',type);
-                end
-            end
-            if ischar(HPfit)
-                switch HPfit
-                    case 'all' % fit all
-                        HPfit = 1;
-                    case 'none' % fit none
-                        HPfit = 0;
-                    case 'variance'
-                        HPfit = {'variance'};
-                    case {'ell','tau','scale'}
-                        HPfit = {'tau'};
-                        assert(any(strcmp(type, {'continuous','periodic'})),'tau hyperparameter is only defined for continuous or periodic regressor');
-                    otherwise
-                        error('incorrect option for HPfit:%s', HPfit );
-                end
-            end
-            if iscell(HPfit)
-                assert(~is_covfun, 'cannot define names of hyperparameters to be fitted for custom covariance function')
-                HPfit = ismember(HPfit_lbl, HPfit);
-            else
-                HPfit = logical(HPfit);
-            end
-
+            % make sure observations are along rows
             if isrow(X)
                 X = X';
             end
@@ -313,9 +260,8 @@ classdef regressor
             summing = tocell(summing);
             dimensions = tocell(string(dimensions));
 
-            % we perform one-hot-encoding for all regressor types except
-            % linear - except for continuous var if scale is provided, which means the tensor
-            % is already provided
+            % by default do not use OneHotEncoding, except for one-hot-encoding dimension (if
+            % categorical/continuous/periodic)
             if isempty(OneHotEncoding)
                 OneHotEncoding = ~strcmpi(type, 'linear') && (isempty(scale{end}) || ~strcmpi(type, 'continuous'));
             end
@@ -328,14 +274,10 @@ classdef regressor
                 % (unless we use joint function)
                 add_one_dim = OneHotEncoding && ~any(strcmp(summing,'joint'));
                 nD = ndims(X) -1 +add_one_dim ;
-                % elseif strcmpi(type, 'linear')
-                %     nD = ndims(X)-1;
-                % else
-                %     nD = ndims(X);
             end
             obj.nDim = nD;
 
-            % make sure scale and basis are cell array of length nD
+            % make sure the variables are cell arrays / strings of length nD
             scale = [cell(1,nD-length(scale)) scale];
             basis = tocell(basis);
             prior = tocell(prior);
@@ -345,8 +287,7 @@ classdef regressor
             summing = [repmat({''},1,nD-1-length(summing)) summing];
             single_tau = [false(1,nD-length(single_tau)) single_tau];
 
-            %  obj.scale(length(scale)+1:nD) = {[]}; % extend scale cell array
-            siz = size(X); % size of design tensor
+            siz = size(X); % size of data tensor
             obj.nObs = siz(1); % number of observations
 
             %create weights structure
@@ -379,8 +320,11 @@ classdef regressor
                 X = binning*round(X/binning); % change value of X to closest bin
             end
 
-            % by default do not use OneHotEncoding, except one-hot-encoding dimension (if
-            % categorical/continuous/periodic)
+            % we perform one-hot-encoding for all regressor types except
+            % linear - except for continuous var if scale is provided, which means the tensor
+            % is already provided
+            % ! based on code above, looks like this first if is never
+            % true-> delete?
             if isempty(OneHotEncoding)
                 OneHotEncoding = false(1,max(nD-1,1));
                 if any(strcmp(type,{'categorical','continuous','periodic'}))
@@ -402,6 +346,7 @@ classdef regressor
                 label = [strings(1,nD-1) label];
             end
 
+            % for even/odd functions
             if odd || even
                 assert(ismember(lower(type),{'categorical','continuous','periodic'}))
                 % if function is taken to be odd, store sign of X
@@ -410,7 +355,6 @@ classdef regressor
                     sgnX = sign(X);
                     sgnX(isnan(X)) = 0;
                 end
-
                 X = abs(X);
             end
 
@@ -436,11 +380,6 @@ classdef regressor
 
                     obj.Data = X;
                     obj.Data(isnan(obj.Data)) = 0; % convert nans to 0: missing regressor with no influence on model
-
-                    % process hyperparameters
-                    % HP = tocell(HP,nD);
-                    % if ~isempty(variance), HP{1} = log(variance)/2; end
-
                     nWeight = siz(1+nD);
 
                     if isempty(obj.Weights(nD).scale)
@@ -455,19 +394,21 @@ classdef regressor
                         dimensions{nD} = string(label(nD));
                     end
 
-                    % hyperpameters for first dimension
-                    switch prior{nD}
-                        case 'L2'
-                            obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
-                            obj.Prior(nD).CovFun = @L2_covfun;  % L2-regularization (diagonal covariance prior)
-                        case 'none'
-                            obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
-                        case 'ARD'
-                            if nD ==1, ch=""; else ch=nD; end
-                            obj.HP(nD) = HPstruct_ard(nWeight, ch, HP(nD), HPfit);
-                            obj.Prior(nD).CovFun = @ard_covfun;
-                    end
-                    obj.Prior(nD).type = prior{nD};
+                    % define prior (L2/ARD/none) and hyperparameter
+                    % structure
+                    [obj.Prior(nD),obj.HP(nD)] = define_standard_priors(obj.Prior(nD),prior{nD},HP(nD),nWeight,HPfit);
+                    %                     switch prior{nD}
+                    %                         case {'L2',''}
+                    %                             obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
+                    %                             obj.Prior(nD).CovFun = @L2_covfun;  % L2-regularization (diagonal covariance prior)
+                    %                         case 'none'
+                    %                             obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
+                    %                         case 'ARD'
+                    %                             if nD ==1, ch=""; else ch=nD; end
+                    %                             obj.HP(nD) = HPstruct_ard(nWeight, ch, HP(nD), HPfit);
+                    %                             obj.Prior(nD).CovFun = @ard_covfun;
+                    %                     end
+                    %                     obj.Prior(nD).type = prior{nD};
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh,dimensions);
@@ -515,15 +456,19 @@ classdef regressor
                     elseif isempty(constraint)
                         obj.Weights(nD).constraint = "first"; % by default first value is ref
                     end
+                    
+                    % define prior (L2/ARD/none) and hyperparameter
+                    % structure
+                    [obj.Prior(nD),obj.HP(nD)] = define_standard_priors(obj.Prior(nD),prior{nD},HP(nD),nVal,HPfit);
 
-                    if strcmp(prior{nD}, 'L2')
-                        % define prior covariance function (L2-regularization)
-                        obj.Prior(nD).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                    else % no prior (infinite covariance)
-                        obj.Prior(nD).CovFun = @infinite_cov;
-                    end
-                    obj.Prior(nD).type = prior{nD};
-                    obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
+                    %                     if strcmp(prior{nD}, 'L2')
+                    %                         % define prior covariance function (L2-regularization)
+                    %                         obj.Prior(nD).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+                    %                     else % no prior (infinite covariance)
+                    %                         obj.Prior(nD).CovFun = @infinite_cov;
+                    %                     end
+                    %                     obj.Prior(nD).type = prior{nD};
+                    %                     obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
@@ -576,7 +521,6 @@ classdef regressor
 
                     obj.formula = "f(" + label(nD)+ ")";
 
-
                 otherwise
                     error('unknown type:%s', type);
             end
@@ -591,8 +535,27 @@ classdef regressor
             if ~strcmpi(type, 'constant')
                 noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint}) | cellfun(@(x) x=="",{obj.Weights.constraint});
                 FreeDim = find(~SplitOrSeparate & noDefinedConstraint,1);
+
+                if ~isempty(FreeDim)
+                    for d=1:nD
+                        W =  obj.Weights(d);
+                        if W.constraint=="free" && single_weight(W)
+                            % single weight for one dim-> set weight to 1
+                            % and fixed
+                            %obj = obj.project_to_basis(d);
+                            obj.Weights(d).basis.PosteriorMean=1;
+                            obj.Weights(d).constraint="fixed";
+                            %obj.Weights(d).PosteriorStd = nan;
+                            cov_HP = strcmp(obj.HP(d).type,"cov");
+                            obj.HP(d) = rmv_hyperparameters(obj.HP(d), cov_HP);
+                            obj.Prior(d) = empty_prior_structure(1); % remove prior
+                        end
+                    end
+
+                end
                 SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
                 SplitOrSeparate(end+1:obj.nDim) = false;
+
                 for d= find(noDefinedConstraint)
                     if any([obj.Weights.constraint] == "free") && ~SplitOrSeparate(d)
                         obj.Weights(d).constraint = "mean1"; % mean-one constraint if already a free dimension
@@ -726,6 +689,7 @@ classdef regressor
                 nConstraint(c) = cc.nConstraint;
             end
             nFreeWeights = nWeight - nConstraint;
+            assert(all(nFreeWeights>=0),'unknown error');
 
             % number of free parameters per set weight
             nFreeWeights = repmat(nFreeWeights,obj.rank,1);
@@ -1167,6 +1131,11 @@ classdef regressor
                                     obj(m).Weights(d).PosteriorStd(:,1)=0;
                                 end
                         end
+                    elseif ~isempty(obj(m).Weights(d).basis) && ~obj(m).Weights(d).basis.projected
+                        % if fixed weights in basis space, project to full
+                        % space
+                        obj(m) = obj(m).project_to_basis(d);
+                        obj(m) = obj(m).project_from_basis(d);
                     end
                     ii = ii + rk*nW;
                 end
@@ -1232,12 +1201,32 @@ classdef regressor
                 obj(i).Weights(d).constraint = "fixed";
                 obj(i).Weights(d).PosteriorStd = nan(size(obj(i).Weights(d).PosteriorMean));
                 obj(i).Weights(d).basis = []; % remove basis functions
-                % obj(i).Weights(d).nFreeWeight = 0;
 
                 obj(i).Prior(d) = empty_prior_structure(1); % remove prior
                 obj(i).HP(d) =  HPstruct(); % empty HP structure
             end
         end
+
+        %% FREEZE HYPERPARAMETERS
+        function obj = freeze_hyperparameters(obj, varargin)
+            % R = R.freeze_hyperparameters;
+            % "freezes" hyperparameters of model, i.e. change them to
+            % non-fittable
+            %
+            % R = R.freeze_hyperparameters(regressor_label);
+            % freezes hyperparameters for regressor with corresponding label
+
+            % regressor index and dimensionality of all sets of weights
+            idx = find_weights(obj,varargin{:});
+
+            for j=1:size(idx,2)
+                i = idx(1,j);
+                d = idx(2,j);
+            
+                obj(i).HP(d).fit(:) =  0; % turn fit parameter to 0
+            end
+        end
+
 
         %% DROP UNUSED VALUES IN SCALE
         function obj = drop_unused_values(obj)
@@ -1581,21 +1570,22 @@ classdef regressor
                     case {'weighted','linear','split'}
 
                         % hyperpameters for first dimension
-                        if isempty(prior{d})
-                            prior{d} = 'L2';
-                        end
-                        switch prior{d}
-                            case 'L2'
-                                obj.HP(d) = HPstruct_L2(HP(d));
-                                obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                            case 'none'
-                                obj.Prior(d).CovFun = @infinite_cov;
-                            case 'ARD'
-                                obj.HP(d) = HPstruct_ard(obj.Weights(d).nWeight, HP(d));
-                                obj.Prior(d).CovFun = @ard_covfun;
-                        end
+                        [obj.Prior(d),obj.HP(d)] = define_standard_priors(obj.Prior(d),prior{d},HP(d),obj.Weights(d).nWeight);
 
-                        obj.Prior(d).type = prior{d};
+                        %                         if isempty(prior{d})
+                        %                             prior{d} = 'L2';
+                        %                         end
+                        %                         switch prior{d}
+                        %                             case 'L2'
+                        %                                 obj.HP(d) = HPstruct_L2(HP(d));
+                        %                                 obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+                        %                             case 'none'
+                        %                                 obj.Prior(d).CovFun = @infinite_cov;
+                        %                             case 'ARD'
+                        %                                 obj.HP(d) = HPstruct_ard(obj.Weights(d).nWeight, HP(d));
+                        %                                 obj.Prior(d).CovFun = @ard_covfun;
+                        %                         end
+                        %                         obj.Prior(d).type = prior{d};
 
                     case 'equal'
                         obj.Weights(d).PosteriorMean = ones(1,obj.Weights(d).nWeight);
@@ -1749,6 +1739,19 @@ classdef regressor
                 B.fun = @basis_gamma;
                 B.fixed = false;
                 B.params = struct('nFunctions',nBasisFun);
+
+            elseif strncmpi(basis, 'powerlaw',8)
+                %% POWER LAW x^alpha
+                if length(basis)==8
+                    nBasisFun =1;
+                else
+                    nBasisFun = str2double(basis(9:end));
+                end
+                basis_type = 'powerlaw';
+                B.nWeight = nBasisFun;
+                B.fun = @basis_powerlaw;
+                B.fixed = false;
+                B.params = struct('nFunctions',nBasisFun);
             else
                 error('incorrect basis type: %s', basis);
             end
@@ -1763,28 +1766,38 @@ classdef regressor
             %% define hyperparameters
             HH = obj.HP(d);
             if d<=length(obj.Prior) && ismember(obj.Prior(d).type,{'SquaredExponential','periodic'})
+                % define hyperparamaters for Squared Exponential kernel
                 HH = HPstruct_SquaredExp(HH, scale, HP, type, period, single_tau, basis, binning);
             else
                 % basis functions: first define basis functions parameters
-                if isempty(prior)
-                    prior = '';
+                if length(obj.Prior)<d
+                    obj.Prior(d) = empty_prior_structure(1);
+                    obj.Prior(d).replicate = [];
                 end
-                switch prior
-                    case {'L2',''}
-                        HH = HPstruct_L2(HP);
-                        obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                        obj.Prior(d).type = ['L2_' basis_type];
-                    case 'ARD'
-                        HH = HPstruct_ard(B.nWeight, HP(d));
-                        obj.Prior(d).CovFun = @ard_covfun;
-                        obj.Prior(d).type = ['ARD_' basis_type];
-                    case 'none'
-                        obj.Prior(d).CovFun = @infinite_cov;
-                        HH = HPstruct();
-                        obj.Prior(d).type ='none';
-                    otherwise
-                        error('incorrect prior type: %s',prior);
-                end
+                if length(HP)<d
+                    HP(d) = struct();
+                end 
+                [obj.Prior(d),HH] = define_standard_priors(obj.Prior(d),prior,HP(d),B.nWeight);
+
+                %                 if isempty(prior)
+                %                     prior = '';
+                %                 end
+                %                 switch prior
+                %                     case {'L2',''}
+                %                         HH = HPstruct_L2(HP);
+                %                         obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+                %                         obj.Prior(d).type = ['L2_' basis_type];
+                %                     case 'ARD'
+                %                         HH = HPstruct_ard(B.nWeight, HP(d));
+                %                         obj.Prior(d).CovFun = @ard_covfun;
+                %                         obj.Prior(d).type = ['ARD_' basis_type];
+                %                     case 'none'
+                %                         obj.Prior(d).CovFun = @infinite_cov;
+                %                         HH = HPstruct();
+                %                         obj.Prior(d).type ='none';
+                %                     otherwise
+                %                         error('incorrect prior type: %s',prior);
+                %                 end
 
                 % now add basis function hyperparameters
                 switch basis_type
@@ -1796,6 +1809,9 @@ classdef regressor
                         HH = cat_hyperparameters([Hbasis HH]);
                     case 'gamma'
                         Hbasis = HPstruct_gamma(HH, scale, HP, nBasisFun);
+                        HH = cat_hyperparameters([Hbasis HH]);
+                    case 'powerlaw'
+                        Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun);
                         HH = cat_hyperparameters([Hbasis HH]);
                 end
 
@@ -1874,7 +1890,7 @@ classdef regressor
                 rr = obj(i).rank;
                 for d=1:D % for each dimension
                     W = obj(i).Weights(d);
-                    if constraint_type(W) ~="free"
+                    if ~ismember(constraint_type(W),["free","fixed"])
                         for r=1:rr % for each component
                             this_constraint = constraint_structure(W);
                             this_constraint.P = compute_orthonormal_basis_project(this_constraint.V);
@@ -2028,13 +2044,16 @@ classdef regressor
         end
 
         %% PROJECT TO SPACE OF BASIS FUNCTIONS
-        function obj = project_to_basis(obj)
+        function obj = project_to_basis(obj,dims)
             % R = R.project_to_basis;
             % projects data onto basis functions.
 
             for m=1:length(obj) % for each module
 
-                for d=1:obj(m).nDim % each dimension
+                if nargin<2
+                    dims = 1:obj(m).nDim; % work on all dimensions by default
+                end
+                for d= dims% each dimension
                     W = obj(m).Weights(d);
                     B = W.basis;
 
@@ -2055,8 +2074,13 @@ classdef regressor
                             size(Bmat,2), W.label, nW);
                         new_nWeight = size(Bmat,1);
 
+                        U = W.PosteriorMean;
+
+                        if constraint_type(W)=="fixed"
+                            % if fixed weights in projected space
+                            W.PosteriorMean = W.basis.PosteriorMean;
+                        end
                         W.basis = B;
-                        %cc = constraint_structure(W);
 
                         % store values for full space in B
                         B(1).scale = W.scale;
@@ -2071,7 +2095,9 @@ classdef regressor
                             end
                         end
 
-                        cc(1).V = Bmat*cc(1).V;
+                        if constraint_type(W)~="fixed"
+                            cc(1).V = Bmat*cc(1).V;
+                        end
 
                         B(1).B = Bmat;
 
@@ -2094,19 +2120,22 @@ classdef regressor
 
 
                         %% if initial value of weights are provided, compute in new basis
-                        U = W.PosteriorMean;
-                        if ~isempty(U)
+
+                        if  ~isempty(U)
                             B(1).PosteriorMean = U;
-                            W.PosteriorMean = zeros(obj(m).rank,size(Bmat,1));
-                            for r=1:obj(m).rank
-                                % use pseudo-inverse to project back
-                                if issparse(Bmat) && isdiag(Bmat)
-                                    W.PosteriorMean(r,:) = U'./diag(Bmat);
-                                else
-                                    W.PosteriorMean(r,:) = pinv(Bmat')* U';
+                            if constraint_type(W)~="fixed"
+                                W.PosteriorMean = zeros(obj(m).rank,size(Bmat,1));
+                                for r=1:obj(m).rank
+                                    % use pseudo-inverse to project back
+                                    if issparse(Bmat) && isdiag(Bmat)
+                                        W.PosteriorMean(r,:) = U'./diag(Bmat);
+                                    else
+                                        W.PosteriorMean(r,:) = pinv(Bmat')* U';
+                                    end
                                 end
                             end
                         end
+
                         W.PosteriorStd = [];
 
                         % store copy of original data
@@ -2133,12 +2162,15 @@ classdef regressor
         end
 
         %% PROJECT FROM SPACE OF BASIS FUNCTIONS BACK TO ORIGINAL SPACE
-        function obj = project_from_basis(obj)
+        function obj = project_from_basis(obj, dims)
             % R = project_from_basis(R) projects weights in R back to original space.
-
+            % R = project_from_basis(R, dims) to project along specific
+            % dimension or set of dimensions dims.
             for m=1:length(obj) % for each module
-
-                for d=1:obj(m).nDim
+                if nargin<2
+                    dims = 1:obj(m).nDim; % work on all dimensions by default
+                end
+                for d=dims
                     B = obj(m).Weights(d).basis;
                     if ~isempty(B) && any([B.projected])
                         tmp_nWeight = B(1).nWeight;
@@ -2553,7 +2585,7 @@ classdef regressor
 
         %% SAMPLE WEIGHTS FROM PRIOR
         function obj = sample_weights_from_prior(obj, first_dim_frozen)
-                    % sample weights from prior
+            % sample weights from prior
             if nargin<2
                 first_dim_frozen= false;
             end
@@ -2743,11 +2775,11 @@ classdef regressor
                 Z(:,m) = ProjectDimension(obj(m),1,zeros(1,0)); % this latent
 
                 if nargout>1 && obj(m).nDim==1
-                    
+
                     % if unidimensional, latent is normal since it's a linear transform of
                     % normal posterior
                     Z_var = sum((obj(m).Data * obj(m).Weights.PosteriorCov) .* obj(m).Data,2);
-                    Z_std(:,m) = sqrt(Z_var); 
+                    Z_std(:,m) = sqrt(Z_var);
 
                     % for multidim should sample weights from posterior
                 end
@@ -2759,12 +2791,12 @@ classdef regressor
             % labels for latent_variables
             lbl = strings(size(obj));
             for i=1:numel(obj)
-            if obj(i).nDim==1
-                % use weight labels if 1D
-                lbl(i) = obj(i).weight_labels;
-            else % multidim
-                lbl(i) = obj(i).formula;
-            end
+                if obj(i).nDim==1
+                    % use weight labels if 1D
+                    lbl(i) = obj(i).weight_labels;
+                else % multidim
+                    lbl(i) = obj(i).formula;
+                end
             end
         end
 
@@ -3046,7 +3078,6 @@ classdef regressor
             NewDims = obj1.nDim+1+(1:length(NotSharedDim));
             P(OldDims) = NewDims; % send non-shared dimensions at the end
             P(NewDims) = OldDims; % and use singletons
-            %  P = [1 obj2.nDim+1+(1:obj1.nDim) 2:obj2.nDim+1];
             obj2.Data = permute(obj2.Data, P);
 
             % pairwise multiplication
@@ -3070,6 +3101,14 @@ classdef regressor
                 obj2.formula = "(" + obj2.formula + " )";
             end
             obj.formula = obj1.formula + " * " + obj2.formula;
+
+            % if any set of weight is single-> make it fixed
+            if obj1.nDim==1 && single_weight(obj1.Weights)
+                obj.Weights(1).constraint = "fixed";
+            end
+            if obj2.nDim==1 && single_weight(obj2.Weights)
+                obj.Weights(obj1.nDim+1).constraint = "fixed";
+            end
 
             % for categorical regressors: turn "first0" into "free" or "first1", i.e.
             % the reference weight is 1
@@ -3237,7 +3276,6 @@ classdef regressor
 
             % main effects plus interaction terms
             obj = obj1 + obj2 + (obj1:obj2);
-
         end
 
         %% SPLIT/CONDITION ON REGRESSORS
@@ -3519,6 +3557,8 @@ classdef regressor
             % the first dimension (default) or last
             % - 'SplitValue': boolean array specifying whether a different kernel is
             % computed for other dimensions (explain better!). Default: true.
+            % - 'fit': which hyperparameters to fit (same possible values
+            % as when defining regressor)
             %
             % Some example of how to use lagged regressor in formula,
             % y  ~ x + lag(y+z; Lags=1:3)
@@ -3546,8 +3586,8 @@ classdef regressor
             Group = [];
             PlaceLagFirst = true;
             SplitValue = true;
-
-            nO = obj.nObs;
+            HPfit =[];
+            prior = [];
 
             % process options
             for v=1:2:length(varargin)
@@ -3560,13 +3600,17 @@ classdef regressor
                         PlaceLagFirst = varargin{v+1};
                     case 'splitvalue'
                         SplitValue = varargin{v+1};
+                    case 'fit'
+                        HPfit = varargin{v+1};
+                    case 'prior'
+                        prior = varargin{v+1};
                     otherwise
                         error('incorrect option:%s', varargin{v});
                 end
             end
 
             if isempty(Group) % default: only one group
-                Group = ones(nO,1);
+                Group = ones(obj.nObs,1);
             else
                 assert(isvector(Group),'Group should be a vector of group indices');
                 assert(all(diff(Group)>=0), 'indices in Group should be monotically non-decreasing');
@@ -3602,11 +3646,16 @@ classdef regressor
             summing  = cell(1,nDim_new);
             if ~isempty(basis)
                 summing{nDim_new} = 'continuous';
+                dummy_type = 'continuous';
+            else
+                dummy_type = 'linear';
             end
             basis = [cell(1,nDim_new-1) {basis}];
+            prior = tocell(prior);
+            prior = [cell(1,nDim_new-length(prior)) prior];
 
             HH(nDim_new) = struct;
-            obj = define_priors_across_dims(obj, nDim_new, summing, {}, HH, scale, basis, true, [], dimensions);
+            obj = define_priors_across_dims(obj, nDim_new, summing, prior, HH, scale, basis, true, [], dimensions);
             if isempty(obj.Weights(nDim_new).label) % not clear when this should happen, at least not for the basic case
                 obj.Weights(nDim_new).label = "lag";
             end
@@ -3614,6 +3663,14 @@ classdef regressor
                 obj.Weights(nDim_new).constraint = "free";
             else % if no splitting, i.e multidimensional regressor, need to set some constraint
                 obj.Weights(nDim_new).constraint = "mean1";
+            end
+
+            % define hyperparameters
+            HPfit = define_fitted_hyperparameters(HPfit, false, dummy_type, prior{nDim_new},nLag);
+            if ~isempty(HPfit)
+                assert(isscalar(HPfit) || length(HPfit)==length(obj.HP(nDim_new).fit), ...
+                    'length of HPfit does not match number of hyperparameters');
+                obj.HP(nDim_new).fit(:) = HPfit;
             end
 
             %% place dimension for lag-weights first
@@ -4001,9 +4058,9 @@ classdef regressor
             nSubplotsReg = zeros(1,size(idx,2));
             for j=1:size(idx,2) % for each set of regressor
                 m = idx(1,j);
-                isFW = isFixedWeightSet(obj(m));
+                isFW = isFixedWeightSet(obj(m)) & cellfun(@isempty,{obj(m).Weights.basis});
                 d = idx(2,j);
-                do_plot = ~isFW(d); % do not plot regressors with constant
+                do_plot = ~isFW(d); % do not plot fixed regressors (except if basis functions)
                 do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
                 nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
             end
@@ -4470,7 +4527,7 @@ end
 function h = plot_covariance(obj, type, label, space)
 
 % by default plot in original space
-if nargin<4 
+if nargin<4
     space = 'original';
 end
 
@@ -4533,10 +4590,10 @@ for j=1:size(idx,2) % loop between subpots
         sc = W.scale;
 
         % project prior covariance to original space if needed
-        if strcmpi(space,'original')&& strcmp(type,'prior') && ~isempty(W.basis) && W.basis.projected 
+        if strcmpi(space,'original')&& strcmp(type,'prior') && ~isempty(W.basis) && W.basis.projected
             C = W.basis.B'* C*W.basis.B;
             sc = W.basis.scale;
-    end
+        end
 
         if isrow(sc) && isnumeric(sc)
             xx = sc;
@@ -4581,61 +4638,6 @@ colmaps = {'jet','spring','summer','winter','automn','hot','parula','gray','bone
 c = mod(c-1, length(colmaps))+1;
 cmap = colmaps{c};
 end
-
-% %% RECONSTRUCT MATRIX FROM MESH
-% function [S, U, se] = mesh_to_matrix(S, U, se, cutoff)
-% % [S, U, se] = mesh_to_matrix(S, U, se [,cutoff])
-% % to transform mesh data to matrix form (if the inoccupancy ratio is
-% % smaller than cutoff)
-%
-% if nargin<4
-%     cutoff = 3;
-% end
-%
-% % reconstruct weights as matrix
-% S1 = S(:,1);
-% S2 = S(:,2);
-% x_unq = unique(S(:,1));
-% if isstring(x_unq) && all(~isnan(double(x_unq)) | strcmpi(x_unq,'nan'))
-%     % in case string of numeric values, convert to numeric values to have
-%     % numeric sorting
-%     S1 = double(S1);
-%     x_unq = unique(S1);
-% end
-% y_unq = unique(S2);
-% nX = length(x_unq);
-% nY = length(y_unq);
-%
-% % compute ratio of total mesh points by provided points
-% ratio = nX*nY/size(S,1);
-%
-% % if ratio is above threshold, keep data (i.e. they don't really form a
-% % mesh)
-% if ratio>cutoff
-%     return;
-% end
-%
-% if ~isvector(U)
-%     nDataset = size(U,2);
-% else
-%     nDataset = 1;
-% end
-%
-% U2 = nan(nX,nY,nDataset);
-% se2 = nan(nX,nY,nDataset);
-% for iX=1:nX
-%     for iY=1:nY
-%         bool = equal_numeric_or_cell(S1,x_unq(iX)) & equal_numeric_or_cell(S2,y_unq(iY));
-%         if any(bool)
-%             U2(iX,iY,:) = U(find(bool,1),:);
-%             se2(iX,iY,:) = se(find(bool,1),:);
-%         end
-%     end
-% end
-% U = U2;
-% se = se2;
-% S = {x_unq y_unq};
-% end
 
 %% RECONSTRUCT MATRIX FROM MESH
 function [Uniq, U, UE, LE] = mesh_to_matrix(S, U, UE, LE,cutoff)
@@ -4746,6 +4748,61 @@ else % non-sparse
 end
 end
 
+%% DEFINE HYPERPARAMETER TO BE FITTED
+function HPfit = define_fitted_hyperparameters(HPfit, is_covfun, type, prior, nWeight)
+
+% first define all sets of possible hyperparameters
+if is_covfun
+    HPfit_lbl = {};
+else % data type
+    switch type
+        case 'constant'
+            HPfit_lbl = {};
+        case {'linear','categorical'}
+            if isempty(prior)
+                prior = 'L2';
+            end
+            switch prior
+                case 'L2'
+                    HPfit_lbl = {'variance'};
+                case 'none'
+                    HPfit_lbl = {};
+                case 'ARD'
+                    HPfit_lbl = cellstr("variance_"+1:nWeight);
+                otherwise
+                    error('incorrect prior type: %s',prior);
+            end
+        case {'continuous','periodic'}
+            HPfit_lbl = {'tau','variance'};
+        otherwise
+            error('incorrect type: ''%s''',type);
+    end
+end
+
+% now derive boolean describing which ones are to be fitted
+if ischar(HPfit)
+    switch HPfit
+        case {'all','true'} % fit all
+            HPfit = 1;
+        case {'none','false'} % fit none
+            HPfit = 0;
+        case 'variance'
+            HPfit = {'variance'};
+        case {'ell','tau','scale'}
+            HPfit = {'tau'};
+            assert(any(strcmp(type, {'continuous','periodic'})),'tau hyperparameter is only defined for continuous or periodic regressor');
+        otherwise
+            error('incorrect option for HPfit:%s', HPfit );
+    end
+end
+if iscell(HPfit)
+    assert(~is_covfun, 'cannot define names of hyperparameters to be fitted for custom covariance function')
+    HPfit = ismember(HPfit_lbl, HPfit);
+else
+    HPfit = logical(HPfit);
+end
+end
+
 %% CREATE LAGGED DATA
 function [Dlag, LagLevels, Lags] = create_lagged_data(D, Lags, nLag, Group, single_regressor)
 
@@ -4795,15 +4852,9 @@ else
     LagLevels = LevelString(Lags);
 end
 
-
 % cell array of data indices
-%Cin = cell(1,ndims(D));
-%Cout = cell(1,ndims(Dlag));
 Cout = allindices(S);
-%for d=1:ndims(D)
-% Cin{d} = 1:S(d);
-%   Cout{d} = 1:S(d);
-%end
+
 lag_dim = ndims(Dlag);% dimension corresponding to lag
 
 for l=1:nLag % for each lag group
@@ -4833,28 +4884,6 @@ for l=1:nLag % for each lag group
                 %           Cin{1} = Cout{1};
 
                 this_D = zeropad_data(D, lg, Cout{1});
-                %             if lg>0
-                %                 Cin{1}(end-lg+1:end) = []; % remove last observations according to lag
-                %             elseif lg<0 % negative lag
-                %                 Cin{1}(1:-lg) = []; % remove first observations according to lag
-                %             end
-                %
-                %             this_D = D(Cin{:}); % input data for this group
-                %
-                %             % pad with zeros
-                %             if isa(D, 'sparsearray')
-                %                 Dzeros = sparsearray('empty',[abs(lg) S(2:end)]);
-                %             elseif issparse(D)
-                %                 Dzeros = spalloc(abs(lg),S(2));
-                %             else
-                %                 Dzeros = zeros([abs(lg) S(2:end)]);
-                %             end
-                %
-                %             if lg>0 % positive lag: place zeros first
-                %                 this_D = cat(1,Dzeros, this_D);
-                %             elseif lg<0 % negative lag: place zeros last
-                %                 this_D = cat(1,this_D,Dzeros);
-                %             end
 
                 % place in output data (!! should speed up using subsasign)
                 if idx==1
@@ -5054,6 +5083,27 @@ else
     end
 end
 
+end
+
+%% define standard priors
+function [P,HP] = define_standard_priors(P,prior,HP,nWeight,varargin)
+if isempty(prior)
+    prior = 'L2';
+end
+switch prior
+    case 'L2'
+        HP = HPstruct_L2(HP,varargin{:});
+        P.CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
+    case 'ARD'
+        HP = HPstruct_ard(nWeight, HP,varargin{:});
+        P.CovFun = @ard_covfun;
+    case 'none'
+        HP = HPstruct();
+        P.CovFun = @infinite_cov;
+    otherwise
+        error('incorrect prior type: %s',prior);
+end
+P.type = prior;
 end
 
 %% evaluate prior covariance function and gradient over covariance HPs
@@ -5271,6 +5321,20 @@ end
 S.type = cat(2,Sall.type);
 end
 
+%% remove HP from structure
+function S = rmv_hyperparameters(S, i)
+S.HP(i) = [];
+S.label(i) = [];
+S.fit(i) = [];
+S.LB(i) = [];
+S.UB(i) = [];
+S.type(i) = [];
+if ~isempty(S.index)
+    S.index(i) = [];
+end
+end
+
+
 %% split concatenated HP and prior structure
 function [W, HP, P] = split_concatenated_weights_HP_prior(W, HP,P)
 if ~isscalar(W)
@@ -5328,14 +5392,14 @@ end
 
 %% prior mean in original or basis functions space
 function PM = prior_mean(P,W,space)
-            PM = {P.PriorMean};
-            for i=1:length(W) % if using basis function, project prior mean on full space
-                if ~iscell(W(i).basis) && ~isempty(W(i).basis)
-                    if strcmp(space,'original')
-                    PM{i} = PM{i}*W(i).basis.B;                    
-                    end
-                end
-            end
+PM = {P.PriorMean};
+for i=1:length(W) % if using basis function, project prior mean on full space
+    if ~iscell(W(i).basis) && ~isempty(W(i).basis)
+        if strcmp(space,'original')
+            PM{i} = PM{i}*W(i).basis.B;
+        end
+    end
+end
 PM = [PM{:}]';
 end
 
@@ -5442,10 +5506,15 @@ elseif check_single_level(scale2)
 
 end
 
-if iscell(scale1) && ~iscell(scale2)
-    scale2 = num2cell(scale2);
-elseif ~iscell(scale1) && iscell(scale2)
-    scale1 = num2cell(scale1);
+%if iscell(scale1) && ~iscell(scale2)
+%    scale2 = num2cell(scale2);
+%elseif ~iscell(scale1) && iscell(scale2)
+%    scale1 = num2cell(scale1);
+%end
+if isstring(scale1) && ~isstring(scale2)
+    scale2 = string(scale2);
+elseif ~isstring(scale1) && isstring(scale2)
+    scale1 = string(scale1);
 end
 nLevel1 = size(scale1,2);
 nLevel2 = size(scale2,2);
@@ -5463,6 +5532,15 @@ else
 
 end
 bool = all(bool(:));
+end
+
+%% single weights
+function bool = single_weight(W)
+if isempty(W.basis) || W.basis.projected
+    bool = W.nWeight==1;
+else
+    bool = W.basis.nWeight==1;
+end
 end
 
 %% create Level string for lags
@@ -5500,12 +5578,7 @@ end
 function S = constraint_structure(W)
 for i=1:numel(W)
     C = W(i).constraint;
-    %   if ~isempty(W(i).basis) && ~W(i).basis.projected
-    %       nWeight = W(i).basis.nWeight;
-    %       assert(~isnan(nWeight), 'number of weights not determined');
-    %   else
-    nWeight = W(i).nWeight;
-    %  end
+
     if isstruct(C) % already a structure
         assert(all(isfield(C,{'V','u'})), 'incorrect constraint structure');
         if ~isfield(C, 'type')
@@ -5524,6 +5597,14 @@ for i=1:numel(W)
         if length(char(C))==1
             %old format
             C = opt_list(char(C)==old_optlist);
+        end
+
+        if C=="fixed" && ~isempty(W(i).basis) && ~W(i).basis.projected
+            %fixed weight set in space of basis functions
+            nWeight = W(i).basis.nWeight;
+            assert(~isnan(nWeight), 'number of weights not determined');
+        else
+            nWeight = W(i).nWeight;
         end
 
         switch string(C)
@@ -5602,7 +5683,6 @@ for i=1:numel(W)
     if isstring(ct) || ischar(ct)
         str(i) = string(ct);
     else
-        % S = constraint_structure(W(i));
         str(i) = ct.type;
     end
 end

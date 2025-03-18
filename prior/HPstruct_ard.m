@@ -1,5 +1,5 @@
 function H = HPstruct_ard(nReg, HP, HPfit)
-%H = HPstruct_ard(nReg,d, HP, HPfit)
+%H = HPstruct_ard(nReg,HP, HPfit)
 % HP structure for ARD regularization
 
 H = HPstruct();

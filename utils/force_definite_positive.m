@@ -45,7 +45,6 @@ while isNPD % if some eigenvalue is negative
         [~,isNPD] = chol(M); % make sure that it did work (it may not, still for numerical reasons... not really sure why)
         if isNPD % otherwise, repeat again with larger c
             c = 10*c;
-
         end
     end
 end

@@ -6,14 +6,14 @@ S = HPstruct();
 
 % value of hyperparameter
 S.HP = 0;
-if nargin>1 && isfield(HP, 'value') && ~isempty(HP.value)
+if nargin>=1 && isfield(HP, 'value') && ~isempty(HP.value)
     S.HP = HP.value(1); %if value is specified
-elseif nargin>1 && isfield(HP, 'variance')
+elseif nargin>=1 && isfield(HP, 'variance')
     S.HP = log(HP.variance)/2; % if variance is specified
 end
 
 S.label = "log \lambda";  % HP labels
-if nargin>2 && ~isempty(HPfit)
+if nargin>=2 && ~isempty(HPfit)
     S.fit = logical(HPfit); % if HP is fittable
 else
     S.fit = true;

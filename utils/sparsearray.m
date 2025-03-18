@@ -196,6 +196,9 @@ classdef sparsearray
             if prod(S)~=prod(obj.siz)
                 error('To RESHAPE the number of elements must not change.');
             end
+            if isequal(S,obj.siz)
+                return;
+            end
             obj = fullcoding(obj);
 
             obj.siz = S;
@@ -423,7 +426,6 @@ classdef sparsearray
             Ind = sub2ind(sz, Sub{:});
 
             obj.value = sparse(Ind, ones(1,length(V)),V, prod(sz),1);
-            % obj.value = reshape(obj.value, sz(1), prod(sz(2:end)));
         end
 
         %% REPMAT
@@ -1230,6 +1232,7 @@ classdef sparsearray
                     obj.sub{d_onehot} = reshape(obj.sub{d_onehot},size(obj.value,1),size(obj.value,2));
                     [I2,J2,ind_newdim] = find(obj.sub{d_onehot});
                     if all(I==I2) && all(J==J2) % make extra sure the non-zero values coincide
+                        ind_newdim = cast(ind_newdim,'like',V);
                         P = sparse(I,ind_newdim,V,obj.size(1),obj.size(d_onehot));
                         S = obj.size;
                         S(d)=1;

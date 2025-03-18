@@ -97,6 +97,7 @@ classdef gum
     % - 'concatenate_weights': concatenates model weights into vector
     % - 'get_weight_structure': get structure for weight data
     % - 'get_hyperparameter_structure': get structure for hyperparameter data
+    % - 'freeze_hyperparameters': set hyperparameters to non-fittable
     % - 'freeze_weights': freezes weights and parameters in the model
     % - 'knockout': remove set of regressors from model
     % - 'add_regressor': add regressor(s) to model
@@ -156,7 +157,6 @@ classdef gum
     %
     % See https://github.com/ahyafil/gum
     % version 0.1.3. Bug/comments: send to alexandre dot hyafil (AT) gmail dot com
-
     properties
         formula = ''
         label = ''
@@ -551,7 +551,7 @@ classdef gum
                         this_label = H.label(r);
                     end
                     this_label = strrep(this_label,"\","");
-                    fprintf(['%20s %20s %8 ' char_type(H.value(r)) ' %8s %8 ' char_type(H.LowerBound(r)) ' %8 ' char_type(H.UpperBound(r)) '\n'],...
+                    fprintf(['%20s %20s %8' char_type(H.value(r)) ' %8s %8' char_type(H.LowerBound(r)) ' %8' char_type(H.UpperBound(r)) '\n'],...
                         H.transform{r}, this_label, H.value(r), yesno(H.fittable(r)), H.LowerBound(r), H.UpperBound(r));
                 end
             else
@@ -564,7 +564,7 @@ classdef gum
                         this_label = H.label(r);
                     end
                     this_label = strrep(this_label,"\","");
-                    fprintf(['%10d %20s %12s %8 ' char_type(H.value(r)) ' %8s %8 ' char_type(H.LowerBound(r)) ' %8 ' char_type(H.UpperBound(r)) '\n'], ...
+                    fprintf(['%10d %20s %12s %8' char_type(H.value(r)) ' %8s %8' char_type(H.LowerBound(r)) ' %8' char_type(H.UpperBound(r)) '\n'], ...
                         H.RegressorId(r), H.transform(r), this_label, H.value(r), yesno(H.fittable(r)), H.LowerBound(r), H.UpperBound(r));
                 end
             end
@@ -595,7 +595,7 @@ classdef gum
                     return;
 
                 else
-                    % split dataset, so use corresponing subset for all
+                    % split dataset, so use corresponding subset for all
                     nObsTot = sum([obj.nObs]);
                     if ~islogical(subset)
                         assert(max(subset)<=nObsTot, 'indices of subset array should match total number of observations');
@@ -611,12 +611,11 @@ classdef gum
                         % use specific subset
                         this_subset = subset(obj(i).param.split);
                         obj(i) = obj(i).extract_observations(this_subset,drop_unused);
+                        obj(i).param.split = obj(i).param.split(subset);
                     end
                     return;
-
                 end
             end
-
 
             obj.T = obj.T(subset);
             n_obs = length(obj.T);
@@ -639,9 +638,41 @@ classdef gum
                 if isfield(obj.Predictions, 'Expected') && ~isempty(obj.Predictions.Expected)
                     obj.Predictions.Expected = obj.Predictions.Expected(subset);
                 end
-                if isfield(obj.Predictions, 'sample') && ~isempty(obj.Predictions.rho)
-                    obj.Predictions.sample = obj.Predictions.rho(sample);
+                if isfield(obj.Predictions, 'sample') && ~isempty(obj.Predictions.sample)
+                    obj.Predictions.sample = obj.Predictions.sample(subset);
                 end
+            end
+
+            % process training and validation sets
+            if isfield(obj.param,'crossvalidation') && (isstruct(obj.param.crossvalidation)|| isa(obj.param.crossvalidation,'cvpartition'))
+                CV = obj.param.crossvalidation;
+                sbs = subset;
+                if islogical(sbs)
+                    nn = length(sbs);
+                else
+                    nn =max(sbs);
+                end
+                % if islogical(sbs)% get indices
+                %     sbs = find(sbs);
+                % end
+                for p=1:CV.NumTestSets
+                    % extract corresponding observations in
+                    % training/validation sets and re-index
+                    tmp = CV.training{p};
+                    if ~islogical(tmp) % convert to logical if not already
+                        tmp = ismember(1:nn,tmp);
+                    end
+                    CV.training{p} = find(tmp(sbs));
+
+                    tmp = CV.test{p};
+                    if ~islogical(tmp) % convert to logical if not already
+                        tmp = ismember(1:nn,tmp);
+                    end
+                    CV.test{p} = find(tmp(sbs));
+                    %  CV.training{p} = CV.training{p}(ismember(CV.training{p},sbs));
+                    %  CV.test{p} = CV.test{p}(ismember(CV.test{p},sbs));
+                end
+                obj.param.crossvalidation = CV;
             end
 
             % update number of parameters and degrees of freedom
@@ -695,7 +726,16 @@ classdef gum
 
                 objS(v).score.SplittingVariable = label;
             end
+        end
 
+        %% EXCLUDE TEST SET
+        function obj = exclude_test_set(obj)
+            if ~isfield(obj.param,'testset') || isempty(obj.param.testset)
+                return;
+            end
+            obj = obj.check_testset();
+            obj = obj.extract_observations(~obj.param.testset);
+            obj.param = rmfield(obj.param,'testset');
         end
 
 
@@ -717,14 +757,23 @@ classdef gum
             %     * a 'cvpartition' object created using function cvpartition( stats
             %     toolbox)
             %     * a scalar determining the number of observations in the training set. Use
-            %     either the raw number of observations; a number between  and 1 to indicate
-            %     the proportion of observations; or -1 for leave-one-out. Use field 'nvalidation'
+            %     either the raw number of observations; a number between 0 and 1 to indicate
+            %     the proportion of observations; or -1 for leave-one-out. Use field 'nValidation'
             %     to indicate number of observations in validation set (default: all observations not included
-            %     in training set), and 'nFold' to indicate number of permutations
+            %     in training set and test set), and 'nFold' to indicate number of permutations
             %     (default:10).
             %     * a cell array of size nFold x 2, where the elements in the first column indicate
-            % observations in the training sets, second column indicate observations in the test
-            % sets, and rows indicate permutation
+            % observations in the training sets, second column indicate
+            % observations in the validation sets, and rows indicate permutation
+            %
+            % - 'testset': to define a test set (a set of observations not
+            % used for hyperparameter fitting and weight inference on
+            % which the model is evaluated). The value can:
+            % * a scalar between  0 and 1 to define the fraction of observations in test set
+            % * an integer to define the number of observations in the test
+            % set
+            % * a vector of indices or boolean vector to indicate directly
+            % which observations fall in the test set
             %
             % - 'gradient' (for crossvalidation fitting): whether to use gradients of CVLL to speed up search.
             % Gradients computation may suffer numerical estimation problems if
@@ -732,17 +781,11 @@ classdef gum
             % [default], 'on' and 'check' (uses gradient but checks first that
             % numerical estimate is correct)
             %
-            % -'CovPriorJacobian': provide gradient of prior covariance matrix w.r.t hyperparameters
-            % to compute gradient of MAP LLH over hyperparameters.
             % - 'maxiter': integer, defining the maximum number of iterations for
             % hyperparameter optimization (default: 200)
             % - 'TolFun': tolerance criterion for stopping optimization
-            % - 'verbose':
-            % display information for optimzation. Possible
+            % - 'verbose': display information for optimization. Possible
             % values: 'full','on' [default for 'em'],'off','iter'[default for other methods]
-            % - 'no_fitting': if true, does not fit parameters, simply provide as output variable a structure with LLH and
-            % accuracy for given set of parameters (values must be provided in field
-            % 'U')
 
             % default values
             algo = 'em'; % default algorithm
@@ -823,9 +866,13 @@ classdef gum
                 obj.param.crossvalidation =  pars.crossvalidation;
             elseif strcmpi(algo,'cv')
                 % if asked for cross-validation but did not provide CVset
-                obj.param.crossvalidation = .8; % use 10-fold CVLL with 80% data in training and 20% in test set
+                obj.param.crossvalidation = nan; % use 10-fold CVLL with 80% data in training and 20% in validation set
             end
-            obj = check_crossvalidation(obj);
+            if isfield(pars, 'testset')
+                obj.param.testset =  pars.testset;
+            end
+            obj = obj.check_testset();
+            obj = obj.check_crossvalidation();
 
             %% process hyperparameters (which are to be fitted, bounds, initial values)
             HPall = [M.HP]; % concatenate HP structures across regressors
@@ -845,8 +892,10 @@ classdef gum
 
             if strcmpi(algo,'em')
                 W = [M.Weights];
-                basis = [W.basis];
-                if any(contains([HPall.type],'basis') & HP_fittable) && ~isempty(basis) && any([basis.fixed])% if  any fittable HP parametrizes basis functions
+                basis = {W.basis};
+                basis = basis(~cellfun(@isempty,basis));
+                if any(contains([HPall.type],'basis') & HP_fittable) && ...
+                        ~isempty(basis) && any(~cellfun(@(x) x.fixed,basis))% if  any fittable HP parametrizes basis functions
                     warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
                 end
             end
@@ -881,6 +930,14 @@ classdef gum
                 obj.param.initialpoints = pars.initialpoints;
             end
 
+            % if compute test set (for EM, done inside em function)
+            with_test_set = isfield(obj.param,'testset') && ~isempty(obj.param.testset) && ~strcmpi(algo,'em');
+            if with_test_set
+                obj_test = obj.extract_observations(obj.param.testset);
+                obj = obj.exclude_test_set(); % exclude test for fitting
+            end
+
+
             %% apply fitting method
             switch lower(algo)
                 case 'basic' % grid search  hyperpameters that maximize marginal evidence
@@ -889,7 +946,8 @@ classdef gum
                     gum_neg_marg();
 
                     % run gradient descent on negative marginal evidence
-                    errorscorefun = @(HP) gum_neg_marg(obj, HP, HPidx);
+                    obj_noTS = obj.exclude_test_set(); % exclude test for fitting
+                    errorscorefun = @(HP) gum_neg_marg(obj_noTS, HP, HPidx);
                     optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'display',verbose,'MaxIterations',maxiter);
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
@@ -907,13 +965,16 @@ classdef gum
                     check_grad = strcmpi(use_gradient,'check'); % whether to use gradient
 
                     % run gradient descent
-                    errorscorefun = @(P) cv_score(obj, P, HPidx, 0);
+                    obj_noTS = obj.exclude_test_set(); % exclude test for fitting
+                    errorscorefun = @(P) cv_score(obj_noTS, P, HPidx, 0);
                     optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
                         'CheckGradients',check_grad,'display',verbose,'MaxIterations',maxiter);
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
                     %% run estimation again with the optimized hyperparameters to retrieve weights
                     obj =  cv_score(obj, HP, HPidx, 1);
+
+
             end
 
             % score (penalized marginal evidence)
@@ -922,6 +983,12 @@ classdef gum
             obj.score.AIC = 2*nHP - 2*obj.score.LogEvidence; % Akaike Information Criterior
             obj.score.AICc = obj.score.AIC + 2*nHP*(nHP+1)/(obj.score.nObservations -nHP-1); % AIC corrected for sample size
 
+            % compute on test set now
+            if with_test_set
+                obj_test = obj_test.set_weights_from_model(obj);
+                [obj_test,obj.score.TestLLH] = obj_test.LogLikelihood(); % evaluate LLH
+                obj.score.TestAccuracy = obj_test.Accuracy(); % and accuracy
+            end
         end
 
         %%% EM ALGORITHM
@@ -953,24 +1020,27 @@ classdef gum
 
             param_tmp = obj.param;
 
+            with_test_set = isfield(obj.param,'testset') && ~isempty(obj.param.testset);
+            if with_test_set
+                obj_test = obj.extract_observations(obj.param.testset);
+                obj = obj.exclude_test_set(); % exclude test for fitting
+                prm = rmfield(prm,'testset');
+            end
             obj.param = prm;
             vbs = prm.verbose;
 
-            objective_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
+            % options for mstep optimization
+            use_grad = any(strcmpi(use_gradient, {'on','check'})); % whether to use gradient
+            check_grad = strcmpi(use_gradient,'check');
+            opts= struct('TolFun',HP_TolFun,'use_grad',use_grad,'check_grad',check_grad,'maxiter',1000);
 
             while keepIterating % EM iteration
                 %% E-step (running inference with current hyperparameters)
 
-                %  M = set_hyperparameters(M, HP, HPidx);
-
-                obj.regressor = set_hyperparameters(obj.regressor, HP, HPidx);
-
-                % evaluate covariances at for given hyperparameters
-                % obj.regressor = compute_prior_covariance(M);
-                obj.regressor = compute_prior_covariance(obj.regressor);
-
-                check_grad = strcmpi(use_gradient,'check') && iter==0; % whether to use gradient (only at first iteration)
-
+                % set value of hyperparameters and evaluate prior
+                % covariances
+                obj.regressor = obj.regressor.set_hyperparameters(HP, HPidx);
+                obj.regressor = obj.regressor.compute_prior_covariance();
 
                 % make sure that all weigths have real-valued priors (not infinite)
                 if iter==0
@@ -1004,124 +1074,26 @@ classdef gum
                 % inference
                 obj = obj.infer(prm);
 
-                % PP = projection_matrix_multiple(obj.regressor); % projection matrix for each dimension
 
                 %% M-step (adjusting hyperparameters)
                 regressorCounter = 0;
                 HPidx_cat = [HPidx{:}]; % concatenate over components
                 HPcounter = 1;
+                FreeCov = obj.score.FreeCovariance;
                 for m=1:obj.nMod % for each regressor object
-                    ss = obj.regressor(m).nFreeParameters; % size of each dimension
+                    R = obj.regressor(m); %.project_from_basis;
 
-                    for d=1:obj.regressor(m).nDim % for each dimension
-                        for r=1:size(HPidx{m},1)
-                            this_HPidx = HPidx{m}{r,d}; % indices of hyperparameters for this set of weight
-                            if ~isempty(this_HPidx)
-                                if ~any(ismember(this_HPidx, [HPidx_cat{setdiff(1:obj.nMod,HPcounter)}])) %
-                                    % if hyperparameters are not used in any other module
+                    for d=1:R.nDim % for each dimension
+                        for r=1:size(HPidx{m},1)% each rank (change to single values?)
+                            % M step for corresponding hyperparameters
+                            otherHPs= [HPidx_cat{setdiff(1:obj.nMod,HPcounter)}];
+                            HP = mstep(HP, R, d,r, HPidx{m}{d}, otherHPs, FreeCov,opts, regressorCounter);
 
-                                    % set hyperparameter values for this component
-                                    HPs = obj.regressor(m).HP(r,d);
-                                    HP_fittable = HPs.fit;
-                                    HPs.HP(HP_fittable) = HP(this_HPidx); % fittable values
-
-                                    % posterior mean and covariance for associated weights
-                                    regressorIndex = (1:ss(r,d)) + sum(ss(:,1:d-1),'all') + sum(ss(1:r-1,d)) + regressorCounter; % index of regressors in design matrix
-
-                                    this_cov =  obj.score.FreeCovariance(regressorIndex,regressorIndex) ; % free posterior covariance for corresponding regressor
-
-                                    % if project on a
-                                    % hyperparameter-dependent
-                                    % basis, move back to original
-                                    % space
-                                    W = obj.regressor(m).Weights(d); % corresponding set of weight
-
-                                    this_mean =  W.PosteriorMean(r,:);
-                                    this_scale = W.scale;
-                                    % this_P = PP{m}{r,d};
-                                    ct = W.constraint;
-                                    this_Prior = obj.regressor(m).Prior(r,d);
-                                    this_PriorMean = this_Prior.PriorMean;
-                                    if  ~isa(this_Prior.CovFun, 'function_handle') && ~iscell(this_Prior.CovFun) % function handle
-                                        error('hyperparameters with no function');
-                                    end
-
-                                    B = W.basis; % here we're still in projected mode
-                                    non_fixed_basis = any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]); % if  any fittable HP parametrizes basis functions
-
-                                    if ~isempty(B)
-                                        if iscell(B)
-                                            error('not coded yet for regressor with basis functions concatenated with another regressor');
-                                        end
-
-                                        if  non_fixed_basis %  if basis functions parametrized by fittable HP
-                                            % working in original
-                                            % space (otherwise working
-                                            % in projected space)
-                                            Bmat = B(1).B;
-                                            this_mean = this_mean*Bmat;
-                                            this_PriorMean = this_PriorMean*Bmat;
-                                            if ~isequal(W.constraint,"free") && W.constraint.nConstraint>0
-                                                this_cov = W.constraint.P'* this_cov *W.constraint.P;
-                                            end
-                                            this_cov = Bmat' * this_cov *Bmat;
-
-                                            % define constraint in original
-                                            % space
-                                            dummyR = obj.regressor(m).project_from_basis().compute_projection_matrix;
-                                            ct = dummyR.Weights(d).constraint;
-                                            this_cov = covariance_free_basis(this_cov,ct);
-                                            %  assert(W.constraint=="free", 'EM not coded for basis functions with constraint');
-
-                                        end
-                                        % not sure why this was here,
-                                        % doesn't seem right
-                                        %this_P = eye(length(this_cov));
-                                    end
-                                    this_cov = force_definite_positive(this_cov);
-
-                                    if ~iscell(this_Prior.CovFun)
-                                        iHP = contains(HPs.type, "cov"); % covariance hyperparameters
-                                        [~, gg] = this_Prior.CovFun(this_scale, HPs.HP(iHP), B);
-                                        %  withOptimizer = isstruct(gg)  && isequal(this_P, eye(ss(r,d)))  && ~non_fixed_basis;
-                                        withOptimizer = isstruct(gg)  && isFreeStructure(ct)  && ~non_fixed_basis;
-                                    else
-                                        withOptimizer = false;
-                                    end
-                                    if  withOptimizer % function provided to optimize hyperparameters
-                                        %  work on this to also take into account constraints (marginalize in the free base domain)
-
-                                        HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
-                                    else % find HP to maximize cross-entropy between prior and posterior
-
-                                        optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
-                                            'CheckGradients',check_grad,'display','off','MaxIterations',1000);
-
-                                        % find HPs that minimize negative
-                                        % cross-entropy
-                                        mstep_fun = @(hp) mvn_negxent(this_Prior.CovFun, this_PriorMean, this_scale, this_mean, this_cov,ct, hp, HPs, B);
-
-                                        ini_val = mstep_fun(HP(this_HPidx));
-
-                                        assert(~isinf(ini_val) && ~isnan(ini_val), ...
-                                            'M step cannot be completed, probably because covariance prior is not full rank');
-
-                                        % compute new set of
-                                        % hyperparameters that
-                                        % minimize
-                                        HPnew = fmincon(mstep_fun,...
-                                            HP(this_HPidx),[],[],[],[],HPs.LB(HP_fittable),HPs.UB(HP_fittable),[],optimopt);
-                                    end
-                                    HP(this_HPidx) = HPnew;  % select values corresponding to fittable HPs
-
-                                else
-                                    error('not coded: cannot optimize over various components at same time');
-                                end
-                            end
                             HPcounter = HPcounter+1;
                         end
 
                     end
+                    ss = R.nFreeParameters; % size of each dimension
                     regressorCounter = regressorCounter + sum(ss(1,:)) * rank(m); % jump index by number of components in module
                 end
 
@@ -1131,19 +1103,22 @@ classdef gum
 
                 % has converged if improvement in LLH is smaller than epsilon
                 iter = iter + 1; % update iteration counter;
+                check_grad = false; % do not check at further iterations
                 LogEvidence = obj.score.LogEvidence;
                 if strcmp(vbs, 'little')
                     fprintf('*');
                 elseif ~strcmp(vbs,'off')
                     fprintf('HP fitting: iter %d, log evidence %f\n',iter, LogEvidence);
                 end
-                % HP
                 converged = abs(old_logjoint-LogEvidence)<HP_TolFun;
                 old_logjoint = LogEvidence;
                 logjoint_iter(iter) = LogEvidence;
 
                 keepIterating = (iter<maxiter) && ~converged;
+            end
 
+            if strcmp(vbs, 'little')
+                fprintf('done!\nFinal evidence (%d iterations): %f\n', iter, LogEvidence);
             end
 
             % should think of a smarter way to merge infer() and fit()
@@ -1152,17 +1127,19 @@ classdef gum
             param_tmp.maxiter = obj.param.maxiter;
             param_tmp.miniter = obj.param.miniter;
             param_tmp.TolFun = obj.param.TolFun;
-            obj.param = param_tmp;
 
-            if strcmp(vbs, 'little')
-                fprintf('done!\nFinal evidence (%d iterations): %f\n', iter, LogEvidence);
+            % compute on test set now
+            if with_test_set
+                obj_test = obj_test.set_weights_from_model(obj);
+                [obj_test,obj.score.TestLLH] = obj_test.LogLikelihood(); % evaluate LLH
+                obj.score.TestAccuracy = obj_test.Accuracy(); % and accuracy
             end
 
             % allocate fitted hyperparameters to each module
             obj.regressor = obj.regressor.set_hyperparameters(HP);
+            obj.param = param_tmp;
 
         end
-
 
         %% %%%%% INFERENCE (ESTIMATE WEIGHTS) %%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1196,9 +1173,9 @@ classdef gum
             % - 'Y': vector of predicted probability of target at MAP parameters
             % - 'covb': covariance matrix of parameters weights (expressed in free
             % basis of the parameter, one parameter is removed per non-free dimension).
-            % - 'testscore': LLH over test set of observations normalized by number of
+            % - 'validationscore': LLH over test set of observations normalized by number of
             % observations, averaged across permutations (for cross-validation)
-            % - 'testscore_all': a vector of LLH over test set of observations normalized by number of
+            % - 'validationscore_all': a vector of LLH over test set of observations normalized by number of
             % observations, for each permutation
             % - 'LogEvidence': estimated log-evidence for the model (to improve...)
             % - 'BIC_infer': Bayesian Information Criterion
@@ -1226,7 +1203,7 @@ classdef gum
             else
                 assert(ismember(parm.verbose, {'on','off','little','full'}), 'incorrect value for field ''verbose'': possible values are ''on'', ''off'',''full'' and ''little''');
             end
-            verbose =strcmp(parm.verbose, 'on') || strcmp(parm.verbose, 'full');
+            verbose =ismember(parm.verbose, {'on','full','little'});
 
             %% fitting various models at a time
             if length(obj)>1
@@ -1345,20 +1322,23 @@ classdef gum
 
                 warning('off','MATLAB:nearlySingularMatrix');
 
+                if verbose
+                    fprintf('Cross-validation (%d folds):\n', nSet);
+                end
+
                 % parfor p=1:nperm % for each permutation
                 for p=1:nSet % for each permutation
 
-                    if verbose
-                        fprintf('Cross-validation set %d/%d', p, nSet);
-                    end
                     [exitflag_CV(p), U_CV(:,p), CVLL(p), accuracy(p), validationscore(p), grad_hp(:,p)] = ...
                         infer_trainset(obj, CV, p, do_grad_hyperparam, PP, CovJacob);
-
                     if verbose
-                        fprintf('done\n');
+                        fprintf(DisplayChar(p));
                     end
-                end
 
+                end
+                if verbose
+                    fprintf('done\n');
+                end
                 M = set_weights(M,U_CV,[],'U_CV'); % add MAP weights for each CV set to weight structure
                 warning(singular_warn.state,'MATLAB:nearlySingularMatrix');
 
@@ -1503,10 +1483,6 @@ classdef gum
             % compute SSE and r2 for normal observations
             obj = obj.compute_r_squared;
 
-            % model evidence using Laplace approximation (Bishop - eq 4.137)
-            % S.LLH_model = S.LLH - U'*sigma1*U/2 - V'*sigma2*V/2 + (m1+m2)/2*log(2*pi) - log(det(Inff))/2;
-
-
             %   for projection on space, convert weights back to
             %   original domain
             if ~isfield(parm, 'originalspace') || parm.originalspace
@@ -1514,8 +1490,6 @@ classdef gum
             end
 
             obj.regressor = M;
-
-            %  obj = obj.clear_data;
 
             score_fields = fieldnames(Sfit);
             for f=1:length(score_fields)
@@ -1798,11 +1772,18 @@ classdef gum
                 nFree_all = size(Kall,1);
             end
 
+            if initialpoints>1 && any(strcmp(obj.param.verbose, {'on','full','little'}))
+                fprintf('Weight estimation with %d starting points:',initialpoints);
+                if any(strcmp(obj.param.verbose, {'on','full'}))
+                    fprintf('\n');
+                end
+            end
+
             %% repeat algorithn with each set of initial points
             for ip=1:initialpoints
 
                 if initialpoints>1 && any(strcmp(obj.param.verbose, {'on','full'}))
-                    fprintf('Fitting weights, starting point %d/%d\n',ip, initialpoints);
+                    fprintf('Starting point %d/%d\n',ip, initialpoints);
                     %  elseif initialpoints>1 && strcmp(obj.param.verbose,'little')
                     %      fprintf('*');
                 end
@@ -2993,6 +2974,9 @@ classdef gum
                             fdx = full_idx( midx+(d-1)*rr+r ) + 1 : full_idx( midx+(d-1)*rr+r+1 ); % index for full parameter set
                             fdx2 = full_idx( midx+(f-1)*rr+r ) + 1 : full_idx( midx+(f-1)*rr+r+1 ); % index for full parameter set
                             Ha2 = ProjectDimension(M(m),r,[d f],1,nPE); % add collapsing over observable dimension (Y-T),
+                            if isscalar(fdx2) && isrow(Ha2)% sometimes ProjectDimension outputs row vector instead of column
+                                Ha2 = Ha2';
+                            end
 
                             %  H_full(fdx,fdx2 ) = H_across;
                             H_full(fdx,fdx2 ) = H_full(fdx,fdx2 ) + Ha2;
@@ -3188,10 +3172,20 @@ classdef gum
             end
         end
 
+        %% FREEZE HYPERPARAMETERS
+        function obj = freeze_hyperparameters(obj, varargin)
+            %  M = freeze_hyperparameters(M) freezes all
+            %  hyperparameters in model M.
+            %
+            % M = M.freeze_hyperparameters(regressor_label);
+            % freezes hyperparameters for regressor with corresponding label
+            for i=1:numel(obj)
+                obj(i).regressor = freeze_hyperparameters(obj(i).regressor, varargin{:});
+            end
+        end
         %% FREEZE WEIGHTS
         function obj = freeze_weights(obj, varargin)
-            %  M = freeze_weights(M) freezes all weights and
-            %  hyperparameters in model M.
+            %  M = freeze_weights(M) freezes all weights in model M.
             %
             % M = M.freeze_weights(regressor_label);
             % freezes weights for regressor with corresponding label
@@ -3305,27 +3299,52 @@ classdef gum
         end
 
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
-        function [obj,I] = set_weights_and_hyperparameters_from_model(obj, varargin)
+        function [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, varargin)
             % M = M.set_weights_and_hyperparameters_from_model(M2);
             % sets weights and hyperparameters of model M at values of model
             % M2 (for regressors shared between the two models)
-            [obj.regressor,I] = set_weights_and_hyperparameters_from_model(obj.regressor, varargin{:});
+            %
+            % If M is an array of models, M2 should be a single model or an
+            % array of models of the same size
+            for i=1:numel(obj)
+                if isscalar(obj2)
+                    [obj(i).regressor,I] = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
+                else
+                    [obj(i).regressor,I] = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
+                end
+            end
         end
 
         %% SET HYPERPARAMETERS FROM ANOTHER MODEL
-        function [obj,I] = set_hyperparameters_from_model(obj, varargin)
+        function [obj,I] = set_hyperparameters_from_model(obj, obj2, varargin)
             % M = M.set_hyperparameters_from_model(M2);
             % sets  hyperparameters of model M at values of model
             % M2 (for regressors shared between the two models)
-            [obj.regressor,I] = set_hyperparameters_from_model(obj.regressor, varargin{:});
+            % If M is an array of models, M2 should be a single model or an
+            % array of models of the same size
+            for i=1:numel(obj)
+                if isscalar(obj2)
+                    [obj(i).regressor,I] = set_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
+                else
+                    [obj(i).regressor,I] = set_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
+                end
+            end
         end
 
         %% SET WEIGHTS FROM ANOTHER MODEL
-        function [obj,I] = set_weights_from_model(obj, varargin)
+        function [obj,I] = set_weights_from_model(obj, obj2, varargin)
             % M = M.set_weights_from_model(M2);
             % sets weights of model M at values of model
             % M2 (for regressors shared between the two models)
-            [obj.regressor,I] = set_weights_from_model(obj.regressor, varargin{:});
+            % If M is an array of models, M2 should be a single model or an
+            % array of models of the same size
+            for i=1:numel(obj)
+                if isscalar(obj2)
+                    [obj(i).regressor,I] = set_weights_from_model(obj(i).regressor, obj2, varargin{:});
+                else
+                    [obj(i).regressor,I] = set_weights_from_model(obj(i).regressor, obj2(i), varargin{:});
+                end
+            end
         end
 
         %% CONCATENATE ALL WEIGHTS
@@ -3997,6 +4016,40 @@ classdef gum
             obj.Predictions.rhoVar = var(rho_sample,0,2);
         end
 
+        %% CHECK FORMAT OF TEST SET
+        function obj = check_testset(obj)
+            if ~isfield(obj.param, 'testset') || isempty(obj.param.testset)
+                % if no test set, we're fine!
+                return;
+            end
+
+            TS = obj.param.testset;
+            if isscalar(TS)
+                if TS<1 % defined as fraction
+                    TS = round(TS*obj.nObs);
+                end
+                % draw a random set
+                obj.param.testset = randperm(obj.nObs,TS);
+            elseif ~islogical(TS)
+                % convert to boolean
+                if isfield(obj.param,'split')
+                    obj.param.testset = false(size(obj.param.split));
+                else
+                    obj.param.testset = false(obj.nObs,1);
+                end
+                obj.param.testset(TS) = true;
+            end
+
+            % if the test set has been defined on
+            % the whole dataset and model is fit on subset of
+            % data, select corresponding subset of testset
+            if isfield(obj.param, 'split') && length(obj.param.testset)==length(obj.param.split)
+                splt = obj.param.split;
+                obj.param.testset = obj.param.testset(splt);
+            end
+
+        end
+
         %% CHECK FORMAT OF CROSS-VALIDATION
         function obj = check_crossvalidation(obj)
             % M = M.check_crossvalidation;
@@ -4006,13 +4059,23 @@ classdef gum
                 % if no cross-validation is planned, we're fine!
                 return;
             end
+            n = obj.nObs;
+            if isfield(obj.param, 'testset') && ~isempty(obj.param.testset)
+                TS = obj.param.testset;
+                assert(length(TS)==n,'testset should be a boolean array with one value per observation');
+                no_TS = find(~TS);% observations NOT in test set
+            else
+                TS = [];
+            end
+            nTS = sum(TS); % number of observations in test set
+            n_noTS = n-nTS;
 
             CV = obj.param.crossvalidation;
-            if iscell(CV) % permutations are already provided as nperm x 2 cell (first col: train set, 2nd: train set)
+            if iscell(CV) % permutations are already provided as nperm x 2 cell (first col: train set, 2nd: validation set)
 
                 % replace by structure
                 CV_tmp = struct;
-                CV_tmp.NumObservations = obj.nObs;
+                CV_tmp.NumObservations = n_noTS;
                 CV_tmp.NumTestSets = size(CV,1); % number of permutation sets
                 CV_tmp.nTrain = length(CV{1,1});
                 CV_tmp.nTest = length(CV{1,2});
@@ -4022,37 +4085,45 @@ classdef gum
             elseif isa(CV,'cvpartition') || isstruct(CV)
                 % we're already set!
 
-            elseif isscalar(CV) % only the number of observations in training set is provided draw the permutations now
+            elseif isscalar(CV) % only the number of observations in training set is provided-> draw the permutations now
                 nTrain = CV; % number of observations in training set
-                n = obj.nObs;
 
+                if isnan(nTrain)% default: 80% data in training and 20% in validation set (excluding test set)
+                    nTrain = .8 *n_noTS/n;
+                end
                 if nTrain == -1
                     nTrain = n-1; % leave one out
                 elseif nTrain<1 % defined as percentage
                     nTrain = round(nTrain*n);
                 end
-                if isfield(obj.param, 'ntest') % defined number of test observations
-                    nTest = obj.param.ntest;
-                else % by default all observations not in train set
-                    nTest = n-nTrain;
+                if isfield(obj.param, 'nValidation') % defined number of validation observations
+                    nValidation = obj.param.nValidation;
+                    assert(nValidation+nTrain<=n_noTS,...
+                        'the number of observations in training, validation and test sets cannot be larger than the total number of observations');
+                else % by default all observations not in train set or test set
+                    nValidation = n_noTS-nTrain;
                 end
                 if isfield(obj.param, 'nFold')
-                    NumTestSets = obj.param.nFold;
+                    nFold = obj.param.nFold;
                 else
-                    NumTestSets = 10; % default number of permutations
+                    nFold = 10; % default number of permutations
                 end
                 CV = struct;
-                CV.NumObservations = obj.nObs;
-                CV.NumTestSets = NumTestSets;
-                CV.training = cell(1,NumTestSets);
-                CV.test = cell(1,NumTestSets);
+                CV.NumObservations = n_noTS;
+                CV.NumTestSets = nFold;
+                CV.training = cell(1,nFold);
+                CV.test = cell(1,nFold);
 
-                for p=1:NumTestSets % for each permutation
-                    trainset = randperm(n,nTrain); % training set
-                    notrainset= setdiff(1:n, trainset); % observations not in training set
-                    testset = notrainset(randperm(n-nTrain,nTest)); % test set
+                for p=1:nFold % for each permutation
+                    trainset = randperm(n_noTS,nTrain); % training set
+                    notrainset= setdiff(1:n_noTS, trainset); % observations not in training set
+                    validationset = notrainset(randperm(n_noTS-nTrain,nValidation)); % validation set
+                    if nTS>0 %  training and validation sets do no overlap with test set
+                        trainset = no_TS(trainset);
+                        validationset = no_TS(validationset);
+                    end
                     CV.training{p} = trainset;
-                    CV.test{p} = testset;
+                    CV.test{p} = validationset;
                 end
             end
 
@@ -4070,18 +4141,27 @@ classdef gum
 
                 for p=1:CV.NumTestSets
                     trainset = CV.training(p);
-                    testset = CV.test(p);
+                    validationset = CV.test(p);
                     if iscell(trainset)
                         trainset = trainset{1};
-                        testset = testset{1};
+                        validationset = validationset{1};
                     end
                     CV_tmp.training{p} = trainset(splt); % use subset of training set
-                    CV_tmp.test{p} = testset(splt); % use subset of test set
+                    CV_tmp.test{p} = validationset(splt); % use subset of validation set
                 end
                 CV = CV_tmp;
             end
 
-            assert(CV.NumObservations==obj.nObs, ...
+            % make sure that training and validation sets do not overlap
+            % with test set
+            if nTS>0
+                for p=1:nFold
+                    assert(all(ismember(CV.training{p},no_TS)),'training sets and test set must not intersect');
+                    assert(all(ismember(CV.test{p},no_TS)),'validation sets and test set must not intersect');
+                end
+            end
+
+            assert(CV.NumObservations==n_noTS, ...
                 'number of data points in cross-validation set does not match number of observations in dataset');
 
             obj.param.crossvalidation = CV;
@@ -4554,7 +4634,7 @@ classdef gum
                 subset = 1:obj.nObs;
             end
             Prd = obj.Predictions;
-lbl= Prd.latent_label;
+            lbl= Prd.latent_label;
 
             % do not plot offset
             is_offset = strcmp(lbl,"offset");
@@ -4667,7 +4747,7 @@ lbl= Prd.latent_label;
                 nGroup = length(G_unq);
             else
                 nGroup = 1;
-               % G = ones(1,obj.nObs);
+                % G = ones(1,obj.nObs);
                 G_unq = [];
             end
 
@@ -4689,19 +4769,19 @@ lbl= Prd.latent_label;
             M = zeros(nQ+1,nGroup);
             sem = zeros(nQ+1,nGroup);
             for g=1:nGroup
-            for q=1:nQ+1
-                idx = rho>H(q) & rho<=H(q+1); % belongs to quantile
-                if nGroup>1
-                    idx = idx & (G==g); % and belongs to group if using groups
+                for q=1:nQ+1
+                    idx = rho>H(q) & rho<=H(q+1); % belongs to quantile
+                    if nGroup>1
+                        idx = idx & (G==g); % and belongs to group if using groups
+                    end
+                    nobs = sum(w(idx));
+                    M(q,g) = sum(obj.T(idx) .* w(idx)) /  nobs;
+                    if strcmp(obj.obs,'binomial') % standard error for binary daa
+                        sem(q,g) = sqrt( M(q,g)*(1-M(q,g)) / nobs);
+                    else % standard error for normal data
+                        sem(q,g) = std( obj.T(idx), w(idx)) / sqrt(nobs);
+                    end
                 end
-                nobs = sum(w(idx));
-                M(q,g) = sum(obj.T(idx) .* w(idx)) /  nobs;
-                if strcmp(obj.obs,'binomial') % standard error for binary daa
-                    sem(q,g) = sqrt( M(q,g)*(1-M(q,g)) / nobs);
-                else % standard error for normal data
-                    sem(q,g) = std( obj.T(idx), w(idx)) / sqrt(nobs);
-                end
-            end
             end
 
             % values of bins
@@ -4713,17 +4793,17 @@ lbl= Prd.latent_label;
 
             % plot inverse link function as reference
             if nGroup==1
-            xx = linspace(min(xlim), max(xlim), 200);
-            yy = obj.inverse_link_function(xx);
-            switch obj.link
-                case 'logit'
-                    plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
-                    plot([0 0],ylim, 'color',.7*[1 1 1]);
-                case 'probit'
-                    plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
-                    plot([0 0],ylim, 'color',.7*[1 1 1]);
-            end
-            plot(xx,yy,'b');
+                xx = linspace(min(xlim), max(xlim), 200);
+                yy = obj.inverse_link_function(xx);
+                switch obj.link
+                    case 'logit'
+                        plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
+                        plot([0 0],ylim, 'color',.7*[1 1 1]);
+                    case 'probit'
+                        plot(xlim,.5*[1 1], 'color',.7*[1 1 1]);
+                        plot([0 0],ylim, 'color',.7*[1 1 1]);
+                end
+                plot(xx,yy,'b');
             end
             xlabel('\rho');
             ylabel('dependent variable');
@@ -4865,10 +4945,6 @@ lbl= Prd.latent_label;
             if isvector(X)
                 X = X(:);
             end
-
-            % if dataset_dim==1
-            %     X = X';
-            % end
 
             if ~isempty(ref) % use one as reference
                 % when plotting over various datasets, dimension coding for model is
@@ -5050,17 +5126,18 @@ if iscell(trainset) % CV structure
     validationset = validationset{1};
 end
 
-%fit on training set
-obj_train = obj.extract_observations(trainset).IRLS();
+%estimate weights on training set
+obj_train = obj.extract_observations(trainset);
+obj_train.param.verbose = 'off';
+obj_train=obj_train.IRLS();
 exitflag_CV = obj_train.score.exitflag;
-
-U_CV = concatenate_weights(obj_train);
+U_CV = concatenate_weights(obj_train); % extract weights
 
 score_train = obj_train.score;
 s = score_train.scaling; % dispersion parameter
 
 %compute score on testing set (mean log-likelihood per observation)
-obj_test = obj.extract_observations(validationset); % model with test set
+obj_test = obj.extract_observations(validationset); % model with validation set
 obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
 obj_test.Predictions.rho = [];
 obj_test.score.scaling = s; % dispersion parameter estimated in training set
@@ -5068,7 +5145,7 @@ obj_test.score.scaling = s; % dispersion parameter estimated in training set
 [obj_test,CVLL,grad_validationscore] = obj_test.LogLikelihood(); % evaluate LLH, gradient of LLH
 accuracy = Accuracy(obj_test); % and accuracy
 
-nValidation = obj_test.score.nObservations; % number of observations in test set
+nValidation = obj_test.score.nObservations; % number of observations in validation set
 
 validationscore = CVLL/ nValidation; % normalize by number of observations
 
@@ -5131,6 +5208,113 @@ else
 end
 
 end
+
+%% M step
+function HP = mstep(HP, R, d, r, HPidx, otherHPs, FreeCov, opts, regressorCounter)
+
+if isempty(HPidx)
+    return;
+end
+
+if any(ismember(HPidx,otherHPs))
+    % if hyperparameters are used in any other module
+    error('not coded: cannot optimize over various components at same time');
+end
+
+% set hyperparameter values for this component
+HPs = R.HP(d);
+HP_fittable = HPs.fit;
+HPs.HP(HP_fittable) = HP(HPidx); % fittable values
+
+% posterior mean and covariance for associated weights
+ss = R.nFreeParameters; % size of each dimension
+regressorIndex = (1:ss(r,d)) + sum(ss(:,1:d-1),'all') + sum(ss(1:r-1,d)) + regressorCounter; % index of regressors in design matrix
+
+this_cov =  FreeCov(regressorIndex,regressorIndex) ; % free posterior covariance for corresponding regressor
+
+% if project on a
+% hyperparameter-dependent
+% basis, move back to original
+% space
+W = R.Weights(d); % corresponding set of weight
+
+this_mean =  W.PosteriorMean(r,:);
+this_scale = W.scale;
+ct = W.constraint;
+this_Prior = R.Prior(r,d);
+this_PriorMean = this_Prior.PriorMean;
+if  ~isa(this_Prior.CovFun, 'function_handle') && ~iscell(this_Prior.CovFun) % function handle
+    error('hyperparameters with no function');
+end
+
+B = W.basis; % here we're still in projected mode
+non_fixed_basis = any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]); % if  any fittable HP parametrizes basis functions
+
+if ~isempty(B)
+    if iscell(B)
+        error('not coded yet for regressor with basis functions concatenated with another regressor');
+    end
+
+    if  non_fixed_basis %  if basis functions parametrized by fittable HP
+        % working in original
+        % space (otherwise working
+        % in projected space)
+        Bmat = B(1).B;
+        this_mean = this_mean*Bmat;
+        this_PriorMean = this_PriorMean*Bmat;
+        if ~isequal(W.constraint,"free") && W.constraint.nConstraint>0
+            this_cov = W.constraint.P'* this_cov *W.constraint.P;
+        end
+        this_cov = Bmat' * this_cov *Bmat;
+
+        % define constraint in original
+        % space
+        dummyR = R.project_from_basis.compute_projection_matrix;
+        ct = dummyR.Weights(d).constraint;
+        this_cov = covariance_free_basis(this_cov,ct);
+
+    end
+    % not sure why this was here,
+    % doesn't seem right
+    %this_P = eye(length(this_cov));
+end
+this_cov = force_definite_positive(this_cov);
+
+if ~iscell(this_Prior.CovFun)
+    iHP = contains(HPs.type, "cov"); % covariance hyperparameters
+    [~, gg] = this_Prior.CovFun(this_scale, HPs.HP(iHP), B);
+    withOptimizer = isstruct(gg)  && isFreeStructure(ct)  && ~non_fixed_basis;
+else
+    withOptimizer = false;
+end
+if  withOptimizer % function provided to optimize hyperparameters
+    %  work on this to also take into account constraints (marginalize in the free base domain)
+
+    HPnew = gg.EM(this_mean,this_cov); % find new set of hyperparameters
+else % find HP to maximize cross-entropy between prior and posterior
+
+    optimopt = optimoptions('fmincon','TolFun',opts.TolFun,'SpecifyObjectiveGradient',opts.use_grad,...
+        'CheckGradients',opts.check_grad,'display','off','MaxIterations',opts.maxiter);
+
+    % find HPs that minimize negative
+    % cross-entropy
+    mstep_fun = @(hp) mvn_negxent(this_Prior.CovFun, this_PriorMean, this_scale, this_mean, this_cov,ct, hp, HPs, B);
+
+    ini_val = mstep_fun(HP(HPidx));
+
+    assert(~isinf(ini_val) && ~isnan(ini_val), ...
+        'M step cannot be completed, probably because covariance prior is not full rank');
+
+    % compute new set of
+    % hyperparameters that
+    % minimize
+    HPnew = fmincon(mstep_fun,...
+        HP(HPidx),[],[],[],[],HPs.LB(HP_fittable),HPs.UB(HP_fittable),[],optimopt);
+end
+HP(HPidx) = HPnew;  % select values corresponding to fittable HPs
+
+end
+
 
 %% negative marginalized evidence (for hyperparameter fitting)
 function [negME, obj] = gum_neg_marg(obj, HP, idx)
@@ -5221,11 +5405,11 @@ if first_eval
     fval = Inf;
 end
 
-%nMod = obj.nMod;
 M = obj.regressor;
 
 if ~isempty(UU)
-    M = M.set_weights(UU);
+    % initialize with weights associated with best HP so far
+    M = M.project_from_basis.set_weights(UU);
 end
 
 % assign hyperparameter values to regressors
@@ -5279,7 +5463,7 @@ obj = obj.project_from_basis();
 % if best parameter so far, update the value for initial parameters
 if errorscore < fval
     fval = errorscore;
-    UU = concatenate_weights(M);
+    UU = concatenate_weights(obj.regressor);
 end
 
 % if return full GUM object instead of score
@@ -5384,8 +5568,11 @@ if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis funct
     % basis functions - now there's no guarantee that the LLH will increase
     % in each EM iteration, and no guarantee that it converges to a
     % meaningful result
-    K = force_definite_positive(K, sqrt(min(diag(K)))*1e-3); % changing to see if we can avoid null values along diagonal
-    Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
+    if ~all(isinf(K(:)))
+        min_eigenvalue =1e-15+sqrt(min(diag(K)))*1e-3;
+        K = force_definite_positive(K, min_eigenvalue); % changing to see if we can avoid null values along diagonal
+        Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
+    end
 end
 
 % prior and posterior covariances on free basis
@@ -5533,13 +5720,13 @@ CloseBracketPos = []; % position of closing brackets
 option_list = {'sum','mean','tau','variance','basis','binning','constraint', ...
     'ref','type', 'period','fit','prior','label','odd','even','singlescale','tau','a','c','phi'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
-FitNames = {'all','none','scale','tau','ell','variance'}; % possible value for 'fit' options
+FitNames = {'all','none','scale','tau','ell','variance','true','false'}; % possible value for 'fit' options
 FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
 summing_opts =  {'joint', 'weighted', 'linear','equal','split','continuous'};% possible values for 'sum' options for multidim nonlinearity
 constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
 
-basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','gamma([\d]+)(','none(','auto(','fourier(','fourier([\d]+)('}; % regular expressions for 'basis' options
-lag_option_list = {'Lags','group','basis', 'split','placelagfirst','tau'}; % options for lag operator
+basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','powerlaw(','powerlaw([\d]+)(', 'exp(','gamma([\d]+)(','none(','auto(','fourier(','fourier([\d]+)('}; % regular expressions for 'basis' options
+lag_option_list = {'Lags','group','basis', 'split','placelagfirst','tau','fit'}; % options for lag operator
 
 inLag = false; % if we're within a lag operator
 LagStruct = {};
@@ -5594,13 +5781,13 @@ while ~isempty(fmla)
 
     % possible strings for functions
     transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'fodd(','feven(',...
-        'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'gamma[\d]+(',};
+        'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'powerlaw[\d]+(','powerlaw(','gamma[\d]+('};
     [transfo, fmla, transfo_no_number] = starts_with_word(fmla,transfo_label);
     if ~isempty(transfo) % for syntax f(..) or cat(...)
 
         opts = struct();
         switch transfo_no_number
-            case {'f(', 'poly(','exp(', 'raisedcosine(','gamma(','fodd(','feven('}
+            case {'f(', 'poly(','exp(', 'raisedcosine(','powerlaw(','gamma(','fodd(','feven('}
                 type = 'continuous';
                 if strcmp(transfo, 'fodd(') % odd function
                     opts.odd = true;
@@ -5919,6 +6106,11 @@ while ~isempty(fmla)
                             error('Value for option ''%s'' should be numeric',option);
                         end
                         LS.tau = Num;
+                    case 'fit'
+                        [LS.fit, fmla] = starts_with_word(fmla, FitNames);
+                        if isempty(LS.fit)
+                            error('incorrect fit option for variable ''%s''', v);
+                        end
                 end
                 fmla = trimspace(fmla);
 
@@ -6042,7 +6234,6 @@ end
 %% COMPOSE REGRESSORS WITH OPERATORS
 function [M, idxC] = compose_regressors(V,O, OpenBracketPos, CloseBracketPos, LagStruct)
 
-
 %% process parentheses and lag operators first
 while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are parenthesis or lag operators to process
 
@@ -6079,12 +6270,10 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         idx = OpenBracketPos(iBracket)+1:CloseBracketPos(iBracket)+1; % indices of regressors into the bracket
     end
 
-
     % recursive call: compose regressors within brackets
     iReg = idx(1); % index for new regressor
     [V{iReg}, this_idxC] = compose_regressors(V(idx),O(idx(1:end-1)), [], [],[]);
     assert( all(this_idxC==1), 'incorrect formula: cannot use mixture break within brackets');
-
 
     % if possible, concatenate regressors within parenthesis into single
     % regressor (useful e.g. for later multiplying with other term) -
@@ -6110,7 +6299,6 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
 
         LagStruct(iBracket) = [];
     else
-
         % remove elements already processed
         OpenBracketPos(iBracket) = [];
         CloseBracketPos(iBracket) = [];
@@ -6359,7 +6547,7 @@ end
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
 metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence',...
-    'accuracy','scaling','ExplainedVariance','LatentVariance','LatentExplainedVariance','validationscore','r2','isEstimated','isFitted','FittingTime'};
+    'accuracy','scaling','ExplainedVariance','LatentVariance','LatentExplainedVariance','validationscore','accuracy_test','TestAccuracy','TestLLH','r2','isEstimated','isFitted','FittingTime'};
 end
 
 %%
@@ -6383,7 +6571,7 @@ end
 
 %% no constraint structure
 function bool = isFreeStructure(ct)
-bool = isequal(ct,"free") || ct.type=="free";
+bool = isequal(ct,"free") || (isstruct(ct) &&ct.type=="free");
 end
 
 %% figure name

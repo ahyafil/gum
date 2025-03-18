@@ -1,10 +1,10 @@
-function [B, scale, params, gradB] = basis_exp(X,HP, params)
-% compute basis functions as exponential functions 
-% [B, scale, params, gradB] = basis_exp(X,HP, params)
+function [B, scale, params, gradB] = basis_powerlaw(X,HP, params)
+% compute basis functions as power law functions
+% [B, scale, params, gradB] = basis_powerlaw(X,HP, params)
 
-if nargin<3
-    params = struct;
-end
+nFun = params.nFunctions;
+assert(length(HP)==nFun, 'incorrect number of hyperparameters');
+alpha = HP; % power parameter
 
 if size(X,1)>1
     %% another scale: separate set of basis functions for each level
@@ -21,14 +21,11 @@ if size(X,1)>1
         % call)
         this_level = levels==unq(i);
         if nargout>3
-            [this_B, scale{i}, ~, this_gradB] = basis_exp(X(:,this_level),HP, params);
+            [this_B, scale{i}, ~, this_gradB] = basis_powerlaw(X(:,this_level),HP, params);
         else
-            [this_B, scale{i}] = basis_exp(X(:,this_level),HP, params);
+            [this_B, scale{i}] = basis_powerlaw(X(:,this_level),HP, params);
         end
 
-        if isstring(unq)
-            scale{i} = string(scale{i});
-        end
         scale{i}(end+1,:) = unq(i);
         B{i} = zeros(size(this_B,1),length(levels));
         B{i}(:,this_level) = this_B;
@@ -48,22 +45,20 @@ if size(X,1)>1
     return;
 end
 
-nExp = length(HP);
-B = zeros(nExp,length(X));
-X = double(X(1,:)); % x is on first row (extra rows may be used e.g. if splitted)
-for p=1:nExp
-    tau = exp(HP(p));
-    B(p,:) = exp(-X/tau)/tau; % normalize integral over [0,inf(
+X = X(1,:); % x is on first row (extra rows may be used e.g. if splitted)
+
+B = zeros(nFun,length(X));
+for p=1:nFun
+    B(p,:) = X.^alpha(p);
 end
-scale = 1:nExp;
+scale = 1:nFun;
 
 if nargout>3
-    % gradient of matrix w.r.t hyperparameters
-    gradB = zeros(nExp, length(X),length(HP));
-    for p=1:nExp
-        tau = exp(HP(p));
-        gradB(p,:,p) = B(p,:) .* (X-1)/tau;
+    % compute gradient over each hyperparameter
+    gradB = zeros(nFun, length(X),length(HP));
+    nz = ~(X==0);
+    for p=1:nFun
+        gradB(p,nz,p) = log(X(nz)).*B(p,nz);
     end
-
 end
 end
