@@ -155,7 +155,7 @@ classdef regressor
             HPfit = [];
             HP = struct();
             summing = 'weighted';
-            constraint = [];
+            constraint = "";%[];
             binning = [];
             label = "";
             dimensions = "";
@@ -214,7 +214,7 @@ classdef regressor
                         summing = varargin{v+1};
                         %   assert(any(strcmp(summing, {'weighted','linear','continuous','equal','split','separate'})), 'incorrect value for option ''sum''');
                     case 'constraint'
-                        constraint = varargin{v+1};
+                        constraint = string(varargin{v+1});
                     case 'binning'
                         binning = varargin{v+1};
                         if ~isempty(binning)
@@ -358,12 +358,29 @@ classdef regressor
                 X = abs(X);
             end
 
+            if strcmpi(type,'constant')
+                obj.nDim = 1;
+            end
+
+            % whether components should be reordered according to variance, default: reorder if all components have same constraints
+            if obj.rank>1
+                obj.ordercomponent = true;
+                for d=1:nD
+                    if ~all(  constraint(:,d) == constraint(1,d))
+                        obj.ordercomponent = false;
+                    end
+                end
+            end
+          %  if ~isempty(constraint)
+                constraint = [strings(1,obj.nDim-length(constraint)) constraint];
+                prior(constraint=="fixed") = {'none'};
+         %   end
+
             %% build data and variables depending on coding type
             switch lower(type)
                 %% constant regressor (no fitted weight)
                 case 'constant'
                     obj.Data = X;
-                    obj.nDim = 1;
                     obj.Weights(1).constraint = "fixed";
                     if iscolumn(X)
                         obj.Weights(1).scale = nan;
@@ -397,18 +414,6 @@ classdef regressor
                     % define prior (L2/ARD/none) and hyperparameter
                     % structure
                     [obj.Prior(nD),obj.HP(nD)] = define_standard_priors(obj.Prior(nD),prior{nD},HP(nD),nWeight,HPfit);
-                    %                     switch prior{nD}
-                    %                         case {'L2',''}
-                    %                             obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
-                    %                             obj.Prior(nD).CovFun = @L2_covfun;  % L2-regularization (diagonal covariance prior)
-                    %                         case 'none'
-                    %                             obj.Prior(nD).CovFun = @infinite_cov; % L2-regularization (diagonal covariance prior)
-                    %                         case 'ARD'
-                    %                             if nD ==1, ch=""; else ch=nD; end
-                    %                             obj.HP(nD) = HPstruct_ard(nWeight, ch, HP(nD), HPfit);
-                    %                             obj.Prior(nD).CovFun = @ard_covfun;
-                    %                     end
-                    %                     obj.Prior(nD).type = prior{nD};
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD, summing, prior, HP, scale, basis, single_tau, condthresh,dimensions);
@@ -453,22 +458,13 @@ classdef regressor
                     %if defining a reference value
                     if ~isempty(ref)
                         obj.Weights(nD).constraint = string(ref)+":";
-                    elseif isempty(constraint)
+                    elseif constraint(nD)==""
                         obj.Weights(nD).constraint = "first"; % by default first value is ref
                     end
                     
                     % define prior (L2/ARD/none) and hyperparameter
                     % structure
                     [obj.Prior(nD),obj.HP(nD)] = define_standard_priors(obj.Prior(nD),prior{nD},HP(nD),nVal,HPfit);
-
-                    %                     if strcmp(prior{nD}, 'L2')
-                    %                         % define prior covariance function (L2-regularization)
-                    %                         obj.Prior(nD).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                    %                     else % no prior (infinite covariance)
-                    %                         obj.Prior(nD).CovFun = @infinite_cov;
-                    %                     end
-                    %                     obj.Prior(nD).type = prior{nD};
-                    %                     obj.HP(nD) = HPstruct_L2(HP(nD), HPfit);
 
                     % prior for other dimensions
                     obj = define_priors_across_dims(obj, 1:nD-1, summing, prior, HP, scale, basis, single_tau, condthresh, dimensions);
@@ -581,29 +577,18 @@ classdef regressor
                 end
             end
 
-            % whether components should be reordered according to variance, default: reorder if all components have same constraints
-            if obj.rank>1
-                obj.ordercomponent = true;
-                for d=1:nD
-                    if ~all(  constraint(:,d) == constraint(1,d))
-                        obj.ordercomponent = false;
-                    end
-                end
-            end
-            if ~isempty(constraint)
-                constraint = [strings(1,obj.nDim-length(constraint)) constraint];
-                for d=1:obj.nDim
-                    if strlength(constraint(d))>0
-                        obj.Weights(d).constraint = constraint(d);
-                    end
-                end
-            end
-
             if odd
                 % if odd function, multiply by sign
                 %         % multiply by sign (fixed)
                 obj = obj * sgnX;
             end
+
+            % use specified constraints
+for d=1:obj.nDim
+                    if strlength(constraint(d))>0
+                        obj.Weights(d).constraint = constraint(d);
+                    end
+                end
 
             % split or separate if needed
             obj = obj.split_or_separate(summing);
@@ -1005,7 +990,10 @@ classdef regressor
                     W = obj(ind1(1)).Weights(ind1(2));
                     W2 = obj2(ind2(1)).Weights(ind2(2));
 
-                    assert(all(W.nWeight==W2.nWeight), 'the number of weights do not match for at least one set of weights with same label');
+                    if ~all(W.nWeight==W2.nWeight)
+                        i_nonmatch = find(W.nWeight~=W2.nWeight,1);
+                        error('the number of weights do not match for regressor''%s''',W(i_nonmatch).label);
+                    end
 
                     % assign value
                     obj(ind1(1)).Weights(ind1(2)).PosteriorMean = W2.PosteriorMean;
@@ -1571,21 +1559,6 @@ classdef regressor
 
                         % hyperpameters for first dimension
                         [obj.Prior(d),obj.HP(d)] = define_standard_priors(obj.Prior(d),prior{d},HP(d),obj.Weights(d).nWeight);
-
-                        %                         if isempty(prior{d})
-                        %                             prior{d} = 'L2';
-                        %                         end
-                        %                         switch prior{d}
-                        %                             case 'L2'
-                        %                                 obj.HP(d) = HPstruct_L2(HP(d));
-                        %                                 obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                        %                             case 'none'
-                        %                                 obj.Prior(d).CovFun = @infinite_cov;
-                        %                             case 'ARD'
-                        %                                 obj.HP(d) = HPstruct_ard(obj.Weights(d).nWeight, HP(d));
-                        %                                 obj.Prior(d).CovFun = @ard_covfun;
-                        %                         end
-                        %                         obj.Prior(d).type = prior{d};
 
                     case 'equal'
                         obj.Weights(d).PosteriorMean = ones(1,obj.Weights(d).nWeight);
@@ -5086,7 +5059,7 @@ end
 end
 
 %% define standard priors
-function [P,HP] = define_standard_priors(P,prior,HP,nWeight,varargin)
+function [P,HP] = define_standard_priors(P,prior,HP,nWeight, varargin)
 if isempty(prior)
     prior = 'L2';
 end
