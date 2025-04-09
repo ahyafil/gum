@@ -5718,14 +5718,15 @@ OpenBracketPos = []; % position of opening brackets
 CloseBracketPos = []; % position of closing brackets
 
 option_list = {'sum','mean','tau','variance','basis','binning','constraint', ...
-    'ref','type', 'period','fit','prior','label','odd','even','singlescale','tau','a','c','phi'}; % possible option types
+    'ref','type', 'period','fit','prior','label','odd','even','singlescale','tau','a','c','phi','samemean'}; % possible option types
 TypeNames = {'linear','categorical','continuous','periodic', 'constant'}; % possible values for 'type' options
 FitNames = {'all','none','scale','tau','ell','variance','true','false'}; % possible value for 'fit' options
 FitNamesLinear = {'all','none','variance'}; % possible value for 'fit' options for linear regressors
 summing_opts =  {'joint', 'weighted', 'linear','equal','split','continuous'};% possible values for 'sum' options for multidim nonlinearity
 constraint_opts = ["free";"fixed";"mean1";"sum1";"nullsum";"first0";"first1"; "zero0"];
 
-basis_regexp = {'poly([\d]+)(', 'exp([\d]+)(', 'raisedcosine([\d]+)(','powerlaw(','powerlaw([\d]+)(', 'exp(','gamma([\d]+)(','none(','auto(','fourier(','fourier([\d]+)('}; % regular expressions for 'basis' options
+basis_regexp = {'poly([\d]+)(', 'exp(','exp([\d]+)(', 'raisedcosine([\d]+)(','powerlaw(','powerlaw([\d]+)(',...
+    'gamma([\d]+)(','none(','auto(','fourier(','fourier([\d]+)(','gauss(','gauss([\d]+)('}; % regular expressions for 'basis' options
 lag_option_list = {'Lags','group','basis', 'split','placelagfirst','tau','fit'}; % options for lag operator
 
 inLag = false; % if we're within a lag operator
@@ -5781,13 +5782,13 @@ while ~isempty(fmla)
 
     % possible strings for functions
     transfo_label =  {'f(','cat(', 'flin(', 'fper(', 'fodd(','feven(',...
-        'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'powerlaw[\d]+(','powerlaw(','gamma[\d]+('};
+        'poly[\d]+(', 'exp[\d]+(', 'raisedcosine[\d]+(', 'gauss[\d]+(','gauss(','powerlaw[\d]+(','powerlaw(','gamma[\d]+('};
     [transfo, fmla, transfo_no_number] = starts_with_word(fmla,transfo_label);
     if ~isempty(transfo) % for syntax f(..) or cat(...)
 
         opts = struct();
         switch transfo_no_number
-            case {'f(', 'poly(','exp(', 'raisedcosine(','powerlaw(','gamma(','fodd(','feven('}
+            case {'f(', 'poly(','exp(', 'raisedcosine(','powerlaw(','gamma(','gauss(','fodd(','feven('}
                 type = 'continuous';
                 if strcmp(transfo, 'fodd(') % odd function
                     opts.odd = true;
@@ -5927,7 +5928,7 @@ while ~isempty(fmla)
                     i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
                     opts.label = fmla(1:i-1);
                     fmla(1:i-1) = [];
-                case {'odd','even','singlescale'}
+                case {'odd','even','singlescale','samemean'}
                     i = find(fmla==')' | fmla==separator,1); % find next semicolon or parenthesis
                     opts.(lower(option)) = eval(fmla(1:i-1));
                     fmla(1:i-1) = [];

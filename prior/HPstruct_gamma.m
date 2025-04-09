@@ -1,4 +1,4 @@
-function HH = HPstruct_gamma(HH, scale,HP, nFun)
+function HH = HPstruct_gamma(HH, scale,HP, nFun, varargin)
 % HP structure for gamma basis functions
 
 % HP here is only for logtau

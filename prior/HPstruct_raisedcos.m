@@ -1,6 +1,7 @@
-function HH = HPstruct_raisedcos(HH, scale, HP, nCos)
+function HH = HPstruct_raisedcos(HH, scale, HP, nCos,varargin)
 % Hyperparameter structure for raised cosine basis functions
 
+scale(2:end,:) = []; % work only on first row (time)
 dt = min(diff(scale)); % time step
 if isempty(dt)
     dt = 1;

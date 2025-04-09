@@ -154,7 +154,7 @@ classdef regressor
             single_tau = false;
             HPfit = [];
             HP = struct();
-            summing = 'weighted';
+            summing = '';
             constraint = "";%[];
             binning = [];
             label = "";
@@ -165,6 +165,7 @@ classdef regressor
             ref = [];
             odd = false;
             even = false;
+            samemean=false;
 
             if nargin<2
                 type = 'linear';
@@ -226,6 +227,9 @@ classdef regressor
                     case 'even'
                         even = logical(varargin{v+1});
                         assert(isscalar(even), 'even argument expects a scalar');
+                    case 'samemean'% for gaussian basis functions
+                        samemean = logical(varargin{v+1});
+                        assert(isscalar(samemean), 'samemean argument expects a scalar');
                     case 'label'
                         label = string(varargin{v+1});
                     case 'dimensions'
@@ -267,6 +271,13 @@ classdef regressor
             end
 
             % dimensionality of regressor
+            if isempty(summing{end})
+                if startsWith(basis,["poly","gauss"])% by default poly(x) and gauss(x) are defined over whole ndim space
+                    summing{end} = 'joint';
+                else
+                    summing{end} = 'weighted';
+                end
+            end
             if iscolumn(X)
                 nD = 1;
             else
@@ -371,10 +382,10 @@ classdef regressor
                     end
                 end
             end
-          %  if ~isempty(constraint)
-                constraint = [strings(1,obj.nDim-length(constraint)) constraint];
-                prior(constraint=="fixed") = {'none'};
-         %   end
+            %  if ~isempty(constraint)
+            constraint = [strings(1,obj.nDim-length(constraint)) constraint];
+            prior(constraint=="fixed") = {'none'};
+            %   end
 
             %% build data and variables depending on coding type
             switch lower(type)
@@ -461,7 +472,7 @@ classdef regressor
                     elseif constraint(nD)==""
                         obj.Weights(nD).constraint = "first"; % by default first value is ref
                     end
-                    
+
                     % define prior (L2/ARD/none) and hyperparameter
                     % structure
                     [obj.Prior(nD),obj.HP(nD)] = define_standard_priors(obj.Prior(nD),prior{nD},HP(nD),nVal,HPfit);
@@ -505,7 +516,7 @@ classdef regressor
 
                     % define continuous prior
                     obj = define_continuous_prior(obj,type, nD,this_scale, prior{nD}, HP(nD), basis{nD}, ...
-                        binning, period, single_tau(nD), condthresh, dimensions{nD});
+                        binning, period, single_tau(nD), condthresh, dimensions{nD},samemean);
                     if ~isempty(HPfit)
                         assert(isscalar(HPfit) || length(HPfit)==length(obj.HP(nD).fit), ...
                             'length of HPfit does not match number of hyperparameters');
@@ -584,11 +595,11 @@ classdef regressor
             end
 
             % use specified constraints
-for d=1:obj.nDim
-                    if strlength(constraint(d))>0
-                        obj.Weights(d).constraint = constraint(d);
-                    end
+            for d=1:obj.nDim
+                if strlength(constraint(d))>0
+                    obj.Weights(d).constraint = constraint(d);
                 end
+            end
 
             % split or separate if needed
             obj = obj.split_or_separate(summing);
@@ -1071,11 +1082,12 @@ for d=1:obj.nDim
                 U = concatenate_weights(U);
 
             end
-            if isrow(U)
-                U = U';
-            end
+
             if nargin<4
                 fild = 'PosteriorMean';
+            end
+            if isrow(U) && ~strcmp(fild,'U_CV')
+                U = U';
             end
 
             ii = 0;
@@ -1210,7 +1222,7 @@ for d=1:obj.nDim
             for j=1:size(idx,2)
                 i = idx(1,j);
                 d = idx(2,j);
-            
+
                 obj(i).HP(d).fit(:) =  0; % turn fit parameter to 0
             end
         end
@@ -1575,7 +1587,7 @@ for d=1:obj.nDim
                         end
 
                         % define continuous prior
-                        obj = define_continuous_prior(obj,summing{d}, d,scl, prior{d},HP(d), basis{d}, [],2*pi, single_tau(d), condthresh, dimensions{d});
+                        obj = define_continuous_prior(obj,summing{d}, d,scl, prior{d},HP(d), basis{d}, [],2*pi, single_tau(d), condthresh, dimensions{d},true);
                     otherwise
                         error('incorrect sum type:%s',summing{d});
                 end
@@ -1583,7 +1595,7 @@ for d=1:obj.nDim
         end
 
         %% DEFINE PRIOR OVER CONTINUOUS FUNCTION
-        function obj = define_continuous_prior(obj, type, d, scale, prior, HP, basis, binning,  period, single_tau, condthresh, dimensions)
+        function obj = define_continuous_prior(obj, type, d, scale, prior, HP, basis, binning,  period, single_tau, condthresh, dimensions,samemean)
 
             obj.HP(d) = HPstruct; % initialize HP structure
             obj.Weights(d).scale = scale; % values
@@ -1661,9 +1673,7 @@ for d=1:obj.nDim
                 nBasisFun = str2double(basis(5:end));
                 obj.Prior(d).CovFun = @L2basis_covfun;
                 obj.Prior(d).type = 'L2_polynomial';
-
-                basis_type = 'polynomial';
-
+                HPstruct_fun = @HPstruct; % no hyperparameters
                 B.nWeight = nBasisFun-1;
                 B.fun = @basis_poly;
                 B.fixed = true;
@@ -1677,8 +1687,7 @@ for d=1:obj.nDim
                 else
                     nBasisFun = str2double(basis(4:end));
                 end
-                basis_type = 'exponential';
-
+                HPstruct_fun = @HPstruct_exp;
                 B.nWeight = nBasisFun;
                 B.fun = @basis_exp;
                 B.fixed = false;
@@ -1691,8 +1700,7 @@ for d=1:obj.nDim
                 else
                     nBasisFun = str2double(basis(13:end));
                 end
-                basis_type = 'raisedcosine';
-
+                HPstruct_fun = @HPstruct_raisedcos;
                 B.nWeight = nBasisFun;
                 B.fun = @basis_raisedcos;
                 B.fixed = false;
@@ -1706,8 +1714,7 @@ for d=1:obj.nDim
                 else
                     nBasisFun = str2double(basis(6:end));
                 end
-                basis_type = 'gamma';
-
+                HPstruct_fun = @HPstruct_gamma;
                 B.nWeight = nBasisFun;
                 B.fun = @basis_gamma;
                 B.fixed = false;
@@ -1720,14 +1727,27 @@ for d=1:obj.nDim
                 else
                     nBasisFun = str2double(basis(9:end));
                 end
-                basis_type = 'powerlaw';
+                HPstruct_fun = @HPstruct_exp;
                 B.nWeight = nBasisFun;
                 B.fun = @basis_powerlaw;
                 B.fixed = false;
                 B.params = struct('nFunctions',nBasisFun);
+            elseif strncmpi(basis, 'gauss',5)
+                %% GAUSSIAN BASIS FUNCTIONS
+                if length(basis)==5
+                    nBasisFun =1;
+                else
+                    nBasisFun = str2double(basis(6:end));
+                end
+                HPstruct_fun = @HPstruct_gauss;
+                B.nWeight = nBasisFun;
+                B.fun = @basis_gauss;
+                B.fixed = false;
+                B.params = struct('nBasisFun',nBasisFun,'nDim',size(scale,1),'samemean',samemean);
             else
                 error('incorrect basis type: %s', basis);
             end
+
             if ~isempty(basis)
                 B.projected = false;
                 obj.Weights(d).basis = B;
@@ -1742,51 +1762,39 @@ for d=1:obj.nDim
                 % define hyperparamaters for Squared Exponential kernel
                 HH = HPstruct_SquaredExp(HH, scale, HP, type, period, single_tau, basis, binning);
             else
-                % basis functions: first define basis functions parameters
+                % basis functions: first define priors
                 if length(obj.Prior)<d
                     obj.Prior(d) = empty_prior_structure(1);
                     obj.Prior(d).replicate = [];
                 end
                 if length(HP)<d
                     HP(d) = struct();
-                end 
+                end
                 [obj.Prior(d),HH] = define_standard_priors(obj.Prior(d),prior,HP(d),B.nWeight);
 
-                %                 if isempty(prior)
-                %                     prior = '';
-                %                 end
-                %                 switch prior
-                %                     case {'L2',''}
-                %                         HH = HPstruct_L2(HP);
-                %                         obj.Prior(d).CovFun = @L2_covfun; % L2-regularization (diagonal covariance prior)
-                %                         obj.Prior(d).type = ['L2_' basis_type];
-                %                     case 'ARD'
-                %                         HH = HPstruct_ard(B.nWeight, HP(d));
-                %                         obj.Prior(d).CovFun = @ard_covfun;
-                %                         obj.Prior(d).type = ['ARD_' basis_type];
-                %                     case 'none'
-                %                         obj.Prior(d).CovFun = @infinite_cov;
-                %                         HH = HPstruct();
-                %                         obj.Prior(d).type ='none';
-                %                     otherwise
-                %                         error('incorrect prior type: %s',prior);
+                % now add basis function hyperparameters
+                Hbasis = HPstruct_fun(HH, scale, HP, nBasisFun,B.params);
+                %                 switch basis_type
+                %                     case 'exponential'
+                %                         Hbasis = HPstruct_exp(HH, scale, HP, nBasisFun);
+                %                       %  HH = cat_hyperparameters([Hbasis HH]);
+                %                     case 'raisedcosine'
+                %                         Hbasis = HPstruct_raisedcos(HH, scale,HP, nBasisFun);
+                %                       %  HH = cat_hyperparameters([Hbasis HH]);
+                %                     case 'gamma'
+                %                         Hbasis = HPstruct_gamma(HH, scale, HP, nBasisFun);
+                %                       %  HH = cat_hyperparameters([Hbasis HH]);
+                %                     case 'powerlaw'
+                %                         Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun);
+                %                       %  HH = cat_hyperparameters([Hbasis HH]);
+                %                     case 'gauss'
+                %                         Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun,B.params);
+                %                     case 'polynomial'
+                %                         Hbasis = HPstruct();
                 %                 end
 
-                % now add basis function hyperparameters
-                switch basis_type
-                    case 'exponential'
-                        Hbasis = HPstruct_exp(HH, scale, HP, nBasisFun);
-                        HH = cat_hyperparameters([Hbasis HH]);
-                    case 'raisedcosine'
-                        Hbasis = HPstruct_raisedcos(HH, scale,HP, nBasisFun);
-                        HH = cat_hyperparameters([Hbasis HH]);
-                    case 'gamma'
-                        Hbasis = HPstruct_gamma(HH, scale, HP, nBasisFun);
-                        HH = cat_hyperparameters([Hbasis HH]);
-                    case 'powerlaw'
-                        Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun);
-                        HH = cat_hyperparameters([Hbasis HH]);
-                end
+                %concatenate hyperparameters for basis functions and covariance
+                HH = cat_hyperparameters([Hbasis HH]);
 
                 % if hyperparameter values are directly provided, overwrite default values
                 if isfield(HP, 'value') && ~isempty(HP.value)

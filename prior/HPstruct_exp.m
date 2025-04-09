@@ -1,4 +1,4 @@
-function H = HPstruct_exp(H, scale, HP, nExp)
+function H = HPstruct_exp(H, scale, HP, nExp,varargin)
 % Hyperparameter structure exponential basis functions
 
 log_min_tau = log(min(diff(scale)));

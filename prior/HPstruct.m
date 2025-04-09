@@ -1,4 +1,4 @@
-function H = HPstruct()
+function H = HPstruct(varargin)
 % S = HPstruct();
 % void HP structure
 H.HP = []; % value of hyperparameter

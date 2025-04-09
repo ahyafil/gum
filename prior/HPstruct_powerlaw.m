@@ -1,4 +1,4 @@
-function HH = HPstruct_powerlaw(HH, scale,HP, nFun)
+function HH = HPstruct_powerlaw(HH, scale,HP, nFun,varargin)
 % HP structure for power law basis functions
 
 % HP here is only for logtau
