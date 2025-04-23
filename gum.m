@@ -934,9 +934,8 @@ classdef gum
             with_test_set = isfield(obj.param,'testset') && ~isempty(obj.param.testset) && ~strcmpi(algo,'em');
             if with_test_set
                 obj_test = obj.extract_observations(obj.param.testset);
-                obj = obj.exclude_test_set(); % exclude test for fitting
+                %obj = obj.exclude_test_set(); % exclude test for fitting
             end
-
 
             %% apply fitting method
             switch lower(algo)
@@ -952,10 +951,10 @@ classdef gum
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
                     %% run estimation again with the optimized hyperparameters to retrieve weights
-                    [~, obj] = errorscorefun(HP);
+                    [~, obj_noTS] = errorscorefun(HP);
 
                 case 'em' % expectation-maximization to find  hyperpameters that maximize marginal evidence
-                    obj = em(obj, HPini,HPidx, use_gradient, maxiter, HP_TolFun);
+                    obj_noTS = em(obj, HPini,HPidx, use_gradient, maxiter, HP_TolFun);
 
                 case 'cv' % gradient search to minimize cross-validated log-likelihood
                     % clear persistent value for best-fitting parameters
@@ -972,23 +971,29 @@ classdef gum
                     HP = fmincon(errorscorefun, HPini,[],[],[],[],HP_LB,HP_UB,[],optimopt); % optimize
 
                     %% run estimation again with the optimized hyperparameters to retrieve weights
-                    obj =  cv_score(obj, HP, HPidx, 1);
+                    obj_noTS =  cv_score(obj_noTS, HP, HPidx, 1);
+            end
 
+            % compute on test set now
+            if with_test_set
+                % pass on weights, HPs and scores to model with full
+                % dataset
+                obj = obj.set_weights_and_hyperparameters_from_model(obj_noTS);
+                obj.score = obj_noTS.score;
 
+                obj_test = obj_test.set_weights_from_model(obj);
+                [obj_test,obj.score.TestLLH] = obj_test.LogLikelihood(); % evaluate LLH
+                obj.score.TestAccuracy = obj_test.Accuracy(); % and accuracy
+            else
+                obj = obj_noTS;
             end
 
             % score (penalized marginal evidence)
             obj.score.isFitted = true;
-            obj.score.BIC = nHP*log(obj.score.nObservations) -2*obj.score.LogEvidence; % Bayes Information Criterion
+            nObs_noTS = obj_noTS.score.nObservations; % number of observations used for fitting
+            obj.score.BIC = nHP*log(nObs_noTS) -2*obj.score.LogEvidence; % Bayes Information Criterion
             obj.score.AIC = 2*nHP - 2*obj.score.LogEvidence; % Akaike Information Criterior
-            obj.score.AICc = obj.score.AIC + 2*nHP*(nHP+1)/(obj.score.nObservations -nHP-1); % AIC corrected for sample size
-
-            % compute on test set now
-            if with_test_set
-                obj_test = obj_test.set_weights_from_model(obj);
-                [obj_test,obj.score.TestLLH] = obj_test.LogLikelihood(); % evaluate LLH
-                obj.score.TestAccuracy = obj_test.Accuracy(); % and accuracy
-            end
+            obj.score.AICc = obj.score.AIC + 2*nHP*(nHP+1)/(nObs_noTS -nHP-1); % AIC corrected for sample size
         end
 
         %%% EM ALGORITHM
@@ -1138,7 +1143,6 @@ classdef gum
             % allocate fitted hyperparameters to each module
             obj.regressor = obj.regressor.set_hyperparameters(HP);
             obj.param = param_tmp;
-
         end
 
         %% %%%%% INFERENCE (ESTIMATE WEIGHTS) %%%%%%%
