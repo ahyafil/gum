@@ -32,7 +32,6 @@ span = min(span);
 mu_lb = 2*min_scale-max_scale;
 mu_ub = 2*max_scale-min_scale;
 
-
 if params.samemean
     % if all functions have same mean, then vary std
     mu = median(scale,2)'; % median values of scale

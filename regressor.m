@@ -1727,7 +1727,7 @@ classdef regressor
                 else
                     nBasisFun = str2double(basis(9:end));
                 end
-                HPstruct_fun = @HPstruct_exp;
+                HPstruct_fun = @HPstruct_powerlaw;
                 B.nWeight = nBasisFun;
                 B.fun = @basis_powerlaw;
                 B.fixed = false;
