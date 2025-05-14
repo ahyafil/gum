@@ -108,6 +108,11 @@ classdef regressor
     %
     % V = regressor(...,'label', lbl) to add label to regressor
     %
+    % ALTERNATIVE SYNTAX:
+    % V = regressor(Tbl,fmla) where Tbl is a table and fmla a string
+    % describing the formula (exactly the same way as entering regressors
+    % in a GUM formula)
+    
     % Main method for regressors: .
     % (TODO ADD)
     %
@@ -144,6 +149,17 @@ classdef regressor
             if nargin==0
                 return;
             end
+
+            %% syntax with table and formula
+            if istable(X)
+                % add dummy binary variable (dummy dependent variable)
+                X.dummy42 = randi(2,height(X),1)-1; 
+                fmla = "dummy42~"+string(type)+"+0"; % make sure there's no intercept regressor
+                M = gum(X,fmla);%create GUM
+                obj = M.regressor;
+                return;
+            end
+
 
             % default values
             condthresh = 1e12; % threshold for spectral trick
@@ -543,10 +559,10 @@ classdef regressor
                 noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint}) | cellfun(@(x) x=="",{obj.Weights.constraint});
                 FreeDim = find(~SplitOrSeparate & noDefinedConstraint,1);
 
-                if ~isempty(FreeDim)
+               % if ~isempty(FreeDim)
                     for d=1:nD
                         W =  obj.Weights(d);
-                        if W.constraint=="free" && single_weight(W)
+                        if W.constraint=="free" && single_weight(W)&& ~isempty(W.basis)
                             % single weight for one dim-> set weight to 1
                             % and fixed
                             %obj = obj.project_to_basis(d);
@@ -559,7 +575,7 @@ classdef regressor
                         end
                     end
 
-                end
+               % end
                 SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
                 SplitOrSeparate(end+1:obj.nDim) = false;
 
@@ -2588,8 +2604,9 @@ classdef regressor
                         if C.type == "fixed"
                             UU = 1; % fixed weights: set to 1
                         else
-                            if first_dim_frozen&& d==first_update_dimension(obj(i))
-                                % this is only when generating initial
+                            if (first_dim_frozen&& d==first_update_dimension(obj(i)))...
+                                || nFreeWeights(r,d)==0
+                                % first condition is only when generating initial
                                 % weights in IRLS:
                                 % first dimension to update should be zero (more generally: prior mean)
                                 UU = P.PriorMean;
@@ -2602,7 +2619,7 @@ classdef regressor
                                     x = mvnrnd(zeros(nFreeWeights(r,d),1), P.PriorCovariance);
                                 end
                                 if C.type~="free"
-                                    x = x*C.P;
+                                    x = x*C.V;
                                 end
                                 UU =  P.PriorMean + x;
                             end
@@ -3820,10 +3837,8 @@ classdef regressor
             allWeights = {obj.Weights};
             allWeights = cellfun(@(x) x(D), allWeights);
             W.label = [allWeights.label];
-            % W.nFreeWeight = sum([allWeights.nFreeWeight]);
             for f = 1:length(fild)
                 fn = fild{f};
-                %  F = cellfun(@(x) x(D).(fn) , allWeights,'unif',0);
                 F = {allWeights.(fn)};
                 if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
                     W.(fn) = [];
@@ -5352,10 +5367,8 @@ for i=1:nSet
     P(i).CovFun = Pc.CovFun{i};
     if isempty([W.basis])
         P(i).PriorMean = Pc.PriorMean(:,index_weight==i);
-        % P(i).PriorCovariance = Pc.PriorCovariance(index_weight==i,index_weight==i);
     else % if uses basis function, should go back and compute it in projected space
         P(i).PriorMean = nan(size(Pc.PriorMean,1),sum(index_weight));
-        % P(i).PriorCovariance = nan(sum(index_weight),sum(index_weight));
     end
     P(i).PriorCovariance = [];
 
@@ -5594,7 +5607,10 @@ for i=1:numel(W)
                 u = [];
             case "fixed"
                 V = speye(nWeight);
-                u = [];
+                u = W(i).PosteriorMean;
+                if isempty(u) % if fixed weights not set, then set to 1
+                    u = ones(1,nWeight);
+                end
             case "mean1"
                 V = ones(nWeight,1);
                 u = nWeight;

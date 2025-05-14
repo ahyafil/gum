@@ -1163,6 +1163,7 @@ classdef gum
             %
             % - 'initialpoints': number of initial points for inference (default:10)
             % - 'verbose': 'on' (default),'off','little','full'
+            % - 'compute_posterior_covariance': default is true
             %
             % M is the GUM model after inference.
             % M.regressor provides the estimated regressors, with fields
@@ -1209,6 +1210,10 @@ classdef gum
             end
             verbose =ismember(parm.verbose, {'on','full','little'});
 
+            if ~isfield(parm, 'compute_posterior_covariance')
+                parm.compute_posterior_covariance = 1;
+            end
+            
             %% fitting various models at a time
             if length(obj)>1
                 for i=1:numel(obj)
@@ -1407,12 +1412,15 @@ classdef gum
             if verbose
                 fprintf('Computing posterior covariance...');
             end
-            [Sfit.FreeCovariance, B, invHinvK]= PosteriorCov(obj);
+            if parm.compute_posterior_covariance
+                [Sfit.FreeCovariance, B, invHinvK]= PosteriorCov(obj);
+            end
             if verbose
                 fprintf('done\n');
             end
 
             %Covariance
+            if parm.compute_posterior_covariance
             P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
             Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
 
@@ -1432,7 +1440,9 @@ classdef gum
             M = M.set_weights(all_T,[],'T');
             M = M.set_weights(all_p,[],'p');
             M = M.set_posterior_covariance(Sfit.covb);
-            M = M.set_posterior_covariance(invHinvK,'invHinvK');
+            
+                M = M.set_posterior_covariance(invHinvK,'invHinvK');
+            end
 
             Sfit.exitflag = Sfit.exitflag;
             Sfit.exitflag_allstarting = Sfit.exitflag_allstarting;
@@ -1449,8 +1459,9 @@ classdef gum
 
             % model evidence using Laplace approximation (Bishop - eq 4.137)  -
             % requires that a prior has been defined - Eq 16
-            LD = logdet(B);
-            Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;
+            if parm.compute_posterior_covariance
+                LD = logdet(B);
+                Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;            
 
             PP = projection_matrix_multiple(M);
             for m=1:nM % add part from prior
@@ -1477,6 +1488,7 @@ classdef gum
                         end
                     end
                 end
+            end
             end
 
             Sfit.BIC_infer = nFreePar*log(obj.score.nObservations) -2*Sfit.LogLikelihood; % Bayes Information Criterion
@@ -5435,6 +5447,10 @@ elseif strcmp(param.verbose,'iter')
 else
     param.verbose = 'off';
 end
+
+% no need to compute posterior covariance,unless for final inference
+% (computing posterior over weights, BIC...)
+param.compute_posterior_covariance = return_obj;
 
 if ~first_eval
     param.initialpoints = 1; % just one initial point after first eval
