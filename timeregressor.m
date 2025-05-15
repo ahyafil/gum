@@ -552,6 +552,10 @@ if use_regressor
         R.Prior(1) = Rdummy.Prior;
         R.HP(1) = Rdummy.HP;
 
+        % deal with special case where one set of weights is a single basis
+        % function
+        R = R.set_single_basis_function_constraint;
+
      %     constraint all set of weights (except temporal one) to be be mean-1 to make sure our model is identifiable
      freeRegressor = [R.Weights.constraint]=="free";
      freeRegressor(1) = false;

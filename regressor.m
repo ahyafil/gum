@@ -112,7 +112,7 @@ classdef regressor
     % V = regressor(Tbl,fmla) where Tbl is a table and fmla a string
     % describing the formula (exactly the same way as entering regressors
     % in a GUM formula)
-    
+
     % Main method for regressors: .
     % (TODO ADD)
     %
@@ -153,7 +153,7 @@ classdef regressor
             %% syntax with table and formula
             if istable(X)
                 % add dummy binary variable (dummy dependent variable)
-                X.dummy42 = randi(2,height(X),1)-1; 
+                X.dummy42 = randi(2,height(X),1)-1;
                 fmla = "dummy42~"+string(type)+"+0"; % make sure there's no intercept regressor
                 M = gum(X,fmla);%create GUM
                 obj = M.regressor;
@@ -559,23 +559,10 @@ classdef regressor
                 noDefinedConstraint = cellfun(@isempty,{obj.Weights.constraint}) | cellfun(@(x) x=="",{obj.Weights.constraint});
                 FreeDim = find(~SplitOrSeparate & noDefinedConstraint,1);
 
-               % if ~isempty(FreeDim)
-                    for d=1:nD
-                        W =  obj.Weights(d);
-                        if W.constraint=="free" && single_weight(W)&& ~isempty(W.basis)
-                            % single weight for one dim-> set weight to 1
-                            % and fixed
-                            %obj = obj.project_to_basis(d);
-                            obj.Weights(d).basis.PosteriorMean=1;
-                            obj.Weights(d).constraint="fixed";
-                            %obj.Weights(d).PosteriorStd = nan;
-                            cov_HP = strcmp(obj.HP(d).type,"cov");
-                            obj.HP(d) = rmv_hyperparameters(obj.HP(d), cov_HP);
-                            obj.Prior(d) = empty_prior_structure(1); % remove prior
-                        end
-                    end
+                % if multidimension model where one dimension is single
+                % basis function, fix weight to 1
+                obj = obj.set_single_basis_function_constraint;
 
-               % end
                 SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
                 SplitOrSeparate(end+1:obj.nDim) = false;
 
@@ -1546,6 +1533,26 @@ classdef regressor
             end
         end
 
+
+        %% if multidimension model where one dimension is single
+        % basis function, fix weight to 1
+        function  obj = set_single_basis_function_constraint(obj)
+            for d=1:obj.nDim
+                W =  obj.Weights(d);
+                if W.constraint=="free" && single_weight(W) && ~isempty(W.basis) && sum(isFreeWeightSet(obj))>1
+                    % single weight for one dim -> set weight to 1
+                    % and fixed if there are more dimensions
+                    %obj = obj.project_to_basis(d);
+                    obj.Weights(d).basis.PosteriorMean=1;
+                    obj.Weights(d).constraint="fixed";
+                    %obj.Weights(d).PosteriorStd = nan;
+                    cov_HP = strcmp(obj.HP(d).type,"cov");
+                    obj.HP(d) = rmv_hyperparameters(obj.HP(d), cov_HP);
+                    obj.Prior(d) = empty_prior_structure(1); % remove prior
+                end
+            end
+        end
+
         %% %%%%%%%%%%%%
         %%%% 2. OPERATIONS ON PRIOR, BASIS FUNCTIONS, PROJECTIONS
 
@@ -1790,24 +1797,6 @@ classdef regressor
 
                 % now add basis function hyperparameters
                 Hbasis = HPstruct_fun(HH, scale, HP, nBasisFun,B.params);
-                %                 switch basis_type
-                %                     case 'exponential'
-                %                         Hbasis = HPstruct_exp(HH, scale, HP, nBasisFun);
-                %                       %  HH = cat_hyperparameters([Hbasis HH]);
-                %                     case 'raisedcosine'
-                %                         Hbasis = HPstruct_raisedcos(HH, scale,HP, nBasisFun);
-                %                       %  HH = cat_hyperparameters([Hbasis HH]);
-                %                     case 'gamma'
-                %                         Hbasis = HPstruct_gamma(HH, scale, HP, nBasisFun);
-                %                       %  HH = cat_hyperparameters([Hbasis HH]);
-                %                     case 'powerlaw'
-                %                         Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun);
-                %                       %  HH = cat_hyperparameters([Hbasis HH]);
-                %                     case 'gauss'
-                %                         Hbasis = HPstruct_powerlaw(HH, scale, HP, nBasisFun,B.params);
-                %                     case 'polynomial'
-                %                         Hbasis = HPstruct();
-                %                 end
 
                 %concatenate hyperparameters for basis functions and covariance
                 HH = cat_hyperparameters([Hbasis HH]);
@@ -2605,7 +2594,7 @@ classdef regressor
                             UU = 1; % fixed weights: set to 1
                         else
                             if (first_dim_frozen&& d==first_update_dimension(obj(i)))...
-                                || nFreeWeights(r,d)==0
+                                    || nFreeWeights(r,d)==0
                                 % first condition is only when generating initial
                                 % weights in IRLS:
                                 % first dimension to update should be zero (more generally: prior mean)
