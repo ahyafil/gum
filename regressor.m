@@ -414,6 +414,8 @@ classdef regressor
                     else
                         obj.Weights(1).scale = 1:size(X,2);
                     end
+                    % fixed weights at 1
+                    obj.Weights(1).PosteriorMean = ones(1,size(X,2));
                     obj.formula = string(label(1));
                     if size(X,2)>1 && isempty(dimensions{1})
                         obj.Weights(1).dimensions = string(label(1));
@@ -561,7 +563,7 @@ classdef regressor
 
                 % if multidimension model where one dimension is single
                 % basis function, fix weight to 1
-                obj = obj.set_single_basis_function_constraint;
+                obj = obj.set_single_weight_constraint;
 
                 SplitOrSeparate = strcmpi(summing, 'split') | strcmpi(summing, 'separate');
                 SplitOrSeparate(end+1:obj.nDim) = false;
@@ -813,6 +815,11 @@ classdef regressor
 
             if nargin==1 || isempty(label) % select all weights
                 I = RD;
+                return;
+            end
+            if isnumeric(label)
+                % already provides indices
+                I = label;
                 return;
             end
 
@@ -1210,6 +1217,30 @@ classdef regressor
             end
         end
 
+        %% FREEZE WEIGHTS WITH BASIS
+        function obj = freeze_weights_with_basis(obj, varargin)
+            % R = R.freeze_weights_with_basis;
+            % "freezes" weights of model, i.e. change them to "fixed"
+            % but keep basis functions (i.e. single basis function)
+            % R = R.freeze_weights(regressor_label);
+            % freezes weights for regressor with corresponding label
+
+            % regressor index and dimensionality of all sets of weights
+            idx = find_weights(obj,varargin{:});
+
+            for j=1:size(idx,2)
+                i = idx(1,j);
+                d = idx(2,j);
+                obj(i).Weights(d).constraint = "fixed";
+                obj(i).Weights(d).PosteriorMean = 1; % fix weight to 1
+
+                % remove covariance hyperparameters
+                                    cov_HP = strcmp(obj(i).HP(d).type,"cov");
+                obj(i).HP(d) = rmv_hyperparameters(obj(i).HP(d), cov_HP);
+                obj(i).Prior(d) = empty_prior_structure(1); % remove prior       
+            end
+        end
+
         %% FREEZE HYPERPARAMETERS
         function obj = freeze_hyperparameters(obj, varargin)
             % R = R.freeze_hyperparameters;
@@ -1535,20 +1566,24 @@ classdef regressor
 
 
         %% if multidimension model where one dimension is single
-        % basis function, fix weight to 1
-        function  obj = set_single_basis_function_constraint(obj)
+        % weight, fix weight to 1
+        function  obj = set_single_weight_constraint(obj)
+
+            if sum(isFreeWeightSet(obj))<=1
+               return;
+            end
             for d=1:obj.nDim
                 W =  obj.Weights(d);
-                if W.constraint=="free" && single_weight(W) && ~isempty(W.basis) && sum(isFreeWeightSet(obj))>1
-                    % single weight for one dim -> set weight to 1
-                    % and fixed if there are more dimensions
-                    %obj = obj.project_to_basis(d);
-                    obj.Weights(d).basis.PosteriorMean=1;
-                    obj.Weights(d).constraint="fixed";
-                    %obj.Weights(d).PosteriorStd = nan;
-                    cov_HP = strcmp(obj.HP(d).type,"cov");
-                    obj.HP(d) = rmv_hyperparameters(obj.HP(d), cov_HP);
-                    obj.Prior(d) = empty_prior_structure(1); % remove prior
+                if constraint_type(W)=="free" && single_weight(W) && sum(isFreeWeightSet(obj))>1
+                    
+                    % single weight for one dim -> set weight to 1 (if
+                    % there's another free dim)
+                    if ~isempty(W.basis)
+                    obj = obj.freeze_weights_with_basis([1;d]);
+                    else
+                    obj.Weights(d).PosteriorMean = 1;
+                    obj = obj.freeze_weights([1;d]);
+                    end
                 end
             end
         end
@@ -1828,7 +1863,7 @@ classdef regressor
                 i = I(1,k);
                 d = I(2,k);
                 type = obj(i).Prior(d).type;
-                if any(strcmp(type, {'SquaredExponential','periodic'}))
+                if any(ismember(type, {'SquaredExponential','periodic'}))
                     warning('removing prior for nonlinear mapping with no basis functions is not recommended, could make the model unidentifiable');
                 end
                 obj(i).Prior(d) = empty_prior_structure(1);
@@ -2062,7 +2097,7 @@ classdef regressor
 
                         U = W.PosteriorMean;
 
-                        if constraint_type(W)=="fixed"
+                        if constraint_type(W)=="fixed" && isfield(W.basis,'PosteriorMean')
                             % if fixed weights in projected space
                             W.PosteriorMean = W.basis.PosteriorMean;
                         end
@@ -2608,7 +2643,7 @@ classdef regressor
                                     x = mvnrnd(zeros(nFreeWeights(r,d),1), P.PriorCovariance);
                                 end
                                 if C.type~="free"
-                                    x = x*C.V;
+                                    x = x*C.P;
                                 end
                                 UU =  P.PriorMean + x;
                             end
@@ -3089,13 +3124,16 @@ classdef regressor
             end
             obj.formula = obj1.formula + " * " + obj2.formula;
 
-            % if any set of weight is single-> make it fixed
-            if obj1.nDim==1 && single_weight(obj1.Weights)
-                obj.Weights(1).constraint = "fixed";
-            end
-            if obj2.nDim==1 && single_weight(obj2.Weights)
-                obj.Weights(obj1.nDim+1).constraint = "fixed";
-            end
+            % if any set of weight is single in one object -> make it fixed
+            %(if there's at least one free set in other object)
+            obj = obj.set_single_weight_constraint();
+
+            %if obj1.nDim==1 && single_weight(obj1.Weights) && ~all(isFixedWeightSet(obj2))
+            %    obj.Weights(1).constraint = "fixed";
+            %end
+            %if obj2.nDim==1 && single_weight(obj2.Weights) && ~all(isFixedWeightSet(obj1))
+            %    obj.Weights(obj1.nDim+1).constraint = "fixed";
+            %end
 
             % for categorical regressors: turn "first0" into "free" or "first1", i.e.
             % the reference weight is 1
@@ -5568,7 +5606,7 @@ for i=1:numel(W)
             C.type = "custom";
         end
         if ~isfield(C, 'nConstraint')
-            C.nConstraint = length(C.v);
+            C.nConstraint = length(C.u);
         end
         S(i) = C;
     else
@@ -5678,12 +5716,12 @@ end
 function [bool,u] = constrained_weight(W)
 % boolean array: for each weight, whether it is constrained to a fixed
 % value
-S = constraint_structure(W);
-one_constrained_weight = (sum(S.V~=0,1)==1); % for each constraint,whether it affects only one weight (i.e.fully constrains it)
-bool = any(S.V(:,one_constrained_weight),2);
+C = constraint_structure(W);
+one_constrained_weight = (sum(C.V~=0,1)==1); % for each constraint,whether it affects only one weight (i.e.fully constrains it)
+bool = any(C.V(:,one_constrained_weight),2);
 
 if nargout>1
-    u = S.V(bool, one_constrained_weight) * S.u(one_constrained_weight)';
+    u = C.V(bool, one_constrained_weight) * C.u(one_constrained_weight)';
 end
 end
 
@@ -5692,11 +5730,11 @@ function  W = replicate_constraint(W, nVal)
 if any(constraint_type(W)==["free","fixed"])
     return;
 end
-S = constraint_structure(W);
-S.V = kron(eye(nVal),S.V); % replicate for each set of weights
-S.u = repmat(S.u, 1,nVal);
-S.nConstraint = S.nConstraint * nVal;
-W.constraint = S;
+C = constraint_structure(W);
+C.V = kron(eye(nVal),C.V); % replicate for each set of weights
+C.u = repmat(C.u, 1,nVal);
+C.nConstraint = C.nConstraint * nVal;
+W.constraint = C;
 end
 
 %% constraint structure for interaction of two sets of regressors (or splitting dimension)

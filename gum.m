@@ -1213,7 +1213,7 @@ classdef gum
             if ~isfield(parm, 'compute_posterior_covariance')
                 parm.compute_posterior_covariance = 1;
             end
-            
+
             %% fitting various models at a time
             if length(obj)>1
                 for i=1:numel(obj)
@@ -1421,26 +1421,26 @@ classdef gum
 
             %Covariance
             if parm.compute_posterior_covariance
-            P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
-            Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
+                P = projection_matrix_multiple(M,'all'); % projection matrix for each dimension
+                Sfit.covb = P'*Sfit.FreeCovariance* P; % see covariance under constraint Seber & Wild Appendix E
 
-            % standard error of estimates
-            all_se = sqrt(diag(Sfit.covb))';
+                % standard error of estimates
+                all_se = sqrt(diag(Sfit.covb))';
 
-            % T-statistic for the weights
-            allU = concatenate_weights(M);
-            allPriorMean = concatenate_weights(M,0,'PriorMean');
-            all_T = (allU-allPriorMean) ./ all_se;
+                % T-statistic for the weights
+                allU = concatenate_weights(M);
+                allPriorMean = concatenate_weights(M,0,'PriorMean');
+                all_T = (allU-allPriorMean) ./ all_se;
 
-            % p-value for significance of each coefficient
-            all_p = 2*normcdf(-abs(all_T));
+                % p-value for significance of each coefficient
+                all_p = 2*normcdf(-abs(all_T));
 
-            % distribute values of se, T, p and V to different regressors
-            M = M.set_weights(all_se,[],'PosteriorStd');
-            M = M.set_weights(all_T,[],'T');
-            M = M.set_weights(all_p,[],'p');
-            M = M.set_posterior_covariance(Sfit.covb);
-            
+                % distribute values of se, T, p and V to different regressors
+                M = M.set_weights(all_se,[],'PosteriorStd');
+                M = M.set_weights(all_T,[],'T');
+                M = M.set_weights(all_p,[],'p');
+                M = M.set_posterior_covariance(Sfit.covb);
+
                 M = M.set_posterior_covariance(invHinvK,'invHinvK');
             end
 
@@ -1461,34 +1461,34 @@ classdef gum
             % requires that a prior has been defined - Eq 16
             if parm.compute_posterior_covariance
                 LD = logdet(B);
-                Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;            
+                Sfit.LogEvidence = Sfit.LogLikelihood - LD/2;
 
-            PP = projection_matrix_multiple(M);
-            for m=1:nM % add part from prior
-                for d=1:M(m).nDim
-                    for r=1:M(m).rank % assign new set of weight to each component
-                        this_P = PP{m}{r,d};
-                        dif =  (M(m).Weights(d).PosteriorMean(r,:) - M(m).Prior(r,d).PriorMean)*this_P'; % distance from prior mean (projected)
-                        this_cov = M(m).Prior(r,d).PriorCovariance;
-                        %  this_cov = this_P * M(m).Prior(r,d).PriorCovariance * this_P'; % corresponding covariance prior
-                        inf_var = isinf(diag(this_cov)); % do not include weights with infinite prior variance
-                        if any(~inf_var)
-                            dif = dif(~inf_var);
-                            if sum(inf_var)<100 || ~issparse(dif) % faster
-                                MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
-                                try
-                                    CovDif = linsolve(full(this_cov(~inf_var,~inf_var)),full(dif)',MatOptions);
-                                catch
+                PP = projection_matrix_multiple(M);
+                for m=1:nM % add part from prior
+                    for d=1:M(m).nDim
+                        for r=1:M(m).rank % assign new set of weight to each component
+                            this_P = PP{m}{r,d};
+                            dif =  (M(m).Weights(d).PosteriorMean(r,:) - M(m).Prior(r,d).PriorMean)*this_P'; % distance from prior mean (projected)
+                            this_cov = M(m).Prior(r,d).PriorCovariance;
+                            %  this_cov = this_P * M(m).Prior(r,d).PriorCovariance * this_P'; % corresponding covariance prior
+                            inf_var = isinf(diag(this_cov)); % do not include weights with infinite prior variance
+                            if any(~inf_var)
+                                dif = dif(~inf_var);
+                                if sum(inf_var)<100 || ~issparse(dif) % faster
+                                    MatOptions = struct('POSDEF',true,'SYM',true); % is symmetric positive definite
+                                    try
+                                        CovDif = linsolve(full(this_cov(~inf_var,~inf_var)),full(dif)',MatOptions);
+                                    catch
+                                        CovDif = this_cov(~inf_var,~inf_var) \ dif';
+                                    end
+                                else
                                     CovDif = this_cov(~inf_var,~inf_var) \ dif';
                                 end
-                            else
-                                CovDif = this_cov(~inf_var,~inf_var) \ dif';
+                                Sfit.LogEvidence = Sfit.LogEvidence - dif*CovDif/2; % log-prior for this weight
                             end
-                            Sfit.LogEvidence = Sfit.LogEvidence - dif*CovDif/2; % log-prior for this weight
                         end
                     end
                 end
-            end
             end
 
             Sfit.BIC_infer = nFreePar*log(obj.score.nObservations) -2*Sfit.LogLikelihood; % Bayes Information Criterion
@@ -1945,7 +1945,7 @@ classdef gum
                                 end
                             else % any infinite covariance matrix (e.g. no prior on a weight)
                                 if SpCode
-                                    B = P{cc,d}*(Phi'*G) + s*precision{cc,d}*nu{cc,d};
+                                    B = full(P{cc,d}*(Phi'*G) + s*precision{cc,d}*nu{cc,d});
                                 else
                                     B = Psi'*G + s*precision{cc,d}*nu{cc,d};
                                 end
@@ -2080,9 +2080,22 @@ classdef gum
                             end
 
                             MatOptions = struct('POSDEF',inf_cov,'SYM',inf_cov); % is positive definite, symmetric only in one definition
-                            xi = linsolve(H,B,MatOptions)' * Pall; % new set of weights (projected back to full basis)
-
+                            compute_logjoint = -1;
                             Unoconst = UU-UconstU;
+                            try
+                                xi = linsolve(H,B,MatOptions)' * Pall; % new set of weights (projected back to full basis)
+                            catch err
+                                if strcmp(err.identifier,'MATLAB:posdef')
+                                    % full Hessian not definite positive->
+                                    % go back to blockwise
+                                    compute_logjoint = 0;
+                                    xi = Unoconst;
+                                    logjoint =-inf;
+                                else
+                                    rethrow(err);
+                                end
+                            end
+
                             if logFullHessianStep~=0
                                 % if not doing full Newton update but only
                                 % fraction in the direction
@@ -2090,7 +2103,6 @@ classdef gum
                             end
 
                             % check that we did improve log-joint
-                            compute_logjoint = -1;
                             while compute_logjoint ~=0
 
                                 if compute_logjoint>0 % first loop: do not enter
@@ -3887,6 +3899,7 @@ classdef gum
 
         %% EXPORT WEIGHTS TO TABLE
         function T = export_weights_to_table(obj)
+            assert(isscalar(obj),'can only export weights from scalar GUM object');
             T = export_weights_to_table(obj.regressor);
         end
 
@@ -3894,11 +3907,13 @@ classdef gum
         function export_weights_to_csv(obj, filename)
             % M.export_weights_to_csv(filename) exports weights data as csv file.
             %
+            assert(isscalar(obj),'can only export weights from scalar GUM object');
             export_weights_to_csv(obj.regressor, filename);
         end
 
         %% EXPORT HYPERPARAMETERS TO TABLE
         function T = export_hyperparameters_to_table(obj)
+                        assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
             T = export_hyperparameters_to_table(obj.regressor);
         end
 
@@ -3906,6 +3921,7 @@ classdef gum
         function export_hyperparameters_to_csv(obj, filename)
             % M.export_hyperparameters_to_csv(filename) exports hyperparameter data as csv file.
             %
+                        assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
             export_hyperparameters_to_csv(obj.regressor, filename);
         end
 
@@ -6344,7 +6360,6 @@ end
 
 %% build predictor from operations between predictors
 % priority: interactions, then splitting, then product, then sum
-current_idx = 1;
 idxC = [];
 
 while length(V)>1
