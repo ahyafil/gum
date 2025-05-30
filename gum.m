@@ -965,6 +965,7 @@ classdef gum
 
                     % run gradient descent
                     obj_noTS = obj.exclude_test_set(); % exclude test for fitting
+                    obj_noTS.regressor = obj_noTS.regressor.initialize_weights(); % to avoid issues with fixed weights
                     errorscorefun = @(P) cv_score(obj_noTS, P, HPidx, 0);
                     optimopt = optimoptions('fmincon','TolFun',HP_TolFun,'SpecifyObjectiveGradient',objective_grad,...
                         'CheckGradients',check_grad,'display',verbose,'MaxIterations',maxiter);
@@ -1204,7 +1205,11 @@ classdef gum
             end
 
             if ~isfield(parm, 'verbose')
-                parm.verbose = 'on';
+                if length(obj)>=10
+                    parm.verbose = 'little';
+                else
+                    parm.verbose = 'on';
+                end
             else
                 assert(ismember(parm.verbose, {'on','off','little','full'}), 'incorrect value for field ''verbose'': possible values are ''on'', ''off'',''full'' and ''little''');
             end
@@ -1980,8 +1985,23 @@ classdef gum
                                 end
 
                                 % new set of weights eq.12 (projected back to full basis)
+                                diverged = false;
                                 MatOptions = struct('POSDEF',inf_cov,'SYM',inf_cov); % is positive definite, symmetric only in one definition
-                                xi = linsolve(H,B,MatOptions)' * P{cc,d};
+                                try
+                                    xi = linsolve(H,B,MatOptions)' * P{cc,d}; % new set of weights (projected back to full basis)
+                                catch err
+                                    if strcmp(err.identifier,'MATLAB:posdef')
+                                        %  Hessian not definite positive
+                                        if D>1
+                                            diverged = true;
+                                            xi = nan(size(UU));
+                                        else
+                                            error('design matrix is ill conditioned, or the model is overparameterized:coefficients are not identifiable');
+                                        end
+                                    else
+                                        rethrow(err);
+                                    end
+                                end
 
                                 %  while strcmp(obs,'poisson') && any(Phi*(Unu+[repelem(U_const(1:rank),m(d)) zeros(1,m(D+1))])'>500) % avoid jump in parameters that lead to Inf predicted rate
 
@@ -2009,12 +2029,8 @@ classdef gum
                                     obj.Predictions.rho(:,cc) = Phi*(xi+UconstU)';
                                 end
 
-
-                                compute_logjoint = true;
-
-
                                 cnt = 0;
-                                diverged = false;
+                                compute_logjoint = ~diverged;
 
                                 while compute_logjoint
                                     % add new set of weights to regressor object
@@ -3449,6 +3465,7 @@ classdef gum
 
                 sc = [obj.score];
                 lbl = string({obj.label}); % all model labels
+                lbl =repelem(lbl,1,cellfun(@(x) size(x,1),{sc.Dataset}));
                 AllSplittingLevels = cat(1,sc.Dataset); % dataset x splitting variable array
 
                 AllSplittingLevels_and_ModelLabels = [AllSplittingLevels(:,~iConcat) lbl(:)]; % add also model labels
@@ -3463,14 +3480,18 @@ classdef gum
                     for s=1:size(SplittingLevels,1)
                         iModel = find(iSplittingLevels==s); % all models sharing non-concatenating variables and model label
 
+                        SplittingVariable = obj(iModel(1)).score.SplittingVariable;
+
                         for m=1:length(iModel)
                             obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
+                            obj(iModel(m)).score.SplittingVariable = SplittingVariable(iConcat);
                         end
                         % concatenate these models together
                         %  obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
                         obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,splitting_variable);
 
                         obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
+                        obj(iModel(1)).score.SplittingVariable=SplittingVariable;
 
                         concat_idx(iModel(1)) = true; % in the end we'll only keep the first in each list
                     end
@@ -3899,8 +3920,37 @@ classdef gum
 
         %% EXPORT WEIGHTS TO TABLE
         function T = export_weights_to_table(obj)
-            assert(isscalar(obj),'can only export weights from scalar GUM object');
-            T = export_weights_to_table(obj.regressor);
+            % assert(isscalar(obj),'can only export weights from scalar GUM object');
+            T = table;
+            for i=1:numel(obj)
+                % export weights for each object
+                this_T = export_weights_to_table(obj(i).regressor);
+
+                % for multiple GUMs, add splitting variable/ model names in
+                % table
+                if ~isscalar(obj)
+                    % add splitting variables
+                    if ~isempty(obj(i).score.SplittingVariable)
+                        splitvar_cell=  repelem(obj(i).score.Dataset,height(this_T),1);
+                        splitvar_cell = num2cell(splitvar_cell,1);
+                        Tsplitvar = table(splitvar_cell{:},'VariableNames',obj(i).score.SplittingVariable);
+                        this_T=[Tsplitvar this_T];
+                    end
+
+                    % add model name
+                    if ~all([obj.label]==obj(1).label)
+                        Tmod = table(repelem(obj(i).label,height(this_T),1),'VariableNames','ModelName');
+                        this_T=[Tmod this_T];
+                    end
+                end
+
+                % add to main table
+                if i>1
+                T= outerjoin(T,this_T,'MergeKeys',true);
+                else
+T=this_T;
+                end
+            end
         end
 
         %% EXPORT WEIGHTS TO CSV FILE
@@ -3913,7 +3963,7 @@ classdef gum
 
         %% EXPORT HYPERPARAMETERS TO TABLE
         function T = export_hyperparameters_to_table(obj)
-                        assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
+            assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
             T = export_hyperparameters_to_table(obj.regressor);
         end
 
@@ -3921,7 +3971,7 @@ classdef gum
         function export_hyperparameters_to_csv(obj, filename)
             % M.export_hyperparameters_to_csv(filename) exports hyperparameter data as csv file.
             %
-                        assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
+            assert(isscalar(obj),'can only export hyperparameters from scalar GUM object');
             export_hyperparameters_to_csv(obj.regressor, filename);
         end
 
@@ -4603,25 +4653,26 @@ classdef gum
                 end
 
                 if withTile
-                    all_xlim = get([h.Axes],'XLim');
+                    hAxes = [h.Axes];
+                    all_xlim = get(hAxes,'XLim');
                     all_xlim = cat(1,all_xlim{:});
                     same_xlim = all(all_xlim==all_xlim(1,:),'all');
-                    all_ylim = get([h.Axes],'YLim');
+                    all_ylim = get(hAxes,'YLim');
                     all_ylim = cat(1,all_ylim{:});
                     same_ylim = all(all_ylim==all_ylim(1,:),'all');
-                    ax_pos = get([h.Axes],'Position');
+                    ax_pos = get(hAxes,'Position');
 
                     ax_pos = cat(1,ax_pos{:});
                     left_ax = ax_pos(:,1) == min(ax_pos(:,1));
 
                     for aa = find(~left_ax')
-                        ylabel(h(aa).Axes,'');
-                        if same_ylim, yticklabels(h(aa).Axes,''); end
+                        ylabel(hAxes(aa),'');
+                        if same_ylim, yticklabels(hAxes(aa),''); end
                     end
                     bottom_ax = ax_pos(:,2) == min(ax_pos(:,2));
                     for aa = find(~bottom_ax')
-                        xlabel(h(aa).Axes,'');
-                        if same_xlim, xticklabels(h(aa).Axes,''); end
+                        xlabel(hAxes(aa),'');
+                        if same_xlim, xticklabels(hAxes(aa),''); end
                     end
                 end
 

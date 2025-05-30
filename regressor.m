@@ -1124,6 +1124,7 @@ classdef regressor
                     elseif ~ismember(fild, {'PosteriorMean','PosteriorStd','T','p'})
                         error('incorrect field: %s',fild);
                     elseif this_constraint~="fixed" || ~strcmp(fild,'PosteriorMean') % unless fixed weights
+                  %elseif  ~strcmp(fild,'PosteriorMean') 
 
                         idx = ii+(1:nW*rk);
                         this_U = reshape(U(idx), nW, rk)';
