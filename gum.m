@@ -815,9 +815,7 @@ classdef gum
             %% which order for components
             for m=1:obj.nMod
                 if isempty(M(m).ordercomponent) && M(m).nDim>1
-                    % dd = M(m).nDim; % dimension in this module
                     M(m).ordercomponent = true;
-                    %  M(m).ordercomponent = all(all(cc(:,1:dd)==cc(1,1:dd))); % default: reorder if all components have same constraints
                 end
             end
 
@@ -862,6 +860,9 @@ classdef gum
             end
 
             %%  check cross validation parameters
+            if isfield(pars,'nFold')
+                obj.param.nFold =  pars.nFold;
+            end
             if isfield(pars, 'crossvalidation')
                 obj.param.crossvalidation =  pars.crossvalidation;
             elseif strcmpi(algo,'cv')
@@ -3545,7 +3546,7 @@ classdef gum
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnan(x),'all'), scale(:,d))); % if scale of nans
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnumeric(x) && isnan(x),'all'), scale(:,d))); % if scale of nans
                     if DifferentScale && isnumeric(scale{1,d})
 
                         % just in case same scale with some numerical imprecisions

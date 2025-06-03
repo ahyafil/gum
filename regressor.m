@@ -1124,7 +1124,7 @@ classdef regressor
                     elseif ~ismember(fild, {'PosteriorMean','PosteriorStd','T','p'})
                         error('incorrect field: %s',fild);
                     elseif this_constraint~="fixed" || ~strcmp(fild,'PosteriorMean') % unless fixed weights
-                  %elseif  ~strcmp(fild,'PosteriorMean') 
+                        %elseif  ~strcmp(fild,'PosteriorMean')
 
                         idx = ii+(1:nW*rk);
                         this_U = reshape(U(idx), nW, rk)';
@@ -1236,9 +1236,9 @@ classdef regressor
                 obj(i).Weights(d).PosteriorMean = 1; % fix weight to 1
 
                 % remove covariance hyperparameters
-                                    cov_HP = strcmp(obj(i).HP(d).type,"cov");
+                cov_HP = strcmp(obj(i).HP(d).type,"cov");
                 obj(i).HP(d) = rmv_hyperparameters(obj(i).HP(d), cov_HP);
-                obj(i).Prior(d) = empty_prior_structure(1); % remove prior       
+                obj(i).Prior(d) = empty_prior_structure(1); % remove prior
             end
         end
 
@@ -1301,6 +1301,12 @@ classdef regressor
                     end
 
                     obj.Weights(d) = W;
+
+                    % remove from prior
+                    if ~isempty(obj.Prior(d).PriorCovariance)
+                        obj.Prior(d).PriorCovariance = obj.Prior(d).PriorCovariance(~drop_these,~drop_these);
+                        obj.Prior(d).PriorMean(drop_these) = [];
+                    end
 
                     % remove also from data
                     indices = repmat({':'},1,obj.nDim+1);
@@ -1571,19 +1577,19 @@ classdef regressor
         function  obj = set_single_weight_constraint(obj)
 
             if sum(isFreeWeightSet(obj))<=1
-               return;
+                return;
             end
             for d=1:obj.nDim
                 W =  obj.Weights(d);
                 if constraint_type(W)=="free" && single_weight(W) && sum(isFreeWeightSet(obj))>1
-                    
+
                     % single weight for one dim -> set weight to 1 (if
                     % there's another free dim)
                     if ~isempty(W.basis)
-                    obj = obj.freeze_weights_with_basis([1;d]);
+                        obj = obj.freeze_weights_with_basis([1;d]);
                     else
-                    obj.Weights(d).PosteriorMean = 1;
-                    obj = obj.freeze_weights([1;d]);
+                        obj.Weights(d).PosteriorMean = 1;
+                        obj = obj.freeze_weights([1;d]);
                     end
                 end
             end
@@ -3757,22 +3763,35 @@ classdef regressor
 
             %% process special case when all are single linear regressors (e.g. x1+x2+...)
             W = [obj.Weights];
-            all_single_linear = nD==1 && all([W.nWeight]==1) && all(strcmp({W.type},'linear')) ...
-                && all(cellfun(@(x) isequal(x,obj(1).Prior), {obj.Prior})) ...
-                && all(constraint_type(W)==constraint_type(W(1)));
+            all_single_linear = nD==1 && all([W.nWeight]==1);
+            if all_single_linear
+                not_fixed_weights =constraint_type(W)~="fixed";
+                % make sure all non-fixed weights have same prior
+                if any(not_fixed_weights)
+                    PP =obj(find(not_fixed_weights,1)).Prior;
+                    all_single_linear = all(cellfun(@(x) isequal(x,PP), {obj(not_fixed_weights).Prior}));
+                else
+                    PP =obj(1).Prior;
+                end
+            end
             if all_single_linear
                 obj(1).Data = cat(2,obj.Data); % concatenate regressors
-                obj(1).Weights.scale = [W.label];
-                obj(1).Weights.nWeight = numel(obj);
-                if all([W.label] == erase(W(1).label,"1")+(1:length(W))) % in case variables are called x1 + x2 + x3...
-                    obj(1).Weights.label =  erase(W(1).label,"1"); % rename weight label as "x"
-                    obj(1).Weights.scale = erase(obj(1).Weights.scale,obj(1).Weights.label ); % and scale as 1,2,3...
-                    obj(1).Weights.dimensions = obj(1).Weights.label;
-                else
-                    obj(1).Weights.label = "group";
-                    obj(1).Weights.label = "";
+                obj(1).Prior = PP;
+                if any(not_fixed_weights)
+                    W(1).type='linear';
                 end
-                %  obj(1).Weights.nFreeWeight = sum([W.nFreeWeight]);
+                W(1).constraint = concatenate_constraint(W); % deal with constraints
+                W(1).scale = [W.label];
+                W(1).nWeight = numel(obj);
+                if all([W.label] == erase(W(1).label,"1")+(1:length(W))) % in case variables are called x1 + x2 + x3...
+                    W(1).label =  erase(W(1).label,"1"); % rename weight label as "x"
+                    W(1).scale = erase(W(1).scale, W(1).label); % and scale as 1,2,3...
+                    W(1).dimensions = W(1).label;
+                else
+                    W(1).label = "group";
+                    W(1).label = "";
+                end
+                obj(1).Weights = W(1);
                 obj = obj(1);
                 return;
             end
@@ -3861,7 +3880,7 @@ classdef regressor
             W = obj(1).Weights(D);
             W.U_allstarting = [];
 
-            fild = { 'PosteriorMean','PosteriorStd','T','p', 'scale'};
+            fild = { 'PosteriorMean','PosteriorStd','T','p'};
             allWeights = {obj.Weights};
             allWeights = cellfun(@(x) x(D), allWeights);
             W.label = [allWeights.label];
@@ -3887,6 +3906,8 @@ classdef regressor
                 end
                 F{i}(end+1:scale_dim,:) = nan; % fill extra dimensions with nan if needed
                 F{i}(scale_dim+1,:) = i; % add extra dimension with group index
+                %F{i}=string(F{i});
+                %F{i}(scale_dim+1,:) = allWeights(i).label; % add extra dimension with weight label
             end
 
             W.scale = cat(2,F{:});
@@ -3903,35 +3924,37 @@ classdef regressor
             end
 
             % deal with constraint
-            ct_type = constraint_type(allWeights);
+            W.constraint = concatenate_constraint(allWeights);
+            %             ct_type = constraint_type(allWeights);
+            %
+            %             % if at least two categorical regressors get concatenated,
+            %             % keep the first with constraint, the others should have no
+            %             % constraint
+            %             categ_reg = find(ismember(ct_type, ["first0","first1"])); % identify categorical regressors
+            %             for ii=categ_reg(2:end)
+            %                 allWeights(ii).constraint= "free";
+            %                 ct_type(ii) = "free";
+            %             end
+            %
+            %             keep_same_constraint = all(ct_type=="free") ||  all(ct_type=="fixed") || ... % do not touch if all free or all fixed
+            %                 (ismember(ct_type(1),["first0","first1"]) && all(ct_type(2:end)=="free")); % or if first reg has first0/first1 constraint and others are free
+            %             if ~keep_same_constraint
 
-            % if at least two categorical regressors get concatenated,
-            % keep the first with constraint, the others should have no
-            % constraint
-            categ_reg = find(ismember(ct_type, ["first0","first1"])); % identify categorical regressors
-            for ii=categ_reg(2:end)
-                allWeights(ii).constraint= "free";
-                ct_type(ii) = "free";
-            end
-
-            keep_same_constraint = all(ct_type=="free") ||  all(ct_type=="fixed") || ... % do not touch if all free or all fixed
-                (ismember(ct_type(1),["first0","first1"]) && all(ct_type(2:end)=="free")); % or if first reg has first0/first1 constraint and others are free
-            if ~keep_same_constraint
-                S_ct = constraint_structure(allWeights);
-
-                % convert first0 to first1 (assuming we're going this is a
-                % categorical regressor and we're going to multiply it)
-                for w = find( [S_ct.type]=="first0")
-                    S_ct(w).u(:) = 1;
-                    S_ct(w).constraint.type = "first1";
-                end
-
-                ctype = "mixed";
-                V = blkdiag(S_ct.V);
-                u = [S_ct.u];
-                nConstraint = sum([S_ct.nConstraint]);
-                W.constraint = struct('type',ctype, 'V',V,'u',u, 'nConstraint',nConstraint);
-            end
+            %                 S_ct = constraint_structure(allWeights);
+            %
+            %                 % convert first0 to first1 (assuming we're going this is a
+            %                 % categorical regressor and we're going to multiply it)
+            %                 for w = find( [S_ct.type]=="first0")
+            %                     S_ct(w).u(:) = 1;
+            %                     S_ct(w).constraint.type = "first1";
+            %                 end
+            %
+            %                 ctype = "mixed";
+            %                 V = blkdiag(S_ct.V);
+            %                 u = [S_ct.u];
+            %                 nConstraint = sum([S_ct.nConstraint]);
+            %                 W.constraint = struct('type',ctype, 'V',V,'u',u, 'nConstraint',nConstraint);
+            %            end
 
             % deal with basis
             Bcell = {allWeights.basis};
@@ -5173,7 +5196,6 @@ covHP = contains(HP.type, "cov");% covariance hyperparameter
 
 for s=1:nSet
     W.nWeight = sum( index_weight==s);
-    %  index_weight = iWeight(s)+1:iWeight(s+1);
     this_scale = W.scale(:, index_weight==s); % scale for this set of weights
     if nSet>1 && size(this_scale,1)>1
         this_scale(end,:) = []; % remove dimension encoding set index
@@ -5791,6 +5813,46 @@ for ii=categ_reg(2:end)
     obj(ii).Weights(D).constraint= "free";
 end
 end
+
+%% create constraint structure when concatenating regressors
+function ct = concatenate_constraint(W)
+
+ct_type = constraint_type(W);
+
+% if at least two categorical regressors get concatenated,
+% keep the first with constraint, the others should have no
+% constraint
+categ_reg = find(ismember(ct_type, ["first0","first1"])); % identify categorical regressors
+for ii=categ_reg(2:end)
+    W(ii).constraint= "free";
+    ct_type(ii) = "free";
+end
+
+keep_same_constraint = all(ct_type=="free") ||  all(ct_type=="fixed") || ... % do not touch if all free or all fixed
+    (ismember(ct_type(1),["first0","first1"]) && all(ct_type(2:end)=="free")); % or if first reg has first0/first1 constraint and others are free
+if keep_same_constraint
+    ct = W(1).constraint;
+    return;
+end
+
+
+
+S_ct = constraint_structure(W);
+
+% convert first0 to first1 (assuming we're going this is a
+% categorical regressor and we're going to multiply it)
+for w = find( [S_ct.type]=="first0")
+    S_ct(w).u(:) = 1;
+    S_ct(w).constraint.type = "first1";
+end
+
+ctype = "mixed";
+V = blkdiag(S_ct.V);
+u = [S_ct.u];
+nConstraint = sum([S_ct.nConstraint]);
+ct= struct('type',ctype, 'V',V,'u',u, 'nConstraint',nConstraint);
+end
+
 
 %% number of regressor set (for concatenated regressors)
 function n = nRegressorSet(P)
