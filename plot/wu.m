@@ -98,6 +98,9 @@ function varargout = wu(varargin)
 % plotting legend
 % - 'permute': permute the order of dimensions: 'auto' to optimize figure
 % readability, or a permutation order
+% - 'collapse': if set to true, collapse second and third dimensions, i.e.
+% generates on bar plot series / curve for each combination of second and
+% third dimension (instead of spreading it into different panels)
 % - 'layout': whether to use tiled layout (when more than one subplot)
 %
 % !!check that it works
@@ -767,8 +770,8 @@ if collapse
     L = reshape(L, new_size);
     U = reshape(U, new_size);
 
-    cor = repmat(cor(:),1,siz(3));
-    lightcolour = repmat(cor,1,siz(3));
+    cor = repmat(cor(:),siz(3),1);
+    lightcolour = repmat(cor,siz(3),1);
     marker = rep_for_collapse(marker,siz);
     markersize = rep_for_collapse(markersize,siz);
     linestyle = rep_for_collapse(linestyle,siz);
@@ -1460,8 +1463,8 @@ end
 
 %% modify vectors of linespecs when collapsing 2nd and 3rd dim
 function x = rep_for_collapse(x, siz)
-if isrow(x) % changes along dim2
-    x = repmat(x,siz(3));
+if iscolumn(x) % changes along dim2
+    x = repmat(x,siz(3),1);
 else % changes along dim3
     x = repelem(x,siz(2));
 end

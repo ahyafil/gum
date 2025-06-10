@@ -448,6 +448,7 @@ classdef gum
             Sc = export_scores_to_table(obj);
             cnt = 1;
             ScoreLabel = Sc.Properties.VariableNames;
+            ScoreLabel(strcmp(ScoreLabel,'cvpartition'))=[];
             ScoreString = '';
             ScoreValues = {};
             Integer_scores = {'df', 'nObservations','nParameters','nFreeParameters','exitflag','nFreeHyperparameters','isEstimated','isFitted'};
@@ -1742,11 +1743,6 @@ classdef gum
                 end
 
                 for cc=1:nC
-                    %idxC = idxComponent==cc;
-                    % Lambda{cc,d} = P{cc,d}*Lambda{cc,d}*P{cc,d}'; %
-                    % project onto free basis (done already, corrected)
-                    % Lambda{cc,d} = symmetric_part(Lambda{cc,d});
-
                     Lambda{cc,d} = force_definite_positive(Lambda{cc,d}); % make sure it is definite positive
 
                     if any(isinf(Lambda{cc,d}(:))) % use precision only if there is infinite covariance (e.g. no regularization)
@@ -1776,14 +1772,6 @@ classdef gum
                 % full prior covariance matrix
                 Kall = global_prior_covariance(M);
                 Pall = projection_matrix_multiple(M,'all'); % full-to-free basis
-
-                % project onto free basis (already done!)
-                %  if issparse(Kall) && issparse(Pall)
-                %      Kall =  Pall*Kall*Pall'; % not even sure it wouldn't faster if we convert to full
-                %  else
-                %      Pall = full(Pall); % in case Pall is sparse, faster this way
-                %      Kall =  Pall*Kall*Pall';
-                %  end
 
                 % use precision only if there is infinite covariance (e.g. no regularization)
                 if any(isinf(Kall(:)))
@@ -3546,7 +3534,7 @@ classdef gum
 
                     % check if different scales used across models
                     DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnumeric(x) && isnan(x),'all'), scale(:,d))); % if scale of nans
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnumeric(x),'all') && all(isnan(x)), scale(:,d))); % if scale of nans
                     if DifferentScale && isnumeric(scale{1,d})
 
                         % just in case same scale with some numerical imprecisions

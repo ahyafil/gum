@@ -4242,6 +4242,9 @@ classdef regressor
         function T = export_weights_to_table(obj)
             % T = M.export_weights_to_table(obj);
             % creates a table with metrics for all weights (scale, PosteriorMean, PosteriorStd, T-statistics, etc.)
+
+           obj= obj.compute_prior_mean;
+            
             W = [obj.Weights]; % concatenate weights over regressors
             P = [obj.Prior];
             HPs = [obj.HP];
@@ -5438,7 +5441,7 @@ end
 function PM = prior_mean(P,W,space)
 PM = {P.PriorMean};
 for i=1:length(W) % if using basis function, project prior mean on full space
-    if ~iscell(W(i).basis) && ~isempty(W(i).basis)
+    if ~iscell(W(i).basis) && ~isempty(W(i).basis) && W(i).basis.projected
         if strcmp(space,'original')
             PM{i} = PM{i}*W(i).basis.B;
         end
