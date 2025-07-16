@@ -969,7 +969,7 @@ classdef regressor
         end
 
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
-        function [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool)
+        function obj = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool)
             % R = set_weights_and_hyperparameters_from_model(R, R2),
             % or R = set_weights_and_hyperparameters_from_model(R, M2)
             % sets the values of weights and hyperparameters in regressor R to corresponding values
@@ -993,18 +993,28 @@ classdef regressor
                 % regressor objects
                 Wlbl = weight_labels(obj);
                 Wlbl2 = weight_labels(obj2);
+                if isequal(Wlbl,Wlbl2) && isequal([obj.nParameters],[obj2.nParameters])
+                    % if same model then use easier syntax
+                    if bool(1) % set weights
+                        obj = obj.set_weights(obj2);
+                    end
+                    if bool(2) %set hyperparameters
+                        H = obj2.get_hyperparameter_structure;
+                        obj = set_hyperparameters(obj,[H.HP]);
+                    end
+                    return;
+                end
                 lbl = intersect(Wlbl, Wlbl2);
             else
                 lbl = string(lbl);
             end
 
-            I = nan(2,length(lbl));
             for i=1:length(lbl)
                 % index for this label in both objects
                 ind1 = obj.find_weights(lbl(i));
                 ind2 = obj2.find_weights(lbl(i));
 
-                assert(~any(isnan([ind1;ind2])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
+                assert(~any(isnan([ind1(:);ind2(:)])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
 
                 if bool(1) % set weights
                     % corresponding set of weights
@@ -1034,7 +1044,7 @@ classdef regressor
         end
 
         %% SET HYPERPARAMETERS FROM ANOTHER MODEL / SET OF REGRESSORS
-        function [obj,I] = set_hyperparameters_from_model(obj, obj2, lbl)
+        function obj = set_hyperparameters_from_model(obj, obj2, lbl)
             % R = set_hyperparameters_from_model(R, R2) or R = set_hyperparameters_from_model(R, M2)
             % sets the values of hyperparameters in regressor R to corresponding values
             % in regressor R2 or GUM model M2 by matching labels for set of
@@ -1049,11 +1059,11 @@ classdef regressor
             end
 
             bool = [false true]; % copy just hyperparameters, not weights
-            [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+            obj = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
         end
 
         %% SET WEIGHTS FROM ANOTHER MODEL / SET OF REGRESSORS
-        function [obj,I] = set_weights_from_model(obj, obj2, lbl)
+        function obj = set_weights_from_model(obj, obj2, lbl)
             % R = set_weights_from_model(R, R2) or R = set_weights_from_model(R, M2)
             % sets the values of weights in regressor R to corresponding values
             % in regressor R2 or GUM model M2 by matching labels for set of
@@ -1068,7 +1078,7 @@ classdef regressor
             end
 
             bool = [true false]; % copy just weights, not hyperparameters
-            [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
+            obj = set_weights_and_hyperparameters_from_model(obj, obj2, lbl, bool);
         end
 
         %% SET WEIGHTS FOR SET OF MODULES
@@ -5730,6 +5740,7 @@ function str = constraint_type(W)
 str = strings(size(W));
 for i=1:numel(W)
     ct = W(i).constraint;
+    assert(~isempty(ct),'constraint field should not be empty');
     if isstring(ct) || ischar(ct)
         str(i) = string(ct);
     else

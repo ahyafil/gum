@@ -647,6 +647,9 @@ classdef gum
             % process training and validation sets
             if isfield(obj.param,'crossvalidation') && (isstruct(obj.param.crossvalidation)|| isa(obj.param.crossvalidation,'cvpartition'))
                 CV = obj.param.crossvalidation;
+                if isa(CV,'cvpartition')
+                    CV = cvpartition2struct(CV);
+                end
                 sbs = subset;
                 if islogical(sbs)
                     nn = length(sbs);
@@ -1166,6 +1169,8 @@ classdef gum
             %
             % - 'initialpoints': number of initial points for inference (default:10)
             % - 'verbose': 'on' (default),'off','little','full'
+            % - 'crossvalidation' to apply crossvalidation (cvpartition
+            % object)
             % - 'compute_posterior_covariance': default is true
             %
             % M is the GUM model after inference.
@@ -1242,6 +1247,12 @@ classdef gum
             if isempty(obj.regressor)
                 error('the model has no regressor');
             end
+            if isfield(obj.param,'split')
+            parm.split = obj.param.split;
+            end
+            if isfield(obj.param,'SplittingVariable')
+            parm.SplittingVariable = obj.param.SplittingVariable;
+            end
             tic;
 
             obj.param = parm;
@@ -1260,7 +1271,7 @@ classdef gum
             if isgam(obj)
                 obj.param.initialpoints = 1; % if no multilinear term, problem is convex so no local minima
             end
-
+            obj = obj.check_crossvalidation;
 
             %% evaluate prior covariances for given hyperparameters
             if verbose
@@ -1299,7 +1310,7 @@ classdef gum
                 testset = obj.param.testset;
 
                 obj_test = obj.extract_observations(testset); % extract test set
-                [obj_test,testscore] = obj_test.LogLikelihood(); % evaluate LLH
+                [obj_test,TestLogLikelihood] = obj_test.LogLikelihood(); % evaluate LLH
                 accuracy_test = obj_test.Accuracy(); % and accuracy
 
                 if isempty(obj.ObservationWeight)
@@ -1307,9 +1318,12 @@ classdef gum
                 else
                     n_Test = sum(obj.ObservationWeight(testset));
                 end
-                testscore= testscore/ n_Test; % normalize by number of observations
-            end
+                TestScore= TestLogLikelihood/ n_Test; % normalize by number of observations
 
+                                    Sfit.TestLogLikelihood = TestLogLikelihood;
+                    Sfit.TestScore = TestScore;
+                    Sfit.TestAccuracy = accuracy_test;
+            end
 
             %% cross validation
             crossvalid = isfield(parm, 'crossvalidation') && ~isempty(parm.crossvalidation);
@@ -1375,10 +1389,6 @@ classdef gum
                 Sfit.accuracy_all = accuracy;
                 Sfit.exitflag_CV = exitflag_CV;
                 Sfit.converged_CV = sum(exitflag_CV>0); % number of permutations with convergence achieved
-                if isfield(obj.param, 'testset')
-                    Sfit.testscore = testscore;
-                    Sfit.accuracy_test = accuracy_test;
-                end
                 if do_grad_hyperparam
                     obj.grad = mean(grad_hp,2); % gradient is mean of gradient over permutations
                 end
@@ -1698,11 +1708,9 @@ classdef gum
             end
 
             % we use sparse coding if any of the data array is sparse
-            %SpCode = any(cellfun(@issparse, {M.Data}));
             SpCode = false(1,nC);
             for cc=1:nC
                 SpCode(cc) = any(cellfun(@issparse, {M(idxComponent==cc).Data}));
-
             end
 
             initialpoints = obj.param.initialpoints;
@@ -1931,6 +1939,7 @@ classdef gum
                             else
                                 inf_cov = any(isinf(Lambda{cc,d}(:)));
                             end
+                            inf_cov=full(inf_cov);
                             if ~inf_cov %finite covariance matrix
                                 if SpCode % for sparse matrix, more efficient this way
                                     B = KP{cc,d}*(Phi'*G) + s*nu{cc,d};
@@ -1939,12 +1948,12 @@ classdef gum
                                 end
                             else % any infinite covariance matrix (e.g. no prior on a weight)
                                 if SpCode
-                                    B = full(P{cc,d}*(Phi'*G) + s*precision{cc,d}*nu{cc,d});
+                                    B = P{cc,d}*(Phi'*G) + s*precision{cc,d}*nu{cc,d};
                                 else
                                     B = Psi'*G + s*precision{cc,d}*nu{cc,d};
-                                end
+                                end                                
                             end
-
+B =full(B);
 
                             if ~FullHessianUpdate(cc) %% update weights just along that dimension
 
@@ -3332,7 +3341,7 @@ classdef gum
         end
 
         %% SET WEIGHTS AND HYPERPARAMETERS FROM ANOTHER MODEL
-        function [obj,I] = set_weights_and_hyperparameters_from_model(obj, obj2, varargin)
+        function obj = set_weights_and_hyperparameters_from_model(obj, obj2, varargin)
             % M = M.set_weights_and_hyperparameters_from_model(M2);
             % sets weights and hyperparameters of model M at values of model
             % M2 (for regressors shared between the two models)
@@ -3341,15 +3350,15 @@ classdef gum
             % array of models of the same size
             for i=1:numel(obj)
                 if isscalar(obj2)
-                    [obj(i).regressor,I] = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
+                    obj(i).regressor = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
                 else
-                    [obj(i).regressor,I] = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
+                    obj(i).regressor = set_weights_and_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
                 end
             end
         end
 
         %% SET HYPERPARAMETERS FROM ANOTHER MODEL
-        function [obj,I] = set_hyperparameters_from_model(obj, obj2, varargin)
+        function obj = set_hyperparameters_from_model(obj, obj2, varargin)
             % M = M.set_hyperparameters_from_model(M2);
             % sets  hyperparameters of model M at values of model
             % M2 (for regressors shared between the two models)
@@ -3357,15 +3366,15 @@ classdef gum
             % array of models of the same size
             for i=1:numel(obj)
                 if isscalar(obj2)
-                    [obj(i).regressor,I] = set_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
+                    obj(i).regressor = set_hyperparameters_from_model(obj(i).regressor, obj2, varargin{:});
                 else
-                    [obj(i).regressor,I] = set_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
+                    obj(i).regressor = set_hyperparameters_from_model(obj(i).regressor, obj2(i), varargin{:});
                 end
             end
         end
 
         %% SET WEIGHTS FROM ANOTHER MODEL
-        function [obj,I] = set_weights_from_model(obj, obj2, varargin)
+        function obj = set_weights_from_model(obj, obj2, varargin)
             % M = M.set_weights_from_model(M2);
             % sets weights of model M at values of model
             % M2 (for regressors shared between the two models)
@@ -3373,9 +3382,9 @@ classdef gum
             % array of models of the same size
             for i=1:numel(obj)
                 if isscalar(obj2)
-                    [obj(i).regressor,I] = set_weights_from_model(obj(i).regressor, obj2, varargin{:});
+                    obj(i).regressor = set_weights_from_model(obj(i).regressor, obj2, varargin{:});
                 else
-                    [obj(i).regressor,I] = set_weights_from_model(obj(i).regressor, obj2(i), varargin{:});
+                    obj(i).regressor = set_weights_from_model(obj(i).regressor, obj2(i), varargin{:});
                 end
             end
         end
@@ -4153,9 +4162,11 @@ T=this_T;
                 CV_tmp.training = CV(:,1)';
                 CV_tmp.test = CV(:,2)';
                 CV = CV_tmp;
-            elseif isa(CV,'cvpartition') || isstruct(CV)
+            elseif isa(CV,'cvpartition') 
+                % convert to struct
+                CV = cvpartition2struct(CV);
+            elseif isstruct(CV)
                 % we're already set!
-
             elseif isscalar(CV) % only the number of observations in training set is provided-> draw the permutations now
                 nTrain = CV; % number of observations in training set
 
@@ -6623,7 +6634,8 @@ end
 %% list of all possible metrics
 function metrics =  metrics_list(varargin)
 metrics = {'nObservations','nParameters','df','Dataset','LogPrior','LogLikelihood','LogJoint','AIC','AICc','BIC','AIC_infer','AICc_infer','BIC_infer','LogEvidence',...
-    'accuracy','scaling','ExplainedVariance','LatentVariance','LatentExplainedVariance','validationscore','accuracy_test','TestAccuracy','TestLLH','r2','isEstimated','isFitted','FittingTime'};
+    'accuracy','scaling','ExplainedVariance','LatentVariance','LatentExplainedVariance',...
+    'CrossValidatedLogLikelihood','CrossValidatedLogLikelihood_all','validationscore','TestAccuracy','TestLLH','TestScore','r2','isEstimated','isFitted','FittingTime'};
 end
 
 %%
@@ -6736,4 +6748,18 @@ assert(~mod(length(args),2), 'number of optional arguments must be even');
 assert(all(cellfun(@(x) ischar(x)||isstring(x), args(1:2:end))),...
     'arguments must be character arrays');
 param = struct(args{:});
+end
+
+%% convert cvpartion object to structure
+function CV = cvpartition2struct(C)
+CV = struct;
+                CV.NumObservations = C.NumObservations;
+                CV.NumTestSets = C.NumTestSets;
+                CV.training = cell(1,C.NumTestSets);
+                CV.test = cell(1,C.NumTestSets);
+
+                for p=1:C.NumTestSets % for each permutation
+                    CV.training{p} = C.training(p);
+                    CV.test{p} = C.test(p);
+                end
 end
