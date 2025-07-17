@@ -3448,6 +3448,9 @@ classdef regressor
                 W.label = W.label+ "|"+ split_var;
 
                 W.nWeight = W.nWeight * nVal; % one set of weights for each level of splitting variable
+                if ~isempty(W.basis) && isfield(W.basis,'nWeight')
+                    W.basis.nWeight = W.basis.nWeight*nVal;
+                end
                 obj.Weights(dd) = W;
 
                 %% build covariance function as block diagonal
