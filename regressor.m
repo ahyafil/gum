@@ -1000,7 +1000,9 @@ classdef regressor
                     end
                     if bool(2) %set hyperparameters
                         H = obj2.get_hyperparameter_structure;
-                        obj = set_hyperparameters(obj,[H.HP]);
+                        allHP = [H.HP];
+                        all_fittable=[H.fit];
+                        obj = set_hyperparameters(obj,allHP(all_fittable));
                     end
                     return;
                 end
