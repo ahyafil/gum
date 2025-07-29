@@ -2719,7 +2719,7 @@ classdef regressor
 
             obj = obj.project_from_basis;
 
-            [mu,S,K] = computes_posterior_test_data(obj.Weights(d), obj.Prior(d), obj.HP(d),scale);
+            [mu,S,K] = computes_posterior_test_data(obj.Weights(d), obj.Prior(d), obj.HP(d),scale, obj.rank);
         end
 
         %% COMPUTE LOG-PRIOR (unnormalized)
@@ -4513,7 +4513,7 @@ switch plot_type
         yValue = linspace(min(sc(:,2)),max(sc(:,2)), 50);
         % [U,se, ~,scale] = computes_posterior_test_data(W,P,HP,{xValue,yValue});
 
-        U = computes_posterior_test_data(W,P,HP,{xValue,yValue});
+        U = computes_posterior_test_data(W,P,HP,{xValue,yValue},1);
 
         U = reshape(U, length(xValue), length(yValue));
 
@@ -5054,7 +5054,7 @@ end
 end
 
 %% compute posterior over test data
-function [mu,S,K,scale] = computes_posterior_test_data(W,P,HP,scale)
+function [mu,S,K,scale] = computes_posterior_test_data(W,P,HP,scale,rk)
 
 assert(  any(strcmp(W.type, {'continuous','periodic'})), 'test data only for continuous or periodic regressors');
 
@@ -5074,8 +5074,11 @@ nW = size(scale,2); % number of prediction data points
 B = W.basis;
 if constraint_type(W)=="free"
     Proj = eye(W.nWeight);
-else
+elseif isfield(W.constraint,'P')
     Proj = W.constraint.P;
+else
+    W.constraint = constraint_structure(W);
+    Proj = compute_orthonormal_basis_project(W.constraint.V);
 end
 
 if isempty(B) % no basis functions: use equation 15
@@ -5138,9 +5141,9 @@ else
 
     if nargout>1
         % compute posterior covariance and standard error
-        K = zeros(nW, nW,obj.rank);
-        S = zeros(obj.rank, nW);
-        for r=1:obj.rank
+        K = zeros(nW, nW,rk);
+        S = zeros(rk, nW);
+        for r=1:rk
             PCov  = BB' * B.PosteriorCov(:,:,r) * BB;
             K(:,:,r) = PCov;
             S(r,:) = sqrt(diag(PCov))'; % standard deviation of posterior covariance in original domain
