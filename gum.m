@@ -574,7 +574,7 @@ classdef gum
 
 
         %% SELECT SUBSET OF OBSERVATIONS FROM MODEL
-        function obj = extract_observations(obj,subset, drop_unused)
+        function obj = extract_observations(obj,subset, drop_unused, compute_npar)
             % M = extract_observations(M, subset) generates a model with
             % only observations provided by vector subset. subset is either
             % a vector of indices or a boolean vector indicating
@@ -582,8 +582,15 @@ classdef gum
             %
             % M = extract_observations(M, subset, drop_unused)
             % if drop_unused is set to True, drops regressor values if they do not appear in subset
+            %
+            % M = extract_observations(M, subset, drop_unused,compute_npar)
+            % to recompute number of parameters and d.f. (default: true)
+            %
             if nargin<3
                 drop_unused = false;
+            end
+            if nargin<4
+                compute_npar = true;
             end
 
             if length(obj)>1
@@ -591,7 +598,7 @@ classdef gum
                     % if all models have same number of observations, then
                     % use same subset for all
                     for i=1:numel(obj)
-                        obj(i) = obj(i).extract_observations(subset,drop_unused);
+                        obj(i) = obj(i).extract_observations(subset,drop_unused, compute_npar);
                     end
                     return;
 
@@ -611,7 +618,7 @@ classdef gum
                     for i=1:numel(obj)
                         % use specific subset
                         this_subset = subset(obj(i).param.split);
-                        obj(i) = obj(i).extract_observations(this_subset,drop_unused);
+                        obj(i) = obj(i).extract_observations(this_subset,drop_unused, compute_npar);
                         obj(i).param.split = obj(i).param.split(subset);
                     end
                     return;
@@ -673,14 +680,19 @@ classdef gum
                         tmp = ismember(1:nn,tmp);
                     end
                     CV.test{p} = find(tmp(sbs));
-                    %  CV.training{p} = CV.training{p}(ismember(CV.training{p},sbs));
-                    %  CV.test{p} = CV.test{p}(ismember(CV.test{p},sbs));
                 end
                 obj.param.crossvalidation = CV;
             end
 
             % update number of parameters and degrees of freedom
-            obj = compute_n_parameters_df(obj);
+            if compute_npar
+                obj = compute_n_parameters_df(obj);
+            else
+                % sometimes we don't need it
+                 obj.score.nParameters = nan; % total number of parameters
+                obj.score.nFreeParameters = nan; % total number of free parameters
+                obj.score.df =nan;
+            end
         end
 
         %% SPLIT OBSERVATIONS IN MODEL
@@ -938,8 +950,7 @@ classdef gum
             % if compute test set (for EM, done inside em function)
             with_test_set = isfield(obj.param,'testset') && ~isempty(obj.param.testset) && ~strcmpi(algo,'em');
             if with_test_set
-                obj_test = obj.extract_observations(obj.param.testset);
-                %obj = obj.exclude_test_set(); % exclude test for fitting
+                obj_test = obj.extract_observations(obj.param.testset,false,false);
             end
 
             %% apply fitting method
@@ -1033,7 +1044,7 @@ classdef gum
 
             with_test_set = isfield(obj.param,'testset') && ~isempty(obj.param.testset);
             if with_test_set
-                obj_test = obj.extract_observations(obj.param.testset);
+                obj_test = obj.extract_observations(obj.param.testset,false,false);
                 obj = obj.exclude_test_set(); % exclude test for fitting
                 prm = rmfield(prm,'testset');
             end
@@ -1309,7 +1320,7 @@ classdef gum
             if isfield(obj.param, 'testset') && ~isempty(obj.param.testset)
                 testset = obj.param.testset;
 
-                obj_test = obj.extract_observations(testset); % extract test set
+                obj_test = obj.extract_observations(testset,false,false); % extract test set
                 [obj_test,TestLogLikelihood] = obj_test.LogLikelihood(); % evaluate LLH
                 accuracy_test = obj_test.Accuracy(); % and accuracy
 
@@ -3156,7 +3167,7 @@ B =full(B);
             % M = compute_n_parameters(M)
 
             % we count parameter in projected space
-            M = obj.regressor.project_to_basis;
+            M = obj.regressor.project_to_basis([],true);
 
             obj.score.nParameters = sum([M.nTotalParameters]); % total number of parameters
             obj.score.nFreeParameters = sum([M.nTotalFreeParameters]); % total number of free parameters
@@ -5210,7 +5221,7 @@ if iscell(trainset) % CV structure
 end
 
 %estimate weights on training set
-obj_train = obj.extract_observations(trainset);
+obj_train = obj.extract_observations(trainset,false,false);
 obj_train.param.verbose = 'off';
 obj_train=obj_train.IRLS();
 exitflag_CV = obj_train.score.exitflag;
@@ -5220,7 +5231,7 @@ score_train = obj_train.score;
 s = score_train.scaling; % dispersion parameter
 
 %compute score on testing set (mean log-likelihood per observation)
-obj_test = obj.extract_observations(validationset); % model with validation set
+obj_test = obj.extract_observations(validationset,false,false); % model with validation set
 obj_test = obj_test.set_weights_from_model(obj_train); % set weights computed from training data
 obj_test.Predictions.rho = [];
 obj_test.score.scaling = s; % dispersion parameter estimated in training set

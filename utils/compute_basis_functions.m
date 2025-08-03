@@ -12,9 +12,9 @@ if ~isConcatenated % if no splitting or concatenating
     [B.B,new_scale, B.params, gradB] = B.fun(scale, HP.HP(isBasisHP), B.params); % apply function (params is hyperparameter)
     B.nWeight = size(B.B,1); % not specified a priori for some cases (e.g. SE kernel w spectral trick)
     if nargout>2
-    assert(size(gradB,3)==sum(isBasisHP), 'dimension 3 of gradient should match the number of basis functions hyperparameters');
+        assert(size(gradB,3)==sum(isBasisHP), 'dimension 3 of gradient should match the number of basis functions hyperparameters');
 
-    gradB(:,:,~HP.fit(isBasisHP)) = []; % remove fixed HPs from gradient
+        gradB(:,:,~HP.fit(isBasisHP)) = []; % remove fixed HPs from gradient
     end
 else
     % more rows in scale means we fit different
@@ -45,13 +45,13 @@ else
         if ~isequal(Bs.fun,'none')
             % evaluate function to compute basis function
             [this_B,this_new_scale,B(gg).params, this_gradB] = Bs.fun(scale(:,subset), this_HP, Bs.params);
-            nWeight(g) = size(this_B.B,1); 
+            nWeight(g) = size(this_B.B,1);
         else
             % when concatening regressor with and without basis function,
             nWeight(g) = sum(subset);
             this_B = eye(nWeight(g)); % no transform
             this_new_scale = scale(:,subset);
-            
+
             this_gradB = zeros(nWeight(g),nWeight(g),sum(HP.index==g & HP.fit));
         end
         n_new = size(this_B,1);
@@ -59,18 +59,11 @@ else
         new_scale(1,end+1:end+n_new) = this_new_scale;
         new_scale(2:end,end-n_new+1:end) = repmat(id_list(g,:)',1,n_new);
         iBHP = HP.index(isBasisHP)==g; % corresponding indices for hyperparameters
-        iBHP = iBHP(HP.fit); 
+        iBHP = iBHP(HP.fit);
         gradB(end+1 : end+n_new, subset,iBHP) = this_gradB;
     end
     B(1).nWeight = sum(nWeight);
 
 end
-
-% if nargout>2
-% % add gradient w.r.t no-basis function HPs
-% tmp = gradB;
-% gradB = zeros(size(gradB,1),size(gradB,2),length(HP.HP));
-% gradB(:,:,isBasisHP) = tmp;
-% end
 
 end

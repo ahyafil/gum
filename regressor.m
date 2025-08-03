@@ -1634,6 +1634,12 @@ classdef regressor
                 else
                     obj.Weights(d).scale = 1:obj.Weights(d).nWeight;
                 end
+                if strcmp(prior{d},'none')
+                    % fixed dimensions: set all weights to 1 (e.g. for
+                    % dummy dimension)
+                    obj.Weights(d).PosteriorMean = ones(1,obj.Weights(d).nWeight);
+                    obj.Weights(d).PosteriorStd = zeros(1,obj.Weights(d).nWeight);
+                end
 
                 if ~isempty(dimensions{d})
                     assert(length(dimensions{d})==size(obj.Weights(d).scale,1),'length of ''dimensions'' does not match dimensionality of scale');
@@ -1646,7 +1652,7 @@ classdef regressor
                 switch summing{d}
                     case {'weighted','linear','split'}
 
-                        % hyperpameters for first dimension
+                        % hyperpameters for each dimension
                         [obj.Prior(d),obj.HP(d)] = define_standard_priors(obj.Prior(d),prior{d},HP(d),obj.Weights(d).nWeight);
 
                     case 'equal'
@@ -2084,18 +2090,71 @@ classdef regressor
         end
 
         %% PROJECT TO SPACE OF BASIS FUNCTIONS
-        function obj = project_to_basis(obj,dims)
+        function obj = project_to_basis(obj,dims, only_weight_structure)
             % R = R.project_to_basis;
             % projects data onto basis functions.
 
+            if nargin<3
+                % when we just change weight structure but not the
+                % data (e.g. computing nparameters, degrees of freedom)
+                only_weight_structure=false;
+            end
+
+            all_dims = nargin<2 || isempty(dims); % default: project over all dims
+
             for m=1:length(obj) % for each module
 
-                if nargin<2
+                if all_dims
                     dims = 1:obj(m).nDim; % work on all dimensions by default
                 end
+
+                Bcell = cell(1,obj(m).nDim+1);
+
                 for d= dims% each dimension
                     W = obj(m).Weights(d);
                     B = W.basis;
+
+                    % if fixed set of weights, we convert to basis function
+                    % and project to get lighter data array
+                    add_dummy_basis = ~only_weight_structure && isempty(B) &&  constraint_type(W)=="fixed" && ~isempty(W.PosteriorMean);
+                    if add_dummy_basis && isa(obj(m).Data,"sparsearray")
+                        % make also sure that this is not a dummy dimension
+                        % used by one-hot-encoding dimensions
+                        OneHotDims = find(onehotencoding(obj(m).Data));% one-hot-encoded dimensions
+
+                        for ee =OneHotDims
+                            % make sure it's either not using current dimension
+                            not_using_this_dim = size(obj(m).Data.sub{ee},d+1)==1;
+            
+                            % or we'll project over it (so end up not using it)
+                            Bohe = obj(m).Weights(ee-1).basis;
+                            is_project_ohe = ~isempty(Bohe) && any(~[Bohe.projected]);
+                            
+                            add_dummy_basis = add_dummy_basis &&(not_using_this_dim||is_project_ohe);
+                        end
+                    end
+                    if  add_dummy_basis
+                        % build dummy basis structure
+                        B = struct();
+                        B.params = struct('dummy',true);
+                        B.fun='none';
+                        B.B = W.PosteriorMean;
+                        B.PosteriorMean = W.PosteriorMean;
+                        B.scale = W.scale;
+                        B.nWeight = W.nWeight;
+                        B.projected = true; % set projected boolean to true
+                        W.basis = B;
+
+                        % add to list to be projected
+                        Bcell{d+1} = W.PosteriorMean;
+
+                        % now weight matrix is simply 1
+                        W.PosteriorMean = 1;
+                        W.scale = nan;
+                        W.PosteriorStd = [];
+                        W.nWeight=1;
+                        obj(m).Weights(d) = W;                   
+                    end
 
                     if ~isempty(B) && any(~[B.projected]) % if this regressor uses a set of non-projected basis functions
 
@@ -2160,7 +2219,6 @@ classdef regressor
 
 
                         %% if initial value of weights are provided, compute in new basis
-
                         if  ~isempty(U)
                             B(1).PosteriorMean = U;
                             if constraint_type(W)~="fixed"
@@ -2178,25 +2236,26 @@ classdef regressor
 
                         W.PosteriorStd = [];
 
-                        % store copy of original data
-                        if isempty(obj(m).DataOriginal)
-                            obj(m).DataOriginal = obj(m).Data;
-                        end
-
-                        % apply change of basis to data (tensor product)
-                        Bcell = cell(1,obj(m).nDim+1);
-                        if ~isequal(Bmat, eye(new_nWeight)) || ~isequal(Bmat, speye(new_nWeight))
-                            % let's avoid the stupid case when Bmat is
-                            % identity (can happen with spectral trick)
-                            Bcell{d+1} = Bmat;
-                            obj(m).Data = tensorprod(obj(m).Data, Bcell);
-                        end
-
                         [B.projected] = deal(true); % set projected boolean to true
                         W.basis = B;
 
                         obj(m).Weights(d) = W;
+
+                        if ~isequal(Bmat, eye(new_nWeight)) || ~isequal(Bmat, speye(new_nWeight))
+                            % let's avoid the stupid case when Bmat is
+                            % identity (can happen with spectral trick)
+                            Bcell{d+1} = Bmat;
+                        end
                     end
+                end
+
+                if ~only_weight_structure && ~all(cellfun(@isempty,Bcell))
+                    if isempty(obj(m).DataOriginal)
+                        obj(m).DataOriginal = obj(m).Data;
+                    end
+
+                    % tensor product to compute new array
+                    obj(m).Data = tensorprod(obj(m).Data, Bcell);
                 end
             end
         end
@@ -2275,6 +2334,9 @@ classdef regressor
                             W.constraint = B(1).constraint;
                         end
                         W.basis = B;
+                        if isfield(B,'params') && isfield(B.params,'dummy') && B.params.dummy
+                            W.basis = []; % dummy basis function: remove corresponding structure
+                        end
 
                         obj(m).Weights(d) = W;
 
@@ -3508,6 +3570,9 @@ classdef regressor
 
                 obj.Weights(dd).constraint = interaction_constraints(obj.Weights(dd), W(d)); % update constraint
                 obj.Weights(dd).nWeight = nWeightCombination; % one set of weights in dim 1 for each level of dim 2
+                if ~isempty(W(dd).basis) && isfield(W(dd).basis,'nWeight') % creating issues and probably not needed at this stage
+                    obj.Weights(dd).basis.nWeight = nan;
+                end
                 obj.Weights(dd).scale = interaction_levels(W(dd).scale, W(d).scale);
                 obj.Weights(dd).dimensions = [obj.Weights([dd d]).dimensions];
                 if ~keeplabel
@@ -3524,29 +3589,14 @@ classdef regressor
                             obj.Data = fullcoding(obj.Data);
                         end
 
-                        %                         if isa(obj.Data,'sparsearray') && onehotencoding(obj.Data,dd+1) && strcmpi(summing{d}, 'split')
-                        % %% !!!! This looks like this is wrong (gives error as well)
-                        %
-                        %                             % if splitting dimension is encoding with
-                        %                             % OneHotEncoding, faster way
-                        %                             shift_value = obj.Data.siz(dd+1) * (0:nRep-1); % shift in each dimension (make sure we use a different set of indices for each value along dimension d
-                        %                             shift_size = ones(1,1+obj.nDim);
-                        %                             shift_size(d+1) = nRep;
-                        %                             shift = reshape(shift_value,shift_size);
-                        %
-                        %                             newSize = obj.Data.siz(dd+1)*nRep; % size along this dimension
-                        %                             obj.Data.siz(dd+1) = newSize;
-                        %
-                        %                             new_sub = double(obj.Data.sub{dd+1}) +  shift;
-                        %                             obj.Data.sub{dd+1} = int_code(newSize,  new_sub); % compress
-                        %
-                        %                         else % general case
                         obj.Data = split_data_along_dimension(obj.Data, dd, d, nRep, summing{d});
-                        %                       end
                         obj.Weights(dd).dimensions = [obj.Weights([dd d]).dimensions];
                         obj.Weights(dd) = replicate_constraint(obj.Weights(dd), nRep); % update constraint
                         obj.Weights(dd).scale = interaction_levels(W(dd).scale, W(d).scale);
                         obj.Weights(dd).nWeight = W(dd).nWeight*nRep; % one set of weights in dim dd for each level of splitting dimension
+                        if ~isempty(W(dd).basis) && isfield(W(dd).basis,'nWeight') % creating issues and probably not needed at this stage
+                            obj.Weights(dd).basis.nWeight = nan;
+                        end
 
                         % build covariance function as block diagonal
                         obj.Prior(dd).replicate = nRep * obj.Prior(dd).replicate;
@@ -4258,8 +4308,8 @@ classdef regressor
             % T = M.export_weights_to_table(obj);
             % creates a table with metrics for all weights (scale, PosteriorMean, PosteriorStd, T-statistics, etc.)
 
-           obj= obj.compute_prior_mean;
-            
+            obj= obj.compute_prior_mean;
+
             W = [obj.Weights]; % concatenate weights over regressors
             P = [obj.Prior];
             HPs = [obj.HP];
