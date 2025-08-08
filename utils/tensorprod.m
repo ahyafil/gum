@@ -33,7 +33,7 @@ for d= prod_dims
         
         X = u*X;
         
-    else % d2>=1
+    else % d2>=d1
         
         new_size = [d1 S(d)*d2];
         

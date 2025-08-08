@@ -267,6 +267,17 @@ classdef sparsearray
             obj.siz = S(P);
         end
 
+        %% TRANSPOSE, CTRANSPOSE
+        function obj = transpose(obj)
+            assert(ismatrix(obj),'TRANSPOSE does not support N-D arrays.');
+            obj=permute(obj,[2 1]);
+        end
+        function obj = ctranspose(obj)
+            assert(ismatrix(obj),'CTRANSPOSE does not support N-D arrays.');
+            obj = transpose(obj);
+            obj.value = conj(obj.value);
+        end
+        
         %% ISMATRIX
         function bool = ismatrix(obj)
             bool = ndims(obj)<=2;
@@ -278,10 +289,30 @@ classdef sparsearray
             bool = all(S(2:end)==1);
         end
 
-        %% ISORW
+        %% ISROW
         function bool = isrow(obj)
             S = size(obj);
             bool = S(1)==1 && all(S(3:end)==1);
+        end
+
+        %% SQUEEZE
+        function obj = squeeze(obj)
+            if ismatrix(obj)
+                obj.siz(3:end)=[];
+                return;
+            end
+
+            % spot singleton dimensions
+            singletons = size(obj)==1;
+            if ~any(singletons)
+                return;
+            end
+
+            ord = [find(~singletons) find(singletons)]; % place non-singleton dimensions first
+
+            obj = permute(obj,ord);
+            new_ndims = max(ndims(obj)-sum(singletons),2); 
+            obj.siz(new_ndims+1:end) = []; % remove ones at the end from siz
         end
 
         %% CONVERT TO SPARSE MATRIX
@@ -1091,6 +1122,14 @@ classdef sparsearray
             obj.value = abs(obj.value);
         end
 
+        %% SQRT, POWER
+        function obj = sqrt(obj)
+            obj.value = sqrt(obj.value);
+        end
+        function obj = power(obj,P)
+            obj.value = power(obj.value,P);
+        end
+
         %% CEIL, FLOOR, FIX, MOD, REM
         function obj=ceil(obj)
             obj.value = ceil(obj.value);
@@ -1461,7 +1500,8 @@ else
     obj2 = repmat(obj2, R2);
 
     % now apply function
-    x = fun(obj1.value, obj2.value);
+    %x = fun(obj1.value, obj2.value);
+    x = fun(obj1.value(:), obj2.value(:));
 end
 
 obj = sparsearray(x);

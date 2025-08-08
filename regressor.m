@@ -1222,7 +1222,7 @@ classdef regressor
                 i = idx(1,j);
                 d = idx(2,j);
                 obj(i).Weights(d).constraint = "fixed";
-                obj(i).Weights(d).PosteriorStd = nan(size(obj(i).Weights(d).PosteriorMean));
+                obj(i).Weights(d).PosteriorStd = zeros(size(obj(i).Weights(d).PosteriorMean));
                 obj(i).Weights(d).basis = []; % remove basis functions
 
                 obj(i).Prior(d) = empty_prior_structure(1); % remove prior
@@ -2276,11 +2276,13 @@ classdef regressor
                         tmp_scale = B(1).scale;
                         B(1).nWeight = obj(m).Weights(d).nWeight;
                         B(1).scale = obj(m).Weights(d).scale;
-                        obj(m).Weights(d).nWeight = tmp_nWeight;
-                        obj(m).Weights(d).scale = tmp_scale;
+                        %obj(m).Weights(d).nWeight = tmp_nWeight;
+                        %obj(m).Weights(d).scale = tmp_scale;
 
                         % save weights (mean, covariance, T-stat, p-value) in basis space in basis structure
                         W = obj(m).Weights(d); % weight structure
+                        W.nWeight = tmp_nWeight;
+                        W.scale = tmp_scale;
                         B(1).PosteriorMean =  W.PosteriorMean;
                         B(1).PosteriorStd =  W.PosteriorStd;
                         B(1).PosteriorCov = W.PosteriorCov;
@@ -2882,7 +2884,7 @@ classdef regressor
                     % if unidimensional, latent is normal since it's a linear transform of
                     % normal posterior
                     Z_var = sum((obj(m).Data * obj(m).Weights.PosteriorCov) .* obj(m).Data,2);
-                    Z_std(:,m) = sqrt(Z_var);
+                    Z_std(:,m) = sqrt(full(Z_var));
 
                     % for multidim should sample weights from posterior
                 end
@@ -5410,8 +5412,10 @@ end
 
 %% empty prior structure
 function P = empty_prior_structure(nD)
+%P = struct('type', 'none', 'CovFun',@infinite_cov, 'PriorCovariance',[],...
+%    'PriorMean',[], 'replicate',1, 'spectral',[], 'label','none');
 P = struct('type', 'none', 'CovFun',@infinite_cov, 'PriorCovariance',[],...
-    'PriorMean',[], 'replicate',1, 'spectral',[], 'label','none');
+    'PriorMean',[], 'replicate',1,  'label','none');
 
 % make it size nD
 P = repmat(P, 1, nD);

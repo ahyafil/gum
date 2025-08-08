@@ -62,7 +62,7 @@ if nargout>3
     gradB = zeros(nExp, length(X),length(HP));
     for p=1:nExp
         tau = exp(HP(p));
-        gradB(p,:,p) = B(p,:) .* (X-1)/tau;
+        gradB(p,:,p) = B(p,:) .* (X/tau-1);
     end
 
 end
