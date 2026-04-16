@@ -283,6 +283,19 @@ classdef gum
             end
             obj.T = y;
 
+            %% exclude observations with nan values in dependent variable
+            nan_obs = isnan(y);
+            if any(nan_obs)
+                fprintf('excluding %d observations with nan dependent variable\n', sum(nan_obs));
+                obj.regressor = M;
+                obj = obj.extract_observations(~nan_obs);
+                M = obj.regressor;
+                if isfield(param, 'split')
+                    param.split = cellfun(@(x) x(~nan_obs,:), param.split, 'unif',0);
+                end
+                n = obj.nObs;
+            end
+
             %% parse parameters
             if isfield(param,'observations')
                 obs = param.observations;
@@ -296,12 +309,12 @@ classdef gum
             else
                 obs = 'binomial';
             end
-            if strcmp(obs,'binomial') && any(y~=0 & y~=1)
+            if strcmp(obs,'binomial') && any(obj.T~=0 & obj.T~=1)
                 error('for binomial observations, T values must be 0 or 1');
-            elseif ismember(obs, {'poisson','neg-binomial'}) && any(y<0)
+            elseif ismember(obs, {'poisson','neg-binomial'}) && any(obj.T<0)
                 error('for count observations, all values must be non-negative');
             end
-            if all(y==0) || all(y==1)
+            if all(obj.T==0) || all(obj.T==1)
                 warning('T values are all 0 or 1, may cause problem while fitting');
             end
             obj.obs = obs;
@@ -489,9 +502,9 @@ classdef gum
             %%
 
             fprintf([repmat('=',1,80) '\n']); % line of ====
-
             % add weights to summary
             if obj.isestimated()
+                fprintf('WEIGHTS:\n');
                 print_weights(obj);
             else
                 fprintf('Weights: not estimated\n');
@@ -499,6 +512,7 @@ classdef gum
 
             % add hyperparameters to summary
             fprintf([repmat('=',1,80) '\n']); % line of ====
+            fprintf('HYPERPARAMETERS:\n');
             obj.print_hyperparameters;
 
         end
@@ -513,7 +527,7 @@ classdef gum
                 nReg = height(W);
 
                 if nReg>30
-                    fprintf('\nToo many regressor values (%d) to print, use export_weights_to_table instead\n', nReg);
+                    fprintf('Too many weights (%d) to print, use export_weights_to_table instead\n', nReg);
                 elseif isgam(obj)
                     fprintf('%12s %12s %8s %8s %8s %8s\n', 'Regressor','Level','Mean','StdDev','T-stat','p-value');
                     for r=1:nReg
@@ -544,7 +558,7 @@ classdef gum
             end
             if isgam(obj)
 
-                fprintf('%20s %20s %8s %8s %8s %8s\n', 'Regressor','HP','value','fittable','LowerBnd','UpperBnd');
+                fprintf('%20s %20s %8s %8s %8s %8s\n', 'Regressor','label','value','fittable','LowerBnd','UpperBnd');
                 for r=1:nHP
                     if iscell(H.label)
                         this_label = H.label{r};
@@ -574,7 +588,7 @@ classdef gum
 
 
         %% SELECT SUBSET OF OBSERVATIONS FROM MODEL
-        function obj = extract_observations(obj,subset, drop_unused, compute_npar)
+        function obj = extract_observations(obj, subset, drop_unused, compute_npar)
             % M = extract_observations(M, subset) generates a model with
             % only observations provided by vector subset. subset is either
             % a vector of indices or a boolean vector indicating
@@ -706,8 +720,16 @@ classdef gum
 
             assert(isscalar(obj), 'splits works only on single models');
 
-            if size(S,1)~=obj.nObs
-                error('splitting variable must be a vector of the same length as number of observation in model');
+            if ~iscell(S)
+                S = num2cell(S,1); % one cell for each splitting variable
+            end
+            if ~all(cellfun(@(x) size(x,1),S)==obj.nObs)
+                if isfield(obj.param, 'split') &&  all(cellfun(@(x) size(x,1),S)==length(obj.param.split{1}))
+                    % splitting variable was defined for whole dataset
+                     S = cellfun(@(x) x(obj.param.split{1},:), S, 'unif',0);
+                else
+                error('splitting variables must be vectors of the same length as number of observation in model');
+                end
             end
 
             if nargin>=3
@@ -716,7 +738,14 @@ classdef gum
             else
                 label = "SplittingVariable"+(1:size(S,2));
             end
-            [V, ~, idV] = unique(S,'rows'); % all unique values (or combinations of values if various splitting vars)
+            
+            % we do it this circumvoluted way in order to sort integers
+            % values numerically and string alphabetically
+            Tsplit = table(S{:},'VariableNames',label);
+            [T_unique, ~, idV] = unique(Tsplit, 'rows');
+            for sv = label, T_unique.(sv) = string(T_unique.(sv)); end
+            V = table2array(T_unique);
+            %[V, ~, idV] = unique(S,'rows'); % all unique values (or combinations of values if various splitting vars)
             nV = size(V,1); % number of unique values
 
             single_splitting_var = isrow(S);
@@ -1254,6 +1283,7 @@ classdef gum
             % - 'AIC_infer': Akaike Information Criterion
             % - 'AICc_infer': corrected Akaike Information Criterion
 
+            
             %% parse parameters
             parm = param_structure(varargin);
 
@@ -1269,6 +1299,7 @@ classdef gum
             if ~isfield(parm, 'initialpoints') % number of initial points for inference algorithm
                 parm.initialpoints = 10;
             end
+
 
             if ~isfield(parm, 'verbose')
                 if length(obj)>=10
@@ -1330,6 +1361,11 @@ classdef gum
             if isgam(obj)
                 obj.param.initialpoints = 1; % if no multilinear term, problem is convex so no local minima
             end
+
+            % check cross-validation structure
+            if isfield(parm, 'crossvalidation')
+        obj.param.crossvalidation = parm.crossvalidation;
+                end
             obj = obj.check_crossvalidation;
 
             %% evaluate prior covariances for given hyperparameters
@@ -1385,9 +1421,9 @@ classdef gum
             end
 
             %% cross validation
-            crossvalid = isfield(parm, 'crossvalidation') && ~isempty(parm.crossvalidation);
+            crossvalid = isfield(obj.param, 'crossvalidation') && ~isempty(obj.param.crossvalidation);
             if crossvalid
-                CV = parm.crossvalidation;
+                CV = obj.param.crossvalidation;
                 nSet = CV.NumTestSets;
                 variance = cell(1,nM);
                 for m=1:nM
@@ -2433,12 +2469,61 @@ classdef gum
         end
 
         %% COMPUTE LATENT VARIABLES
-        function obj = compute_latent(obj)
+        function obj = compute_latent(obj, varargin)
             % M = M.compute_latent() compute latent variables
             % Latent variable mean and standard deviations are stored in
             % fields 'latent' and 'latent_std' in M.Predictions.Latent
+            %
+            % T = M.compute_latent('table'); to expoert latent variables
+            % (means and standard deviations) as a table T. 
+            %
+            % M.compute_latent('include_std',false) to compute only means
+            % and not standard deviations for latents (can speed up,
+            % especially for multidimensional regressors).
+
+do_table = false;
+do_std = true;
+            v = 1;
+            while v<length(varargin)
+                switch lower(varargin{v})
+                    case 'table'
+                        do_table = true;
+                    case 'include_std'
+                        do_std = varargin{v+1};
+                        v = v+1;
+                end
+                v = v+1;
+            end
+
+            if do_table
+                assert(isscalar(obj), "M.compute_latent('table') only works for scalar gum object M");
+                if do_std
+                    [latent,latent_std] = obj.regressor.Latent();
+                else
+                    latent= obj.regressor.Latent();
+                end
+                latent_label =  latent_labels(obj.regressor);    
+
+                % create cell arrays with one cell per variable (and
+                % standard deviation)                
+                if do_std
+                    vars = [num2cell(latent,1) num2cell(latent_std,1)];
+                    latent_label = [latent_label latent_label+"_std"]; % add labels ending with "_std" for std variables
+                else
+                    vars = num2cell(latent,1);
+                end
+
+                % create table
+                obj = table(vars{:},'VariableName',latent_label);
+                return;
+            end
+
             for i=1:numel(obj)
-                [obj(i).Predictions.latent,obj(i).Predictions.latent_std] = obj(i).regressor.Latent();
+                if do_std
+                    [obj(i).Predictions.latent,obj(i).Predictions.latent_std] = obj(i).regressor.Latent();
+                else
+                    obj(i).Predictions.latent = obj(i).regressor.Latent();
+                end
                 obj(i).Predictions.latent_label =  latent_labels(obj(i).regressor);
             end
 
@@ -3456,23 +3541,23 @@ classdef gum
         end
 
         %% CONCATENATE WEIGHTS OVER POPULATION
-        function obj = concatenate_over_models(obj, place_first, splitting_variable)
+        function obj = concatenate_over_models(obj, splitting_variable, place_first)
             % M = concatenate_over_models(M)
             % concatenates weights from array of models (e.g. same model for different datasets) into a single model object (usually for plotting
             % and storing)
             %
-            % M = concatenate_over_models(M, false) to place model index as
-            % last dimension in weights (default: first dimension)
-            %
-            % concatenate_over_models(M, bool, label) or concatenate_over_models(M, [], label)
+            % concatenate_over_models(M, label) 
             % to concatenate models over splitting variable provided by
             % label (when M is obtained by splitting dataset along multiple
             % variables).
+            %
+            % concatenate_over_models(M, label, false) or concatenate_over_models(M, [], false) to place model index as
+            % last dimension in weights (default: first dimension)
 
-            if nargin==1 || isempty(place_first) % whether we put model index as first dimension in weights
+            if nargin<3 || isempty(place_first) % whether we put model index as first dimension in weights
                 place_first = true;
             end
-            if nargin<3
+            if nargin==1 
                 splitting_variable = [];
             end
             nObj = length(obj);
@@ -3487,15 +3572,15 @@ classdef gum
                 AllSplitVar = [];
             end
 
-            if nargin<3 && ~isempty(AllSplitVar)
+            if nargin< 2 && ~isempty(AllSplitVar)
                 % concatenate first over splitting variables
                 for v = 1:length(AllSplitVar)
-                    obj = obj.concatenate_over_models(place_first, AllSplitVar(v));
+                    obj = obj.concatenate_over_models(AllSplitVar(v), place_first);
                 end
 
                 % then over models (if more than one)
                 if ~isscalar(obj)
-                    obj = obj.concatenate_over_models(place_first,[]);
+                    obj = obj.concatenate_over_models([], place_first);
                 end
                 return;
             end
@@ -3527,13 +3612,13 @@ classdef gum
 
                         SplittingVariable = obj(iModel(1)).score.SplittingVariable;
 
-                        for m=1:length(iModel)
-                            obj(iModel(m)).score.Dataset = obj(m).score.Dataset(iConcat);
-                            obj(iModel(m)).score.SplittingVariable = SplittingVariable(iConcat);
+                        for m=iModel' % keep Dataset and SplittingVariable only for concatenated variable (?)
+                            obj(m).score.Dataset = obj(m).score.Dataset(iConcat);
+                            obj(m).score.SplittingVariable = SplittingVariable(iConcat);
                         end
                         % concatenate these models together
                         %  obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,[]);
-                        obj(iModel(1)) = obj(iModel).concatenate_over_models(place_first,splitting_variable);
+                        obj(iModel(1)) = obj(iModel).concatenate_over_models(splitting_variable, place_first);
 
                         obj(iModel(1)).score.Dataset = AllSplittingLevels(iModel,:);
                         obj(iModel(1)).score.SplittingVariable=SplittingVariable;
@@ -3606,10 +3691,11 @@ classdef gum
 
                             % find the indices in sc corresponding to values
                             % for this model
-                            idx = zeros(1,size(ss,2));
-                            for v=1:size(ss,2)
-                                idx(v) = find(all(ss(:,v)==sc,1));
-                            end
+                            [~,idx] = ismember(ss',sc',"rows");
+                            %idx = zeros(1,size(ss,2));
+                            %for v=1:size(ss,2)
+                            %    idx(v) = find(all(ss(:,v)==sc,1));
+                            %end
 
                             % replace with larger arrays with nans for
                             % missing values
@@ -3741,7 +3827,7 @@ classdef gum
                 % concatenate first over splitting variables
                 AllSplitVar = obj(1).score.SplittingVariable;
                 for v = 1:length(AllSplitVar)
-                    obj = obj.concatenate_over_models(true, AllSplitVar(v));
+                    obj = obj.concatenate_over_models(AllSplitVar(v));
                 end
             end
 
@@ -3909,7 +3995,7 @@ classdef gum
             % first concatenate
             if ~isempty(lbl)
                 % concatenate over single variable
-                obj = concatenate_over_models(obj, true, lbl);
+                obj = concatenate_over_models(obj, lbl);
 
                 for i=1:numel(obj)
                     iConcat = strcmp(obj(i).score.SplittingVariable, lbl);
@@ -3919,7 +4005,7 @@ classdef gum
                     obj(i).label = obj(i).score.Dataset + " (average over " + lbl + ")";
                 end
             else
-                obj = concatenate_over_models(obj, true);
+                obj = concatenate_over_models(obj);
 
                 obj.score.Dataset = "average over "+n+ " datasets";
                 obj.label = obj.score.Dataset;
@@ -4182,6 +4268,13 @@ classdef gum
             % M = M.check_crossvalidation;
             % process cross-validation set
 
+            if ~isscalar(obj)
+                for m=1:numel(obj)
+                    obj(m) = obj(m).check_crossvalidation;
+                end
+                return;
+            end
+
             if ~isfield(obj.param, 'crossvalidation') || isempty(obj.param.crossvalidation)
                 % if no cross-validation is planned, we're fine!
                 return;
@@ -4198,7 +4291,7 @@ classdef gum
             n_noTS = n-nTS;
 
             CV = obj.param.crossvalidation;
-            if iscell(CV) % permutations are already provided as nperm x 2 cell (first col: train set, 2nd: validation set)
+            if iscell(CV) % permutations are provided as nperm x 2 cell (first col: train set, 2nd: validation set)
 
                 % replace by structure
                 CV_tmp = struct;
@@ -6134,7 +6227,7 @@ if ~isempty(T_fmla)
     fmla_split = T_fmla(2:end);
     fmla_split(end+1) = ','; % add dummy coma as separator between splitting variables
 
-    param.split = [];
+    param.split = {};
     param.SplittingVariable = string([]);
     while any(fmla_split==',') % still any splitting variable to process
         i_coma = find(fmla_split==',',1);
@@ -6143,11 +6236,11 @@ if ~isempty(T_fmla)
             error('Variable ''%s'' is not present in the table', SplitVar);
         end
 
-        this_var = Tbl.(SplitVar);
-        if iscell(this_var)
-            this_var = string(this_var);
-        end
-        param.split = [param.split this_var];  % get values from table and add as column
+      %  this_var = Tbl.(SplitVar);
+      %  if iscell(this_var)
+      %      this_var = string(this_var);
+      %  end
+        param.split{end+1} =  Tbl.(SplitVar);  % get values from table and add as cell
         param.SplittingVariable(end+1) = SplitVar; % add label
         fmla_split(1:i_coma) = []; % remove this part of formula
     end
@@ -6407,7 +6500,7 @@ while ~isempty(fmla)
         if ~isempty(v) %% linear variable
 
             opts = struct;
-            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v))
+            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v)) || iscellstr(Tbl.(v))
                 type = 'categorical';
             else
                 type = 'linear';
@@ -6531,6 +6624,9 @@ while ~isempty(fmla)
                         fmla(1:i-1) = [];
                         if isnan(LS.lags)
                             error('Value for option ''%s'' should be numeric',option);
+                        end
+                        if isempty(LS.lags)
+                            error('Lags should not be an empty vector');
                         end
                     case 'split'
                         [ LS.splitvalue, fmla] = starts_with_boolean(fmla);

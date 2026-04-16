@@ -219,6 +219,21 @@ classdef sparsearray
                 end
             end
 
+            % easy case: when no OHE and non-singleton dims do not move
+            % w.r.t other non-single dims
+            if ~any(onehotencoding(obj))
+                non_singleton_dims = find(obj.size>1);
+                [~,new_dim_id]=ismember(non_singleton_dims, P); % where they permute to
+                if all(diff(new_dim_id)>0) % test if ascending order
+                    % we basically just need to update size
+                    S = size(obj);
+                    S(end+1:length(P)) = 1;
+                    obj.siz = S(P);
+                    return;
+                end
+            end
+
+
             % permute value array
             if issparse(obj.value)
 
@@ -277,7 +292,7 @@ classdef sparsearray
             obj = transpose(obj);
             obj.value = conj(obj.value);
         end
-        
+
         %% ISMATRIX
         function bool = ismatrix(obj)
             bool = ndims(obj)<=2;
@@ -311,7 +326,7 @@ classdef sparsearray
             ord = [find(~singletons) find(singletons)]; % place non-singleton dimensions first
 
             obj = permute(obj,ord);
-            new_ndims = max(ndims(obj)-sum(singletons),2); 
+            new_ndims = max(ndims(obj)-sum(singletons),2);
             obj.siz(new_ndims+1:end) = []; % remove ones at the end from siz
         end
 
@@ -1179,7 +1194,7 @@ classdef sparsearray
 
         %% TENSOR PRODUCT
         function P = tensorprod(obj,U)
-           
+
             if all(cellfun(@isempty,U))
                 P=obj;
                 return;
@@ -1189,7 +1204,7 @@ classdef sparsearray
             OneHot = onehotencoding(obj);
             OneHotDims = find(OneHot); % dim to project on and sparse dims
             projDims = find(~cellfun(@isempty,U)); % projection dimensions (with tensor product)
-            
+
             for d=projDims
                 assert(size(U{d},2)==size(obj,d),'number of columns of projecting matrix does not match with size along corresponding dimension');
             end
@@ -1270,13 +1285,13 @@ classdef sparsearray
                 obj.value = matrix(reshape(V, size(V,1), numel(V)/size(V,1)));
             end
 
-            
+
             still_to_do = ~cellfun(@isempty,U);
             if sum(still_to_do)==0
                 % we're done
                 P = obj;
                 return;
-            
+
             elseif sum(still_to_do)==1
                 %% deal with special case when we only need to project over one dummy dimension (should be faster this way)
                 d = find(still_to_do);
@@ -1304,7 +1319,7 @@ classdef sparsearray
                 end
             end
 
-            %% project remaining non-OHE dimensions 
+            %% project remaining non-OHE dimensions
             %if still OHE dimensions, put them aside for tprod and add them back
             %later (avoid fullcoding those dimensions)
             sub_tmp = {};
@@ -1312,25 +1327,25 @@ classdef sparsearray
             keep_aside_size=[];
             for d=find(obj.onehotencoding)
                 % make sure projecting dimensions not used in sub
-                 keep_aside = true; 
-            for ee =find(still_to_do)
-                keep_aside = keep_aside&& size(obj.sub{d},ee)==1; 
-            end 
-            if keep_aside
-                sub_tmp(d) = obj.sub(d);
-                keep_aside_dims(end+1)=d;
-                keep_aside_size(d)=obj.siz(d);
+                keep_aside = true;
+                for ee =find(still_to_do)
+                    keep_aside = keep_aside&& size(obj.sub{d},ee)==1;
+                end
+                if keep_aside
+                    sub_tmp(d) = obj.sub(d);
+                    keep_aside_dims(end+1)=d;
+                    keep_aside_size(d)=obj.siz(d);
 
-                % remove OHE dim from current object
-                obj.sub{d} =[];
-                obj.siz(d) =1;
-            end
+                    % remove OHE dim from current object
+                    obj.sub{d} =[];
+                    obj.siz(d) =1;
+                end
             end
 
             obj = fullcoding(obj);
 
             % apply tensor product
-            [P,S] = tprod(obj.value, U, obj.siz); 
+            [P,S] = tprod(obj.value, U, obj.siz);
 
             if (issparse(P) && length(S)>2) || ~isempty(keep_aside_dims)
                 P = sparsearray(P);

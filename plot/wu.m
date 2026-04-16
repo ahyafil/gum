@@ -20,7 +20,7 @@ function varargout = wu(varargin)
 % are:
 % - 'std' :standard deviation (default option for 'mean')
 % - 'sem': standard error of the mean
-% - 'correctedste': standard error of the mean removing mean value over
+% - 'corrected_sem': standard error of the mean removing mean value over
 % all data in the same line (i.e. removing variance due to random factor),
 % provides a visual hint of significance of t-test
 % - 'quartile': plots 1st and 3rd quartile
@@ -436,7 +436,7 @@ while v<=length(varargin)
                     linestyle = string(varg);
                 case {'.','o','x','+','*','s','d','v','^','<','>','p','h'}
                     marker = string(varg);
-                case {'sem','ste', 'std', 'correctedste', 'quartile','noerror'}
+                case {'sem','ste', 'std', 'correctedste','corrected_sem','correctedsem','quartile','noerror'}
                     errorbars = varg;
                 case {'curve', 'bar', 'xy', 'imagesc'}  %'noplot'
                     plottype = varg;
@@ -553,7 +553,7 @@ if isempty(L)
                 else
                     L = nstd(Yraw,1);
                 end
-            case 'correctedste'
+            case {'correctedste','corrected_sem','correctedsem'}
                 Ym = reshape(Yraw, [size(Yraw,1) prod(siz)]); %
                 Ym = mean(Ym, 2);  % means across all conditions
                 L = nan_ste(bsxfun(@minus,Yraw,Ym)); %remove these means from individual values
@@ -577,7 +577,7 @@ if isempty(L)
             case 'std'
                 L = cellfun(@std, Yraw);
                 U = L;
-            case 'correctedste'
+            case {'correctedste','corrected_sem','correctedsem'}
                 warning('cannot correct for random factor variance if data is not paired, using classical standard error instead');
                 L = cellfun(@sem, Yraw);
                 U = L;

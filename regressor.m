@@ -459,6 +459,10 @@ classdef regressor
                         OneHotEncoding(nD) = 1;
                     end
 
+                    if iscellstr(X) % convert cell array of chars to string
+                        X = string(X);
+                    end
+
                     % build design matrix
                     this_scale = unique(X); % unique values
                     if isnumeric(this_scale)
@@ -739,7 +743,7 @@ classdef regressor
 
         %% WHETHER WEIGHTS ARE FREE (NOT CONSTRAINED)
         function bool = isFreeWeightSet(obj, d)
-            assert(numel(obj)==1, 'only for scalar regressor object');
+            assert(isscalar(obj), 'only for scalar regressor object');
             if nargin==1
                 d = 1:obj.nDim;
             end
@@ -748,7 +752,7 @@ classdef regressor
 
         %% WHETHER WEIGHTS ARE FIXED (FULLY CONSTRAINED)
         function bool = isFixedWeightSet(obj)
-            assert(numel(obj)==1, 'only for scalar regressor object');
+            assert(isscalar(obj), 'only for scalar regressor object');
             bool = constraint_type(obj.Weights)=="fixed";
         end
 
@@ -1276,21 +1280,42 @@ classdef regressor
 
 
         %% DROP UNUSED VALUES IN SCALE
-        function obj = drop_unused_values(obj)
+        function obj = drop_unused_values(obj, unused)
             % R = R.drop_unused_values to remove values in scales that are not present
             % in the dataset (i.e. corresponding column in design matrix is just
             % zeros).
 
-            assert(isscalar(obj), 'only coded for single regressors - use for loop');
+            if nargin==1
+                assert(isscalar(obj), 'only coded for single regressors - use for loop');
 
-            % compute design matrix (all dimensions)
-            obj2 = obj;
-            obj2.Data = abs(obj.Data); % we'll compute sum of absolute values and compare to zero
+                %% first let's drop unused values in OHE (will speed up next
+                % step)
+                if isa(obj.Data, 'sparsearray')
+                    unused = cell(1,obj.nDim);
+                    for d = 1:obj.nDim
+                        if length(obj.Data.sub)>d && ~isempty(obj.Data.sub{d+1})
+                            % values that do not appear in OHE array
+                            unused{d} = ~ismember(1:size(obj.Data,d+1), obj.Data.sub{d+1}(:));
+                        else % non OHE dim
+                            unused{d} = false(1,size(obj.Data,d+1));
+                        end
+                    end
+                    unused = [unused{:}];
+                    obj = obj.drop_unused_values(unused);
+                end
 
-            obj2 = obj2.set_weights(ones(1,obj.nTotalParameters));
-            Phi = design_matrix(obj2,[], 0, false);
-            unused = all(Phi==0,1); % unused values
+                % now do the all-purpose version
+                % compute design matrix with absolute design matrix(all dimensions)
+                obj2 = obj;
+                obj2.Data = abs(obj.Data); % we'll compute sum of absolute values and compare to zero
+                obj2 = obj2.set_weights(ones(1,obj.nTotalParameters));
+                Phi = design_matrix(obj2,[], 0, false);
+                unused = sum(Phi,1)==0; % if sum is 0 over all observation: unused values
+                obj = obj.drop_unused_values(unused);
+                return;
+            end
 
+            %% one we have already computed the missing ones
             d = 1;
             Wfields = ["PosteriorMean","PosteriorStd","PosteriorCov","T","p","scale","U_allstarting","U_CV"];
             while any(unused)
@@ -2125,11 +2150,11 @@ classdef regressor
                         for ee =OneHotDims
                             % make sure it's either not using current dimension
                             not_using_this_dim = size(obj(m).Data.sub{ee},d+1)==1;
-            
+
                             % or we'll project over it (so end up not using it)
                             Bohe = obj(m).Weights(ee-1).basis;
                             is_project_ohe = ~isempty(Bohe) && any(~[Bohe.projected]);
-                            
+
                             add_dummy_basis = add_dummy_basis &&(not_using_this_dim||is_project_ohe);
                         end
                     end
@@ -2153,7 +2178,7 @@ classdef regressor
                         W.scale = nan;
                         W.PosteriorStd = [];
                         W.nWeight=1;
-                        obj(m).Weights(d) = W;                   
+                        obj(m).Weights(d) = W;
                     end
 
                     if ~isempty(B) && any(~[B.projected]) % if this regressor uses a set of non-projected basis functions
@@ -2883,8 +2908,18 @@ classdef regressor
 
                     % if unidimensional, latent is normal since it's a linear transform of
                     % normal posterior
-                    Z_var = sum((obj(m).Data * obj(m).Weights.PosteriorCov) .* obj(m).Data,2);
-                    Z_std(:,m) = sqrt(full(Z_var));
+                    PCov = obj(m).Weights.PosteriorCov;
+                    if size(PCov,1)==size(PCov,2)
+                        Z_var = sum((obj(m).Data * PCov) .* obj(m).Data,2);
+                        Z_std(:,m) = sqrt(full(Z_var));
+                    else
+                        % if posterior covariance is not square, it's
+                        % because we're using basis functions so compute
+                        % in basis space
+                        Rdummy = obj(m).project_to_basis;
+                        Z_var = sum((Rdummy.Data * obj(m).Weights.basis.PosteriorCov) .* Rdummy.Data,2);
+                        Z_std(:,m) = sqrt(full(Z_var));
+                    end
 
                     % for multidim should sample weights from posterior
                 end
@@ -4348,7 +4383,7 @@ classdef regressor
                                     scale_string = scale_string + ",";
                                 end
                             end
-                        elseif isnan(sc)
+                        elseif ~isstring(sc) && all(isnan(sc))
                             scale_string = "";
                         else
                             scale_string = string(sc);
@@ -5575,38 +5610,35 @@ function [I,siz] = replace(X, scale) % replace X values by indices
 
 siz = size(X);
 if size(scale,1)>1 % if using combination of values
-    D = siz(end); % dimensionality
-    siz(end) = [];
-    if length(siz)==1
-        siz(2) = 1;
-    end
-    nX = prod(siz); % number of data points
-
-    % we'll use columns for different values and match them one by one
-    I = zeros(siz);
-    for u=1:size(scale,2) % find matching data points
-        bool = true(nX,1); % start with all data points
-        for d=1:D % loop through dimensions
-            % keep only if matches this dimension also
-            if iscell(scale)
-                bool = bool & strcmp(X(:,d),scale{d,u});
-            else
-                bool = bool & (X(:,d)==scale(d,u));
-            end
-        end
-        % assign index
-        I(bool) = u;
-    end
+    [~, I] = ismember(X, scale, "rows");
+    
+    % % ! should probably use ismember as below to speed things up
+    % D = siz(end); % dimensionality
+    % siz(end) = [];
+    % if isscalar(siz)
+    %     siz(2) = 1;
+    % end
+    % nX = prod(siz); % number of data points
+    % 
+    % % we'll use columns for different values and match them one by one
+    % I = zeros(siz);
+    % for u=1:size(scale,2) % find matching data points
+    %     bool = true(nX,1); % start with all data points
+    %     for d=1:D % loop through dimensions
+    %         % keep only if matches this dimension also
+    %         if iscell(scale)
+    %             bool = bool & strcmp(X(:,d),scale{d,u});
+    %         else
+    %             bool = bool & (X(:,d)==scale(d,u));
+    %         end
+    %     end
+    %     % assign index
+    %     I(bool) = u;
+    % end
 
 else % one-dimensional scale
-    I = zeros(siz);
-    for u=1:size(scale,2) % replace each value in the vector by its index
-        if iscell(scale) % cell array of strings
-            I( strcmp(X,scale{u})) = u;
-        else
-            I( X==scale(u)) = u;
-        end
-    end
+    % replace each value in the vector by its index
+    [~, I] = ismember(X, scale);
 end
 end
 
