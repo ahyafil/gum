@@ -177,7 +177,7 @@ classdef gum
     methods
 
         %% %%%%%% CONSTRUCTOR %%%%%
-        function obj = gum(M, y, varargin)
+        function obj = gum(T, fmla, varargin)
             if nargin==0
                 %% empty class
                 return;
@@ -186,10 +186,14 @@ classdef gum
             % optional parameters
             param = param_structure(varargin);
 
-            if istable(M)
-                fmla = y;% formula
-                [M, y, param] = parse_formula(M,fmla, param); % parse formula
+            if istable(T)
+                % gum(T, fmla,...)
+                [M, y, param] = parse_formula(T,fmla, param); % parse formula
                 obj.formula = fmla;
+            else
+                % gum(M, y,...)
+                M = T;
+                y = fmla;
             end
 
             obj.regressor = M;
@@ -726,9 +730,9 @@ classdef gum
             if ~all(cellfun(@(x) size(x,1),S)==obj.nObs)
                 if isfield(obj.param, 'split') &&  all(cellfun(@(x) size(x,1),S)==length(obj.param.split{1}))
                     % splitting variable was defined for whole dataset
-                     S = cellfun(@(x) x(obj.param.split{1},:), S, 'unif',0);
+                    S = cellfun(@(x) x(obj.param.split{1},:), S, 'unif',0);
                 else
-                error('splitting variables must be vectors of the same length as number of observation in model');
+                    error('splitting variables must be vectors of the same length as number of observation in model');
                 end
             end
 
@@ -738,7 +742,7 @@ classdef gum
             else
                 label = "SplittingVariable"+(1:size(S,2));
             end
-            
+
             % we do it this circumvoluted way in order to sort integers
             % values numerically and string alphabetically
             Tsplit = table(S{:},'VariableNames',label);
@@ -936,15 +940,15 @@ classdef gum
                 return;
             end
 
-%             if strcmpi(algo,'em')
-%                 W = [M.Weights];
-%                 basis = {W.basis};
-%                 basis = basis(~cellfun(@isempty,basis));
-%                 if any(contains([HPall.type],'basis') & HP_fittable) && ...
-%                         ~isempty(basis) && any(~cellfun(@(x) x.fixed,basis))% if  any fittable HP parametrizes basis functions
-%                     warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
-%                 end
-%             end
+            %             if strcmpi(algo,'em')
+            %                 W = [M.Weights];
+            %                 basis = {W.basis};
+            %                 basis = basis(~cellfun(@isempty,basis));
+            %                 if any(contains([HPall.type],'basis') & HP_fittable) && ...
+            %                         ~isempty(basis) && any(~cellfun(@(x) x.fixed,basis))% if  any fittable HP parametrizes basis functions
+            %                     warning('Log-evidence may not increase at every iteration of EM when fitting hyperparameters controlling basis functions. If log-evidence decreases, take results with caution and consider using crossvalidation instead.');
+            %                 end
+            %             end
 
             % retrieve number of fittable hyperparameters and their indices
             % for each regressor set
@@ -1283,7 +1287,7 @@ classdef gum
             % - 'AIC_infer': Akaike Information Criterion
             % - 'AICc_infer': corrected Akaike Information Criterion
 
-            
+
             %% parse parameters
             parm = param_structure(varargin);
 
@@ -1364,8 +1368,8 @@ classdef gum
 
             % check cross-validation structure
             if isfield(parm, 'crossvalidation')
-        obj.param.crossvalidation = parm.crossvalidation;
-                end
+                obj.param.crossvalidation = parm.crossvalidation;
+            end
             obj = obj.check_crossvalidation;
 
             %% evaluate prior covariances for given hyperparameters
@@ -2475,16 +2479,16 @@ classdef gum
             % fields 'latent' and 'latent_std' in M.Predictions.Latent
             %
             % T = M.compute_latent('table'); to expoert latent variables
-            % (means and standard deviations) as a table T. 
+            % (means and standard deviations) as a table T.
             %
             % M.compute_latent('include_std',false) to compute only means
             % and not standard deviations for latents (can speed up,
             % especially for multidimensional regressors).
 
-do_table = false;
-do_std = true;
+            do_table = false;
+            do_std = true;
             v = 1;
-            while v<length(varargin)
+            while v<=length(varargin)
                 switch lower(varargin{v})
                     case 'table'
                         do_table = true;
@@ -2496,16 +2500,57 @@ do_std = true;
             end
 
             if do_table
-                assert(isscalar(obj), "M.compute_latent('table') only works for scalar gum object M");
+                if ~isscalar(obj)
+
+                    % let's first check that different objects correspond
+                    % to splits of the same dataset
+                    all_pars = [obj.param];
+                    splitvarnames = {all_pars.SplittingVariable};
+                    if ~isequaln(splitvarnames{:})
+                        error('cannot merge latent variables from different GUM objects into single table if objects do not correspond to same splitted dataset');
+                    end
+                    splitvars = {all_pars.split};
+                    n_split = cellfun(@length, splitvars);
+                    if any(n_split==0) || any(n_split~=n_split(1))
+                        error('cannot merge latent variables from different GUM objects into single table if objects do not correspond to same splitted dataset');
+                    end
+
+                    % compute latent vars for each model
+                    Tcell = cell(1,numel(obj));
+                    for i=1:numel(obj)
+                        Tcell{i} = obj(i).compute_latent(varargin{:}); 
+                    end
+
+                    latent_lbl = cellfun(@(x) x.Properties.VariableNames, Tcell, 'unif',0); % all latent variables for all models
+                    if ~isequaln(latent_lbl{:})
+                        error('cannot merge latent variables from different GUM objects into single table if latent variable labels do not match between objects');
+                    end
+
+                    % merge in single table
+                    nvars = length(latent_lbl{1});
+                    obj = array2table(NaN(n_split(1),nvars), 'VariableNames', latent_lbl{1}); % pre_allocate with nan
+                    already_in = false(n_split(1),1);
+                    for i=1:length(Tcell)
+                        if any(already_in & splitvars{i})
+                            warning('overlapping observations from different GUM objects');
+                        end
+                        obj(splitvars{i},:) = Tcell{i};
+                        already_in(splitvars{i}) = true;
+                    end
+
+                    return; % we're done
+                end
+
+                % now dealing with scalar GUM and exporting to table
                 if do_std
                     [latent,latent_std] = obj.regressor.Latent();
                 else
                     latent= obj.regressor.Latent();
                 end
-                latent_label =  latent_labels(obj.regressor);    
+                latent_label =  latent_labels(obj.regressor);
 
                 % create cell arrays with one cell per variable (and
-                % standard deviation)                
+                % standard deviation)
                 if do_std
                     vars = [num2cell(latent,1) num2cell(latent_std,1)];
                     latent_label = [latent_label latent_label+"_std"]; % add labels ending with "_std" for std variables
@@ -3413,7 +3458,7 @@ do_std = true;
                 index = unique(I(1,:)); % regressors that appear at list once in list of weights
             end
 
-            if length(index) ==1
+            if isscalar(index)
                 obj.label = obj.regressor(index).formula + " knock-out";
             end
 
@@ -3546,7 +3591,7 @@ do_std = true;
             % concatenates weights from array of models (e.g. same model for different datasets) into a single model object (usually for plotting
             % and storing)
             %
-            % concatenate_over_models(M, label) 
+            % concatenate_over_models(M, label)
             % to concatenate models over splitting variable provided by
             % label (when M is obtained by splitting dataset along multiple
             % variables).
@@ -3557,7 +3602,7 @@ do_std = true;
             if nargin<3 || isempty(place_first) % whether we put model index as first dimension in weights
                 place_first = true;
             end
-            if nargin==1 
+            if nargin==1
                 splitting_variable = [];
             end
             nObj = length(obj);
@@ -3674,28 +3719,35 @@ do_std = true;
                     end
 
                     % check if different scales used across models
-                    DifferentScale = ~all(cellfun(@(x) isequal(x,scale{1,d}) ,scale(2:end,d)));
-                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(isnumeric(x),'all') && all(isnan(x)), scale(:,d))); % if scale of nans
-                    if DifferentScale && isnumeric(scale{1,d})
+                    all_scale = scale(:,d);
+                    if isstring(all_scale{1}) % need to change nan to given unique value to avoid issues with equal and nan
+                        tmp = sort(reshape([all_scale{:}],[],1),'MissingPlacement','first');
+                        missing_val = tmp(end)+"_"; % unique value we'll assign to missing
+                    else
+                        missing_val = max(reshape([all_scale{:}],[],1))+1; % unique value we'll assign to missing
+                    end
+                    all_scale_no_missing = cellfun(@(x) fillmissing(x,'constant',missing_val), all_scale,'UniformOutput',0);
+
+                    %DifferentScale = ~all(cellfun(@(x) isequal(x,all_scale_no_missing{1}) ,all_scale_no_missing(2:end)));
+                    DifferentScale = ~isequaln(all_scale_no_missing{:});
+                    DifferentScale = DifferentScale && ~all(cellfun(@(x) all(ismissing(x),'all'), all_scale)); % if scale of nans
+                    if DifferentScale && isnumeric(all_scale{1})
 
                         % just in case same scale with some numerical imprecisions
-                        DifferentScale = ~all(cellfun(@(x) isequal(size(x),size(scale{1,d})) ,scale(2:end,d))) || ...
-                            ~all(cellfun(@(x) all(abs(x(:)-scale{1,d}(:))<1e-15) ,scale(2:end,d)));
+                        all_sc_size = cellfun(@size, all_scale_no_missing, 'unif',0);
+                        DifferentScale = ~isequaln(all_sc_size{:}) || ...
+                            ~all(cellfun(@(x) all(abs(x(:)-all_scale_no_missing{d}(:))<1e-15) ,all_scale_no_missing(2:end)));
                     end
-                    if  DifferentScale
+                    if DifferentScale
 
-                        sc = unique([scale{:,d}]','rows')'; % all values (or combination of values) across all models
+                        sc = unique([all_scale_no_missing{:}]','rows')'; % all values (or combination of values) across all models
                         nVal = size(sc,2); % number of different values
                         for i=1:nObj
-                            ss = scale{i,d};
+                            ss = all_scale_no_missing{i};
 
                             % find the indices in sc corresponding to values
                             % for this model
-                            [~,idx] = ismember(ss',sc',"rows");
-                            %idx = zeros(1,size(ss,2));
-                            %for v=1:size(ss,2)
-                            %    idx(v) = find(all(ss(:,v)==sc,1));
-                            %end
+                            [~,idx] = ismember(ss',sc',"rows"); %! may create issues with nans
 
                             % replace with larger arrays with nans for
                             % missing values
@@ -3704,7 +3756,11 @@ do_std = true;
                             TT{i,d} = pad_with_nan(TT{i,d}, nVal, idx);
                             p{i,d} = pad_with_nan(p{i,d}, nVal, idx);
                         end
+                        if any(sc==missing_val) % test is needed because otherwise output errors for datetime
+                            sc(sc==missing_val) = nan; % put nan value back there
+                        end
                         obj(1).regressor(m).Weights(d).scale = sc; %update scale
+
                     end
                 end
 
@@ -3748,7 +3804,7 @@ do_std = true;
 
                     % if uses different hyperparameters across models (e.g.
                     % GP vs basis functions)
-                    DifferentHP = ~all(cellfun(@(x) isequal(x,lbl{1}),lbl));
+                    DifferentHP = ~isequaln(lbl{:});
                     if  DifferentHP
 
                         sc = unique([lbl{:}]); % all values across all models
@@ -4679,7 +4735,7 @@ do_std = true;
         end
 
         %% PLOT FITTED WEIGHTS
-        function h = plot_weights(obj, U2, varargin)
+        function h = plot_weights(obj, varnames, varargin)
             % plot_weights(M) plot weights from model M
             % M.plot_weights()
             % M.plot_weights('regressor1')
@@ -4700,23 +4756,23 @@ do_std = true;
                 error('weights have not been estimated or set');
             end
 
-            if nargin<2 || isequal(U2, 'nsubplot') || isempty(U2)
-                if nargin>=2 && isequal(U2, 'nsubplot')
-                    varargin = {U2};
+            if nargin<2 || isequal(varnames, 'nsubplot') || isempty(varnames)
+                if nargin>=2 && isequal(varnames, 'nsubplot')
+                    varargin = {varnames};
                 end
                 if ~isscalar(obj)
-                    U2 = [];
+                    varnames = [];
                 else
-                    %U2 = 1:obj.nMod;
-                    U2 = obj.regressor.find_weights;
+                    varnames = obj.regressor.find_weights;
                 end
             end
-            if isnumeric(U2) && isrow(U2)
+            if isnumeric(varnames) && isrow(varnames)
                 % only providing index of regressor without dimensionality
-                nDim = [obj.regressor(U2).nDim];
-                U2 = repelem(U2 ,1, nDim);
+                nDim = [obj.regressor(varnames).nDim];
+                varnames = repelem(varnames ,1, nDim);
                 for i=1:obj.nMod
-                    U2(2,U2(1,:)==i) = 1:obj.regressor(i).nDim;
+                    varnames(2,varnames(1,:)==i) = 1:obj.regressor(i).nDim;
+                    varnames(3,:) = nan; % warning(not coded for concatenated regressors)
                 end
             end
 
@@ -4729,7 +4785,7 @@ do_std = true;
                 nObj = length(obj);
                 nsub = zeros(1,nObj);
                 for mm = 1:nObj
-                    nsub(mm) = plot_weights(obj(mm), U2, 'nsubplot');
+                    nsub(mm) = plot_weights(obj(mm), varnames, 'nsubplot');
                 end
 
                 if ~all(nsub==nsub(1))
@@ -4742,7 +4798,7 @@ do_std = true;
                 if withTile
                     f = gcf;
                     tmp_fig = figure;
-                    h_temp = plot_weights(obj(1), U2);
+                    h_temp = plot_weights(obj(1), varnames);
                     nsub = length(h_temp.Axes);
                     close(tmp_fig);
 
@@ -4762,14 +4818,14 @@ do_std = true;
                                 this_h{1}(i) = subplot(nObj, nsub, idx);
                             end
                         else % one subplot per model: all models in a grid
-                            [this_h{1},n1,n2,i1,i2] = subplot2(nObj, mm);
+                            [this_h{1},n1,n2,i1,~] = subplot2(nObj, mm);
                         end
                     end
 
                     % if more than one dataset, pass it as extra possible label
                     extra_args = plot_weights_extra_args(obj(mm).score.Dataset, obj(mm).label);
 
-                    h(mm) = plot_weights(obj(mm).regressor, U2, this_h{:}, varargin{:}, extra_args{:});
+                    h(mm) = plot_weights(obj(mm).regressor, varnames, this_h{:}, varargin{:}, extra_args{:});
 
                     % remove redundant labels and titles
                     if (mm>1 && nsub>1) || (~withTile && nsub==1 && n1>1) % WIP
@@ -4824,7 +4880,7 @@ do_std = true;
             extra_args = plot_weights_extra_args(obj.score.Dataset, obj.label);
 
             % plot regressor weights
-            h = plot_weights(obj.regressor,U2, varargin{:}, extra_args{:});
+            h = plot_weights(obj.regressor,varnames, varargin{:}, extra_args{:});
 
             set_figure_name(gcf, obj, 'Weights');
         end
@@ -4903,9 +4959,6 @@ do_std = true;
 
                 for d=1:ndim(m)
                     h.Axes(end+1) = subplot2(nDim_tot,i);
-                    %if isempty(M(m).Weights(d).label)
-                    %    M(m).Weights(d).label = "HP" + m +"_"+d; % default label
-                    %end
                     title(M(m).Weights(d).label);
 
                     this_HP = M(m).HP(d).HP';
@@ -5479,36 +5532,6 @@ end
 B = W.basis; % here we're still in projected mode
 non_fixed_basis = any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]); % if  any fittable HP parametrizes basis functions
 
-% COMMENTING THIS - OLD M-STEP FOR BASISFUN HYPERPARAMETERS WHICH WAS NOT
-% WORKING
-% if ~isempty(B)
-%     if iscell(B)
-%         error('not coded yet for regressor with basis functions concatenated with another regressor');
-%     end
-%
-%     if  non_fixed_basis %  if basis functions parametrized by fittable HP
-%         % working in original
-%         % space (otherwise working
-%         % in projected space)
-%         Bmat = B(1).B;
-%         this_mean = this_mean*Bmat;
-%         this_PriorMean = this_PriorMean*Bmat;
-%         if ~isequal(W.constraint,"free") && W.constraint.nConstraint>0
-%             this_cov = W.constraint.P'* this_cov *W.constraint.P;
-%         end
-%         this_cov = Bmat' * this_cov *Bmat;
-%
-%         % define constraint in original
-%         % space
-%         dummyR = R.project_from_basis.compute_projection_matrix;
-%         ct = dummyR.Weights(d).constraint;
-%         this_cov = covariance_free_basis(this_cov,ct);
-%
-%     end
-%     % not sure why this was here,
-%     % doesn't seem right
-%     %this_P = eye(length(this_cov));
-% end
 this_cov = force_definite_positive(this_cov);
 
 if ~iscell(this_Prior.CovFun)
@@ -5961,47 +5984,6 @@ end
 K = blkdiag(K{:});
 gradK = blkdiag3(gradK{:});
 
-% OLD EM FOR BASIS FUNCTIONS HP- WAS NOT WORKING
-%% deal with basis functions
-% if any(contains(HPs.type,'basis') & HPs.fit) && ~all([B.fixed]) % if basis functions parametrized by fittable HP, work on original space
-%
-%     nHP = length(HPs.HP);
-%
-%     % compute basis functions and gradient of basis fun w.r.t HP
-%     wrn = warning('off','gum:nullbasisfunction');
-%     [B,~, gradB] = compute_basis_functions(B, B(1).scale, HPs);
-%     warning(wrn);
-%     Bmat = B(1).B;
-%
-%     % gradient for K for basis hyperparameter
-%     %   gradK_tmp = zeros(B(1).nWeight, B(1).nWeight,nHP);
-%     nW = size(Bmat,2);
-%     gradK_tmp = zeros(nW, nW,nHP);
-%
-%     basisHP = find(contains(HPs.type, "basis") & HPs.fit);
-%
-%     for p=1:length(basisHP) % for all fitted hyperparameter
-%         BKgradB =Bmat'*K*gradB(:,:,p);
-%         gradK_tmp(:,:,basisHP(p)) = Bmat'*gradK(:,:,p)*Bmat + BKgradB + BKgradB';
-%         %gradK_tmp(:,:,p) = B.B'*gradK(:,:,p)*B.B + 2*B.B'*K*gradB(:,:,p);
-%     end
-%     gradK = gradK_tmp;
-%
-%     % project prior covariance on full space
-%     K = Bmat'*K*Bmat;
-%     K = symmetric_part(K);
-%
-%     % we make prior and posterior matrices full rank artificially to allow for the EM to rotate the
-%     % basis functions - now there's no guarantee that the LLH will increase
-%     % in each EM iteration, and no guarantee that it converges to a
-%     % meaningful result
-%     if ~all(isinf(K(:)))
-%         min_eigenvalue =1e-15+sqrt(min(diag(K)))*1e-3;
-%         K = force_definite_positive(K, min_eigenvalue); % changing to see if we can avoid null values along diagonal
-%         Sigma = force_definite_positive(Sigma, sqrt(min(diag(Sigma)))*1e-3);
-%     end
-% end
-
 % prior and posterior covariances on free basis
 [K, gradK] = covariance_free_basis(K, ct,gradK);
 
@@ -6236,10 +6218,10 @@ if ~isempty(T_fmla)
             error('Variable ''%s'' is not present in the table', SplitVar);
         end
 
-      %  this_var = Tbl.(SplitVar);
-      %  if iscell(this_var)
-      %      this_var = string(this_var);
-      %  end
+        %  this_var = Tbl.(SplitVar);
+        %  if iscell(this_var)
+        %      this_var = string(this_var);
+        %  end
         param.split{end+1} =  Tbl.(SplitVar);  % get values from table and add as cell
         param.SplittingVariable(end+1) = SplitVar; % add label
         fmla_split(1:i_coma) = []; % remove this part of formula
@@ -6295,14 +6277,14 @@ while ~isempty(fmla)
     is_null_regressor = false;
 
     % check for opening bracket
-    if fmla(1)=='('
+    while fmla(1)=='('
         OpenBracketPos(end+1) = length(O); % position of open bracket
-        CloseBrackPos(length(OpenBracketPos)) = nan; % filler for corresponding position of close bracket
+        CloseBracketPos(length(OpenBracketPos)) = nan; % filler for corresponding position of close bracket
         fmla = trimspace(fmla(2:end));
     end
 
-    % if starting with minus
-    if fmla(1)=='-'
+    % if starting with minus (but not followed by numeric e.g. -1)
+    if fmla(1)=='-' &&  isnan(str2double(fmla(2)))
         V{end+1} = struct('variable',-1, 'type','constant','opts',struct());
         O(end+1) = '*';
         fmla = trimspace(fmla(2:end));
@@ -6500,7 +6482,7 @@ while ~isempty(fmla)
         if ~isempty(v) %% linear variable
 
             opts = struct;
-            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v)) || iscellstr(Tbl.(v))
+            if iscategorical(Tbl.(v)) || ischar(Tbl.(v)) || isstring(Tbl.(v)) || iscellstr(Tbl.(v)) || isdatetime(Tbl.(v))
                 type = 'categorical';
             else
                 type = 'linear';
@@ -6559,7 +6541,7 @@ while ~isempty(fmla)
 
             V{end+1} = struct('variable',v, 'type',type, 'opts', opts);
 
-        elseif ~isnan(str2double(fmla(1))) %% numeric constant
+        elseif ~isnan(str2double(fmla(1))) || ~isnan(str2double(fmla(1:2))) %% numeric constant (second case is if starts with minus sign)
 
             [Num, fmla] = starts_with_number(fmla);
             if Num==0 && (isempty(O) || any(O(end)=='+-'))% special case: 0 means do not include offset
@@ -6591,8 +6573,7 @@ while ~isempty(fmla)
     % check for closing bracket or separator (for lag operator)
     while ~isempty(fmla) && any(fmla(1)==');')
 
-
-        pp_bracket = find(isnan(CloseBrackPos),1,'last'); % check last open bracket which has not been closed yet
+        pp_bracket = find(isnan(CloseBracketPos),1,'last'); % check last open bracket which has not been closed yet
         assert(fmla(1)==')' || inLag, 'incorrect separator '';'' in formula');
         assert(~isempty(pp_bracket) || withMixture || inLag, 'there is no open parenthesis to close');
 
@@ -6785,7 +6766,6 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
         while length(OpenBracketPos)>iBracket && OpenBracketPos(iBracket+1)<CloseBracketPos(iBracket)
             iBracket = iBracket+1; % if another bracket is opened before this one is closed, then process the inner bracket first
         end
-        %  iReg = OpenBracketPos(iBracket)+1;
 
         % make sure there's no lag operator within this bracket
         if ~isempty(LagStruct) % if there's a lag operator...
@@ -6854,6 +6834,7 @@ while ~isempty(OpenBracketPos) || ~isempty(LagStruct) % as long as there are par
     nRemove = length(idx)-1;
     after_this_bracket = OpenBracketPos>=idx(end);
     OpenBracketPos(after_this_bracket) = OpenBracketPos(after_this_bracket) - nRemove;
+    after_this_bracket = CloseBracketPos>=idx(end)-1;
     CloseBracketPos(after_this_bracket) = CloseBracketPos(after_this_bracket) - nRemove;
     for k=1:length(LagStruct)
         if LagStruct{k}.ini>=idx(end)

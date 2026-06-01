@@ -425,7 +425,7 @@ classdef regressor
                 case 'linear'
 
                     obj.Data = X;
-                    obj.Data(isnan(obj.Data)) = 0; % convert nans to 0: missing regressor with no influence on model
+                    obj.Data(ismissing(obj.Data)) = 0; % convert nans to 0: missing regressor with no influence on model
                     nWeight = siz(1+nD);
 
                     if isempty(obj.Weights(nD).scale)
@@ -782,7 +782,9 @@ classdef regressor
                         ii = idx(j);
                         m = I(1,ii); % regressor index
                         d = I(2,ii); % dimension index
-                        obj(m).Weights(d).label = w + j; % add counter after label
+                        s = I(3,ii);
+                        s = [ones(1,isnan(s))  s(~isnan(s))];
+                        obj(m).Weights(d).label(s) = w + j; % add counter after label
                     end
                 end
             end
@@ -791,9 +793,11 @@ classdef regressor
         %% FIND SET OF WEIGHT WITH GIVEN LABEL
         function I = find_weights(obj, label)
             % I = find_weights(R, label) finds the set of weight with given
-            % label in regressors R. I is a 2-by-nLabel matrix where the first
-            % row signals the index of the regressor in the regressor array
-            % and the second row signals the dimension for the corresponding label.
+            % label in regressors R. I is a 3-by-nLabel matrix where the first
+            % row signals the index of the regressor in the regressor
+            % array; the second row signals the dimension for the
+            % corresponding label; the third row signals the index (for
+            % concatenated set of weights; nan otherwise)
             %
             % I = find_weights(R, C) if C is a cell array of labels
             % provides a matrix of indices with two rows, one for the index
@@ -815,10 +819,18 @@ classdef regressor
                 Dims{i} = 1:nD(i);
             end
             Dims = [Dims{:}];
-            RD = [Ridx;Dims]; % first row: regressor index; second row: dimension
+            RDS = [Ridx;Dims]; % first row: regressor index; second row: dimension
+
+            % add third row: regressor index (for concatenated)
+            nSet = nRegressorSet([obj.Prior]);
+
+            RDS = repelem(RDS, 1, nSet); % each weight gets repeated if concatenated
+
+            fun = @(n) [ones(1, n==1)*NaN, 1:(n*(n>1))]; % Returns NaN if 1, else 1:n
+            RDS(3,:) = cell2mat(arrayfun(fun, nSet, 'UniformOutput', false));
 
             if nargin==1 || isempty(label) % select all weights
-                I = RD;
+                I = RDS;
                 return;
             end
             if isnumeric(label)
@@ -832,8 +844,12 @@ classdef regressor
             lbl = char(label(1));
             if ~isempty(lbl) && lbl(1)=='-' % all weights but this one
                 Inot = find_weights(obj,lbl(2:end)); % index of the weights we don't want to include
+                
                 Iall = find_weights(obj, label(2:end)); % all weights (or could be all but ones if excluding more than one)
+                Inot(isnan(Inot)) = 0; % convert nans to 0 to allow matching them
+                Iall(isnan(Iall)) = 0;
                 I = setdiff(Iall',Inot','rows')';
+                I(I==0) = nan;
                 return;
             end
 
@@ -841,14 +857,14 @@ classdef regressor
 
             % build index matrix corresponding to each label
             nL = length(label); % number of labels
-            I = nan(2,nL);
+            I = nan(3,nL);
             for i=1:nL
                 j = find(label(i)== Wlbl);
                 if ~isempty(j)
                     if length(j)>1
                         warning('more than one set of weights with label''%s''', label(i));
                     end
-                    I(:,i) = RD(:,j(1));
+                    I(:,i) = RDS(:,j(1));
                 else
                     all_weight_labels = join(compose("""%s""\n", obj.weight_labels));
                     error('no set of weights with label ''%s''. Possible labels are:\n%s', label(i), all_weight_labels);
@@ -882,7 +898,12 @@ classdef regressor
             for i=1:size(I,2)
                 k = I(1,i);
                 d = I(2,i);
+                s = I(3,i);
                 W(i) = obj(k).Weights(d);
+                if ~isnan(s)
+                    tmp = split_concatenated_weights(W(i));
+                    W(i) = tmp(s);
+                end
             end
         end
 
@@ -900,7 +921,11 @@ classdef regressor
             for i=1:size(I,2)
                 k = I(1,i);
                 d = I(2,i);
+                s = I(3,i);
                 H(i) = obj(k).HP(d);
+                if ~isnan(s)
+                    H(i) = split_concatenated_HP(H(i), s);
+                end
             end
         end
 
@@ -1020,7 +1045,7 @@ classdef regressor
                 ind1 = obj.find_weights(lbl(i));
                 ind2 = obj2.find_weights(lbl(i));
 
-                assert(~any(isnan([ind1(:);ind2(:)])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
+                assert(~any(isnan([ind1(:,1:2);ind2(:,1:2)])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
 
                 if bool(1) % set weights
                     % corresponding set of weights
@@ -1225,12 +1250,17 @@ classdef regressor
             for j=1:size(idx,2)
                 i = idx(1,j);
                 d = idx(2,j);
-                obj(i).Weights(d).constraint = "fixed";
-                obj(i).Weights(d).PosteriorStd = zeros(size(obj(i).Weights(d).PosteriorMean));
-                obj(i).Weights(d).basis = []; % remove basis functions
+                s = idx(3,j);
+                if isnan(s)
+                    obj(i).Weights(d).constraint = "fixed";
+                    obj(i).Weights(d).PosteriorStd = zeros(size(obj(i).Weights(d).PosteriorMean));
+                    obj(i).Weights(d).basis = []; % remove basis functions
 
-                obj(i).Prior(d) = empty_prior_structure(1); % remove prior
-                obj(i).HP(d) =  HPstruct(); % empty HP structure
+                    obj(i).Prior(d) = empty_prior_structure(1); % remove prior
+                    obj(i).HP(d) =  HPstruct(); % empty HP structure
+                else
+                    error('not coded yet for concatenated regressors');
+                end
             end
         end
 
@@ -1248,6 +1278,10 @@ classdef regressor
             for j=1:size(idx,2)
                 i = idx(1,j);
                 d = idx(2,j);
+                s = idx(3,j);
+                if ~isnan(s)
+                    error('not coded yet for concatenated regressors');
+                end
                 obj(i).Weights(d).constraint = "fixed";
                 obj(i).Weights(d).PosteriorMean = 1; % fix weight to 1
 
@@ -1273,8 +1307,13 @@ classdef regressor
             for j=1:size(idx,2)
                 i = idx(1,j);
                 d = idx(2,j);
-
-                obj(i).HP(d).fit(:) =  0; % turn fit parameter to 0
+                s = idx(3,j);
+                if isnan(s)
+                    obj(i).HP(d).fit(:) =  0; % turn fit parameter to 0
+                else
+                    subset = obj(i).HP(d).index==s;
+                    obj(i).HP(d).fit(subset) =  0;
+                end
             end
         end
 
@@ -1912,6 +1951,10 @@ classdef regressor
             for k=1:size(I,2)
                 i = I(1,k);
                 d = I(2,k);
+                s = I(3,k);
+                if isnan(s)
+                    error('not coded for concatenated regressors');
+                end
                 type = obj(i).Prior(d).type;
                 if any(ismember(type, {'SquaredExponential','periodic'}))
                     warning('removing prior for nonlinear mapping with no basis functions is not recommended, could make the model unidentifiable');
@@ -1921,6 +1964,9 @@ classdef regressor
                 % remove covariance HP
                 H = obj(i).HP(d);
                 covHP = contains([H.type],'cov');
+                if ~isnan(s)
+                    covHP = covHP & H.index==s;
+                end
                 H.HP(covHP) = [];
                 H.label(covHP) = [];
                 H.fit(covHP) = [];
@@ -2405,8 +2451,12 @@ classdef regressor
             for k=1:nSub
                 m = I(1,k);
                 d = I(2,k);
-
+                s = I(3,k);
                 W = obj(m).Weights(d);
+                if ~isnan(s)
+                    W = split_concatenated_weights(W);
+                    W = W(s);
+                end
                 if ~isempty(W.basis)
                     HPs = obj(m).HP(d);
 
@@ -2584,6 +2634,7 @@ classdef regressor
                     W = obj.Weights(d);
                     nW = W.nWeight;
                     if  ~isempty(obj.Prior(r,d).PriorMean) && ~recompute
+                        % if already provided and recompute is off: just check size
                         mu = obj.Prior(r,d).PriorMean;
                         assert( size(mu,2) ==nW, 'incorrect length for prior mean');
                         %if isvector(Mu) && rk>1
@@ -3953,7 +4004,7 @@ classdef regressor
             allPrior = {obj.Prior};
 
             % merge prior mean
-            F = cellfun(@(x) x(D).PriorMean ,allPrior, 'unif',0);
+            F = cellfun(@(x) x(D).PriorMean, allPrior, 'unif',0);
             if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
                 PP.PriorMean = [];
             else % otherwise concatenate
@@ -3966,11 +4017,11 @@ classdef regressor
             end
 
             % deal with covariance prior function
-            PP.CovFun = cellfun(@(x) x(D).CovFun ,allPrior, 'unif',0);
-            PP.type = cellfun(@(x) x(D).type ,allPrior, 'unif',0); %'mix';
+            PP.CovFun = cellfun(@(x) x(D).CovFun, allPrior, 'unif',0);
+            PP.type = cellfun(@(x) x(D).type, allPrior, 'unif',0); %'mix';
 
             % deal with prior covariance
-            F = cellfun(@(x) x(D).PriorCovariance ,allPrior, 'unif',0);
+            F = cellfun(@(x) x(D).PriorCovariance, allPrior, 'unif',0);
             if any(cellfun(@isempty,F)) % if any is empty, then overall is empty
                 PP.PriorCovariance = {};
             else % otherwise build block diagonal matrix
@@ -4013,7 +4064,7 @@ classdef regressor
             end
 
             W.scale = cat(2,F{:});
-            if all(isnan(W.scale(1,:))) % e.g. if sum of scalar linear regressors
+            if ~isstring(W.scale) && all(isnan(W.scale(1,:))) % e.g. if sum of scalar linear regressors
                 W.scale(1,:)= [];
             end
 
@@ -4027,36 +4078,6 @@ classdef regressor
 
             % deal with constraint
             W.constraint = concatenate_constraint(allWeights);
-            %             ct_type = constraint_type(allWeights);
-            %
-            %             % if at least two categorical regressors get concatenated,
-            %             % keep the first with constraint, the others should have no
-            %             % constraint
-            %             categ_reg = find(ismember(ct_type, ["first0","first1"])); % identify categorical regressors
-            %             for ii=categ_reg(2:end)
-            %                 allWeights(ii).constraint= "free";
-            %                 ct_type(ii) = "free";
-            %             end
-            %
-            %             keep_same_constraint = all(ct_type=="free") ||  all(ct_type=="fixed") || ... % do not touch if all free or all fixed
-            %                 (ismember(ct_type(1),["first0","first1"]) && all(ct_type(2:end)=="free")); % or if first reg has first0/first1 constraint and others are free
-            %             if ~keep_same_constraint
-
-            %                 S_ct = constraint_structure(allWeights);
-            %
-            %                 % convert first0 to first1 (assuming we're going this is a
-            %                 % categorical regressor and we're going to multiply it)
-            %                 for w = find( [S_ct.type]=="first0")
-            %                     S_ct(w).u(:) = 1;
-            %                     S_ct(w).constraint.type = "first1";
-            %                 end
-            %
-            %                 ctype = "mixed";
-            %                 V = blkdiag(S_ct.V);
-            %                 u = [S_ct.u];
-            %                 nConstraint = sum([S_ct.nConstraint]);
-            %                 W.constraint = struct('type',ctype, 'V',V,'u',u, 'nConstraint',nConstraint);
-            %            end
 
             % deal with basis
             Bcell = {allWeights.basis};
@@ -4190,7 +4211,7 @@ classdef regressor
             if isempty(label)
                 idx = find_weights(obj);
             elseif isnumeric(label) % already providing matrix
-                assert(size(label,1)==2, 'U2 should be a matrix of 2 rows (first row: regressor index; second row: dimensionality');
+                assert(size(label,1)==3, 'U2 should be a matrix of 3 rows (first row: regressor index; second row: dimensionality, third: component index');
                 idx = label;
             else
                 idx = find_weights(obj, label);
@@ -4211,7 +4232,8 @@ classdef regressor
                 d = idx(2,j);
                 do_plot = ~isFW(d); % do not plot fixed regressors (except if basis functions)
                 do_plot = do_plot && ~isequal(obj(m).Weights(d).plot,'none'); % specifically said not to plot
-                nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
+                nSubplotsReg(j) = do_plot;
+                %nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
             end
             idx(:,~nSubplotsReg) = []; % remove non_plotted weights
             nSubplots = sum(nSubplotsReg); % number of subplots
@@ -4266,6 +4288,7 @@ classdef regressor
             for j=1:size(idx,2) % loop between subpots
                 m = idx(1,j);
                 d = idx(2,j);
+                s = idx(3,j);
 
                 W = obj(m).Weights(d); % set of weights
                 P = obj(m).Prior(d);
@@ -4277,25 +4300,28 @@ classdef regressor
                 end
 
                 % split concatenated structures
+                if ~isnan(s)
                 [W, this_HP, P] = split_concatenated_weights_HP_prior(W, this_HP,P);
+                W = W(s);
+                this_HP = this_HP(s);
+                P = P(s);
+                end
 
                 % plot weights
-                for s=1:length(W)
                     if length(h.Axes)>=i
                         axes(h.Axes(i)); % set as active subplot
                     else
                         h.Axes(i) = nexttile;
                     end
 
-                    if ~isempty(varargin) && ~isa(W(s).plot, 'function_handle') % pass extra arguments
-                        W(s).plot = varargin;
+                    if ~isempty(varargin) && ~isa(W.plot, 'function_handle') % pass extra arguments
+                        W.plot = varargin;
                     end
 
-                    [h_nu, cols, cm] = plot_single_weights(W(s), P(s), this_HP(s), obj(m).rank, cols, cm, Dataset,use_bootstrap);
+                    [h_nu, cols, cm] = plot_single_weights(W, P, this_HP, obj(m).rank, cols, cm, Dataset,use_bootstrap);
 
                     h.Objects = [h.Objects {h_nu}];
                     i = i+1; % update subplot counter
-                end
             end
         end
 
@@ -4706,6 +4732,7 @@ for j=1:size(idx,2) % for each set of regressor
     m = idx(1,j);
     isFW = isFixedWeightSet(obj(m));
     d = idx(2,j);
+    s = idx(3,j);
     do_plot = ~isFW(d); % do not plot regressors with constant
     nSubplotsReg(j) = do_plot * nRegressorSet(obj(m).Prior(d)); %  (count also concatenated regs)
 end
@@ -4729,9 +4756,13 @@ for j=1:size(idx,2) % loop between subpots
     axes(h.Axes(i));
     m = idx(1,j);
     d = idx(2,j);
+    s = idx(3,j);
 
     W = obj(m).Weights(d); % set of weights
     P = obj(m).Prior(d);
+    if ~isnan(s)
+        [W, ~, P] = split_concatenated_weights_HP_prior(W, obj(m).HP(d), P);
+    end
 
     if W.nWeight>1
         if strcmp(type,'posterior')
@@ -5292,7 +5323,7 @@ if nSet ==1
     index_weight = ones(1,W.nWeight);
     P.CovFun = {P.CovFun};
 else
-    index_weight = W.scale(end,:);
+    index_weight = double(W.scale(end,:));
     W.scale(end,:) = [];
     if ~iscell(P.CovFun)
         P.CovFun = repmat({P.CovFun},1,nSet);
@@ -5533,15 +5564,20 @@ for i=1:nSet
     P(i).PriorCovariance = [];
 
     % HP structure
-    index_HP = HPc.index==i;
-    HP(i).HP = HPc.HP(index_HP);
-    HP(i).LB = HPc.LB(index_HP);
-    HP(i).UB = HPc.UB(index_HP);
-    HP(i).label = HPc.label(index_HP);
-    HP(i).fit = HPc.fit(index_HP);
-    HP(i).index = [];
+    HP(i) = split_concatenated_HP(HPc, i);
 end
-%HP = rmfield(HP, 'index');
+end
+
+%% split concatenated HP and prior structure
+function HP = split_concatenated_HP(HP, i)
+index_HP = HP.index==i;
+HP.HP = HP.HP(index_HP);
+HP.LB = HP.LB(index_HP);
+HP.UB = HP.UB(index_HP);
+HP.label = HP.label(index_HP);
+HP.fit = HP.fit(index_HP);
+HP.type = HP.type(index_HP);
+HP.index = [];
 end
 
 %% prior mean in original or basis functions space
@@ -5563,7 +5599,7 @@ function [W,set_index] = split_concatenated_weights(W)
 
 Wc = W; % copy
 
-set_index = Wc.scale(end,:); % last dim of scale indicate set index
+set_index = double(Wc.scale(end,:)); % last dim of scale indicate set index
 nSet = max(set_index);
 
 W = repmat(W, 1, nSet);
@@ -5572,14 +5608,16 @@ for s=1:nSet
     W(s).label = Wc.label(s);
     W(s).nWeight = sum(set_index==s);
     index_weight = set_index==s;  % indices of weights for this set
-    W(s).PosteriorMean = Wc.PosteriorMean(:,index_weight);
-    W(s).PosteriorStd = Wc.PosteriorStd(:,index_weight);
-    W(s).PosteriorCov = Wc.PosteriorCov(index_weight,index_weight,:);
-    W(s).T = Wc.T(:,index_weight);
-    W(s).p = Wc.p(:,index_weight);
+    if ~isempty(Wc.PosteriorMean)
+        W(s).PosteriorMean = Wc.PosteriorMean(:,index_weight);
+        W(s).PosteriorStd = Wc.PosteriorStd(:,index_weight);
+        W(s).PosteriorCov = Wc.PosteriorCov(index_weight,index_weight,:);
+        W(s).T = Wc.T(:,index_weight);
+        W(s).p = Wc.p(:,index_weight);
+    end
     W(s).scale = Wc.scale(1:end-1,index_weight); % remove last dim (set index)
     W(s).dimensions = Wc.dimensions(1:end-1); % remove last label ("index")
-    dummy_scale_dim = all(isnan(W(s).scale),2); % dimensions for scale that are not used for this set
+    dummy_scale_dim = all(ismissing(W(s).scale),2); % dimensions for scale that are not used for this set
     W(s).scale(dummy_scale_dim,:) = [];
     if isempty(Wc.basis) || isequal(Wc.basis(s).fun,'none')
         W(s).basis = [];
@@ -5589,6 +5627,9 @@ for s=1:nSet
     else
         W(s).basis = Wc.basis(s);
         W(s).U_allstarting = [];
+    end
+    if isstruct(Wc.constraint)
+        W(s).constraint.V(~index_weight,:) = [];
     end
 end
 end
@@ -5611,7 +5652,7 @@ function [I,siz] = replace(X, scale) % replace X values by indices
 siz = size(X);
 if size(scale,1)>1 % if using combination of values
     [~, I] = ismember(X, scale, "rows");
-    
+
     % % ! should probably use ismember as below to speed things up
     % D = siz(end); % dimensionality
     % siz(end) = [];
@@ -5619,7 +5660,7 @@ if size(scale,1)>1 % if using combination of values
     %     siz(2) = 1;
     % end
     % nX = prod(siz); % number of data points
-    % 
+    %
     % % we'll use columns for different values and match them one by one
     % I = zeros(siz);
     % for u=1:size(scale,2) % find matching data points
