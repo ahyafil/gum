@@ -6144,7 +6144,7 @@ x=  x0 + delta*EC.parameter_update;
 too_large = x>ub;
 if any(too_large)
     % if we're out, rescale leap to make sure we stay in bounds
-    rescale = (ub-x0)/(x-x0);
+    rescale = (ub-x0)./(x-x0);
     rescale = min(rescale(too_large));
     delta = rescale*delta;
     x=  x0 + delta*EC.parameter_update;
@@ -6153,7 +6153,7 @@ end
 too_little= x<lb;
 if any(too_little)
     % if we're out, rescale leap to make sure we stay in bounds
-    rescale = (x0-lb)/(x0-x);
+    rescale = (x0-lb)./(x0-x);
     rescale = min(rescale(too_little));
     delta = rescale*delta;
     x=  x0 + delta*EC.parameter_update;
