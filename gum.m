@@ -1234,6 +1234,7 @@ classdef gum
             % compute on test set now
             if with_test_set
                 obj_test = obj_test.set_weights_from_model(obj);
+                obj_test.score.scaling = obj.score.scaling; % update also scaling parameter (used for neg-binomial and normal llh)
                 [obj_test,obj.score.TestLLH] = obj_test.LogLikelihood(); % evaluate LLH
                 obj.score.TestAccuracy = obj_test.Accuracy(); % and accuracy
             end
