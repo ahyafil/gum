@@ -4434,6 +4434,7 @@ classdef gum
             % make sure that training and validation sets do not overlap
             % with test set
             if nTS>0
+                nFold = CV.NumTestSets;
                 for p=1:nFold
                     assert(all(ismember(CV.training{p},no_TS)),'training sets and test set must not intersect');
                     assert(all(ismember(CV.test{p},no_TS)),'validation sets and test set must not intersect');
