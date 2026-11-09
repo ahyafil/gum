@@ -1045,7 +1045,7 @@ classdef regressor
                 ind1 = obj.find_weights(lbl(i));
                 ind2 = obj2.find_weights(lbl(i));
 
-                assert(~any(isnan([ind1(:,1:2);ind2(:,1:2)])), 'No set of weight label has the corresponding label in at least one of the regressor objects');
+                assert(~any(isnan([ind1(1:2,:);ind2(1:2,:)]), 'all'), 'No set of weight label has the corresponding label in at least one of the regressor objects');
 
                 if bool(1) % set weights
                     % corresponding set of weights
@@ -1662,10 +1662,10 @@ classdef regressor
                     % single weight for one dim -> set weight to 1 (if
                     % there's another free dim)
                     if ~isempty(W.basis)
-                        obj = obj.freeze_weights_with_basis([1;d]);
+                        obj = obj.freeze_weights_with_basis([1;d;NaN]);
                     else
                         obj.Weights(d).PosteriorMean = 1;
-                        obj = obj.freeze_weights([1;d]);
+                        obj = obj.freeze_weights([1;d;NaN]);
                     end
                 end
             end
